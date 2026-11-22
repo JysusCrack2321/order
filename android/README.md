@@ -56,5 +56,10 @@ Aplicación Android nativa (Kotlin + Jetpack Compose) respaldada por el núcleo 
 - Si la carpeta o el archivo no existen, se crean automáticamente con el contenido de ejemplo.
 - La carpeta de datos se puede cambiar desde **Ajustes** dentro de la app.
 - **Notificaciones y alarmas exactas** (`POST_NOTIFICATIONS`, `SCHEDULE_EXACT_ALARM` / `USE_EXACT_ALARM`, `RECEIVE_BOOT_COMPLETED`): para mostrar avisos de tareas y recordatorios a su hora aunque la app esté cerrada o el teléfono se reinicie (si faltan permisos, la app muestra un banner para activarlos y usa alarmas inexactas de respaldo). Se pueden desactivar en **Ajustes → Avisos en este dispositivo**.
-- **Red y micrófono** (`INTERNET`, `RECORD_AUDIO`): solo se usan cuando envías una petición al agente o grabas una nota de voz para transcribir con Whisper.
+- **Red y micrófono** (`INTERNET`, `RECORD_AUDIO`): para enviar peticiones al agente o dictar por voz. Por defecto en **Ajustes → Agente → Voz** se usa **Android (gratis)** (`SpeechRecognizer` en `es-CO`), sin clave ni API externa; OpenAI y Groq siguen disponibles como alternativa.
+- **Adjuntos y cámara** (`CAMERA`, solo si tomas una foto): puedes adjuntar hasta 5 PDFs o fotos por mensaje (máximo 20 páginas por PDF, imágenes reducidas a 1568 px respetando EXIF en JPEG 85, total ≤ 20 MB; no se guardan). Según el proveedor configurado en el agente:
+  - **Claude**: envía el PDF en base64 (`application/pdf`) y las fotos en base64 antes del texto.
+  - **Gemini**: renderiza las páginas del PDF en el teléfono (`PdfRenderer`) y las envía junto a las fotos como `image_url` (`data:image/jpeg;base64,…`).
+  - **DeepSeek**: extrae localmente el texto del PDF y usa OCR en el dispositivo (**ML Kit**) para fotos o páginas escaneadas sin texto.
+  - **Otro**: sigue el comportamiento de texto/OCR por defecto o envía imágenes si activas **El modelo ve imágenes** en **Avanzado**.
 - Las claves de API (`agente.toml`) y el registro de avisos enviados (`enviados.txt`) viven en el almacenamiento privado de la app (`filesDir`), nunca en la carpeta sincronizada.

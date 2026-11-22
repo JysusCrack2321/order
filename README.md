@@ -127,6 +127,19 @@ tener el menú Abrir/Salir. En niri con DMS funciona sin nada extra.
   siquiera tras reiniciar la app; los que se perdieron con el equipo apagado no
   se disparan en ráfaga (como mucho un resumen al arrancar).
 
+## Agente y adjuntos
+
+Desde la barra inferior del agente se pueden adjuntar hasta **5 archivos** por mensaje (PDF o imágenes; máximo **20 páginas** por PDF, imágenes reducidas a **1568 px** en el lado largo en JPEG 85 respetando EXIF, total **≤ 20 MB**; los adjuntos no se guardan en disco). Lo que se envía a cada proveedor depende de sus capacidades:
+
+| Proveedor | PDF | Imagen / foto |
+|---|---|---|
+| **Claude** | bloque `document` base64 (`application/pdf`), antes del texto | bloque `image` base64 (`image/jpeg`) |
+| **Gemini** | páginas renderizadas a JPEG → `image_url` (`data:`) | `image_url` (`data:`) |
+| **DeepSeek** | texto extraído localmente (+ OCR si una página no tiene texto) | texto extraído por OCR |
+| **Otro** | texto/OCR por defecto, o imágenes si se activa *El modelo ve imágenes* en **Avanzado** | ídem |
+
+En escritorio, el renderizado de páginas usa `pdftoppm -jpeg -r 110` (Poppler) y el OCR usa `tesseract - - -l spa`; si alguno falta, la app muestra un aviso claro.
+
 ## Hermes
 
 `hermes/order-tareas/SKILL.md` es la skill que enseña a Hermes el formato del
