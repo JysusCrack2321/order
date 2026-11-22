@@ -3,16 +3,19 @@
 // Colores, tamaños y tipografía salen siempre de Tema.
 
 import { Tema } from "tema.slint";
+import { PildoraMateria } from "materias.slint";
 import { TituloTachado } from "formularios.slint";
 import { TareaUI } from "pendientes.slint";
 
 /// Una clase colocada en un día, con su hora ya escrita ("07:00–09:00" o
-/// "jue 26 nov · 09:00–11:00" cuando es de otro día).
+/// "jue 26 nov · 09:00–11:00" cuando es de otro día). `tono` es el índice del
+/// color de la materia dentro de la paleta de tema.slint.
 export struct ClaseInicioUI {
     id: string,
     materia: string,
     lugar: string,
     hora: string,
+    tono: int,
 }
 
 /// Un recordatorio próximo, con su cuándo ya escrito ("hoy · 18:00").
@@ -26,6 +29,7 @@ export struct RecordatorioInicioUI {
 export struct ConteoMateriaUI {
     materia: string,
     cuantas: int,
+    tono: int,
 }
 
 /// Rótulo de sección en Cinzel: "HOY", "VENCIDAS"… con un detalle a la derecha.
@@ -65,11 +69,13 @@ export component Vacio inherits Text {
     overflow: elide;
 }
 
-/// Una clase: hora a la izquierda y materia con su lugar.
+/// Una clase: hora a la izquierda y materia con su lugar. El filo y el nombre
+/// van en el color de la materia.
 export component FilaClase inherits Rectangle {
     in property <string> hora;
     in property <string> materia;
     in property <string> lugar;
+    in property <int> tono: 0;
 
     callback clicked();
 
@@ -93,7 +99,7 @@ export component FilaClase inherits Rectangle {
         Rectangle {
             width: Tema.ancho-marca;
             height: parent.height - 2 * Tema.espacio-sm;
-            background: Tema.acento-suave;
+            background: Tema.materias[root.tono];
         }
 
         Text {
@@ -108,7 +114,7 @@ export component FilaClase inherits Rectangle {
             horizontal-stretch: 1;
             text: root.materia;
             font-size: Tema.tamano-texto;
-            color: Tema.texto;
+            color: Tema.materias[root.tono];
             vertical-alignment: center;
             overflow: elide;
         }
@@ -171,11 +177,11 @@ export component FilaTarea inherits Rectangle {
             HorizontalLayout {
                 alignment: start;
                 spacing: Tema.espacio-sm;
+                cross-axis-alignment: center;
 
-                if root.tarea.materia != "" : Text {
-                    text: root.tarea.materia;
-                    font-size: Tema.tamano-hora;
-                    color: Tema.texto-suave;
+                if root.tarea.materia != "" : PildoraMateria {
+                    texto: root.tarea.materia;
+                    tono: root.tarea.tono;
                 }
 
                 Text {

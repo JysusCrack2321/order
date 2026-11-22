@@ -53,6 +53,35 @@ export global Tema {
     out property <color> vencida: #c6756b;
     out property <color> vencida-texto: #e0a49c;
 
+    // --- Paleta de materias ----------------------------------------------
+    // Nueve tonos apagados que conviven con el carbón y el oro. El tono de una
+    // materia se deriva de su nombre en `src/puente.rs` (`tono_materia`): la
+    // misma materia tiene siempre el mismo color, sin mayúsculas ni acentos.
+    // El último tono es el gris de "sin materia".
+    out property <[color]> materias: [
+        #c2a878, // oro viejo
+        #9fb48a, // salvia
+        #7fae9f, // verde azulado
+        #8fa6c0, // azul polvo
+        #a89ec4, // lavanda
+        #c39aa6, // rosa viejo
+        #c9977f, // arcilla
+        #b3a68c, // arena
+        #94908a, // piedra
+    ];
+    // El mismo tono, muy bajo, para el fondo de fichas y bloques de clase.
+    out property <[color]> materias-fondo: [
+        #26211a,
+        #1d241b,
+        #192523,
+        #1b222c,
+        #22202c,
+        #291f24,
+        #291f1a,
+        #23211c,
+        #201f1d,
+    ];
+
     // Avisos: rojo para el error que bloquea, amarillo para las advertencias
     // que no bloquean (claves desconocidas en el TOML).
     out property <color> fondo-error: #3a1d1b;
@@ -142,6 +171,11 @@ export global Tema {
     out property <length> ancho-boton-largo: 172px;
     out property <length> ancho-chip: 34px;
     out property <length> alto-chip: 28px;
+    // Píldora de materia: el nombre en su color, con borde y fondo tenue.
+    out property <length> alto-pildora: 21px;
+    out property <length> ancho-filo-materia: 3px;
+    // Ficha de materia en el selector: la píldora ocupa el renglón entero.
+    out property <length> alto-ficha-materia: 30px;
     // Fichas de la barra de filtros (Todas, Hoy, Semana, Rango).
     out property <length> ancho-chip-opcion: 68px;
     // Una línea de título de tarea: alto del renglón que se tacha al hacerse.

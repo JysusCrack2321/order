@@ -1112,6 +1112,7 @@ fn construir_vista() -> Vista {
                 .map(|(materia, cuantas)| ConteoMateriaUI {
                     materia: materia.clone().into(),
                     cuantas: *cuantas as i32,
+                    tono: tono_materia(materia),
                 })
                 .collect(),
             dia_etiqueta: fecha_larga(estado.dia),
@@ -1175,6 +1176,7 @@ fn clase_ui(bloque: &semana::Bloque, fecha: NaiveDate, hoy: NaiveDate) -> ClaseI
         materia: bloque.materia.clone().into(),
         lugar: bloque.lugar.clone().unwrap_or_default().into(),
         hora: hora.into(),
+        tono: tono_materia(&bloque.materia),
     }
 }
 
@@ -1193,6 +1195,7 @@ fn tarea_a_ui(tarea: &Tarea, ahora: NaiveDateTime) -> TareaUI {
         .into(),
         vencida: semana::vencida(tarea, ahora),
         hecha: tarea.hecha,
+        tono: tono_materia(tarea.materia.as_deref().unwrap_or("")),
     }
 }
 
@@ -1265,6 +1268,7 @@ fn dia_ui(dia: &semana::DiaVista) -> DiaUI {
                     .into(),
                     inicio: minutos(bloque.inicio),
                     fin: minutos(bloque.fin),
+                    tono: tono_materia(&bloque.materia),
                 })
                 .collect::<Vec<_>>(),
         )),
@@ -1344,7 +1348,7 @@ fn abrir_selector_materia(ui: &AppWindow, campo: i32) {
             minuto: 0,
         });
     });
-    ui.set_sel_materias(modelo_textos(&materias));
+    ui.set_sel_materias(ModelRc::new(VecModel::from(materias_ui(&materias))));
     ui.set_materia_nueva("".into());
     ui.set_materia_escribiendo(false);
     ui.set_sel_titulo("Materia".into());
@@ -1640,6 +1644,17 @@ fn materias_actuales() -> Vec<String> {
     })
 }
 
+/// Las materias del archivo con el tono que les toca, para el selector.
+fn materias_ui(materias: &[String]) -> Vec<MateriaUI> {
+    materias
+        .iter()
+        .map(|materia| MateriaUI {
+            nombre: materia.as_str().into(),
+            tono: tono_materia(materia),
+        })
+        .collect()
+}
+
 /// La grafía que ya existe para esa materia, o el texto tal cual si es nueva.
 fn canonica(materias: &[String], texto: &str) -> String {
     let texto = texto.trim();
@@ -1672,6 +1687,34 @@ fn clave_materia(texto: &str) -> String {
         clave.extend(plano.to_lowercase());
     }
     clave.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+// ---------------------------------------------------------------------------
+// Color de las materias
+// ---------------------------------------------------------------------------
+// Cada materia tiene un color suave y estable, sacado solo de su nombre: el
+// mismo nombre da siempre el mismo tono, sin importar mayúsculas, acentos ni
+// el orden del archivo. La paleta vive en `tema.slint` (`Tema.materias` y
+// `Tema.materias-fondo`); aquí solo se elige el índice.
+
+/// Cuántos tonos tiene la paleta de materias de `tema.slint`.
+pub const TONOS_MATERIA: i32 = 9;
+
+/// El tono gris de los elementos sin materia: el último de la paleta.
+pub const TONO_SIN_MATERIA: i32 = TONOS_MATERIA - 1;
+
+/// El tono que le toca a una materia. Vacía (o "Sin materia") va en gris.
+pub fn tono_materia(materia: &str) -> i32 {
+    let clave = clave_materia(materia);
+    if clave.is_empty() || clave == "sin materia" {
+        return TONO_SIN_MATERIA;
+    }
+    // djb2 (h * 33 ^ byte): barato y reparte bien los nombres cortos.
+    let mut hash: u32 = 5381;
+    for byte in clave.as_bytes() {
+        hash = hash.wrapping_mul(33) ^ u32::from(*byte);
+    }
+    (hash % TONOS_MATERIA as u32) as i32
 }
 
 // ---------------------------------------------------------------------------
@@ -2138,6 +2181,85 @@ mod pruebas {
         assert_eq!(clave_materia("  Análisis   Numérico "), "analisis numerico");
     }
 
+    /// El color de una materia depende solo de su nombre normalizado y no
+    /// cambia entre arranques: si cambiara, las materias cambiarían de color
+    /// solas y la interfaz perdería su sentido.
+    #[test]
+    fn tono_estable_por_materia() {
+        assert_eq!(tono_materia("Control"), tono_materia("control"));
+        assert_eq!(tono_materia("Robótica"), tono_materia("  robotica "));
+        assert_eq!(tono_materia("Álgebra"), tono_materia("algebra"));
+
+        // Valores fijos: si cambia el cálculo, estos números lo delatan.
+        assert_eq!(tono_materia("Control"), 3);
+        assert_eq!(tono_materia("Robótica"), 7);
+        assert_eq!(tono_materia("Cálculo"), 5);
+        assert_eq!(tono_materia("Física"), 1);
+        assert_eq!(TONOS_MATERIA, 9, "la paleta de tema.slint tiene nueve tonos");
+
+        assert_eq!(tono_materia(""), TONO_SIN_MATERIA);
+        assert_eq!(tono_materia("   "), TONO_SIN_MATERIA);
+        assert_eq!(tono_materia("Sin materia"), TONO_SIN_MATERIA);
+
+        for materia in ["Control", "Robótica", "Cálculo", "Física", "Análisis Numérico"] {
+            let tono = tono_materia(materia);
+            assert!((0..TONOS_MATERIA).contains(&tono), "{materia} → {tono}");
+        }
+
+        // La paleta se reparte: no todas las materias caen en el mismo tono.
+        let distintos: std::collections::HashSet<i32> = [
+            "Control",
+            "Robótica",
+            "Cálculo",
+            "Física",
+            "Álgebra",
+            "Probabilidad",
+        ]
+        .iter()
+        .map(|materia| tono_materia(materia))
+        .collect();
+        assert!(distintos.len() >= 4, "tonos distintos: {distintos:?}");
+
+        // El selector recibe el nombre y su tono.
+        let lista = materias_ui(&["Robótica".to_string(), "Control".to_string()]);
+        assert_eq!(lista[0].nombre, "Robótica");
+        assert_eq!(lista[0].tono, tono_materia("Robótica"));
+        assert_eq!(lista[1].tono, tono_materia("CONTROL"));
+    }
+
+    /// Las tareas y las clases llegan a la interfaz con el tono de su materia.
+    #[test]
+    fn las_listas_llevan_el_tono_de_la_materia() {
+        let ahora = momento(2026, 11, 25, 8, 0);
+        let tarea = Tarea {
+            id: "t-uno".into(),
+            titulo: "Taller".into(),
+            materia: Some("Robótica".into()),
+            vence: momento(2026, 11, 28, 23, 59),
+            hecha: false,
+            hecha_en: None,
+        };
+        assert_eq!(tarea_a_ui(&tarea, ahora).tono, tono_materia("Robótica"));
+
+        let sin_materia = Tarea {
+            materia: None,
+            ..tarea
+        };
+        assert_eq!(tarea_a_ui(&sin_materia, ahora).tono, TONO_SIN_MATERIA);
+
+        let bloque = crate::semana::Bloque {
+            clase_id: "c-uno".into(),
+            materia: "Cálculo".into(),
+            inicio: NaiveTime::from_hms_opt(7, 0, 0).unwrap(),
+            fin: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+            lugar: None,
+        };
+        assert_eq!(
+            clase_ui(&bloque, ahora.date(), ahora.date()).tono,
+            tono_materia("Cálculo")
+        );
+    }
+
     /// Un campo vacío no se guarda como cadena vacía en el TOML.
     #[test]
     fn campos_opcionales_vacios_son_none() {
@@ -2153,6 +2275,7 @@ mod pruebas {
             fecha: "lun 30 nov · 23:59".into(),
             vencida: false,
             hecha,
+            tono: 3,
         }
     }
 

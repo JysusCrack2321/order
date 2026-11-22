@@ -7,6 +7,7 @@
 
 import { Tema } from "tema.slint";
 import { Boton, Campo } from "formularios.slint";
+import { FichaMateria } from "materias.slint";
 import { ScrollView } from "std-widgets.slint";
 
 /// Una casilla del calendario. `dia` en 0 es un hueco antes o después del mes.
@@ -16,6 +17,12 @@ export struct CeldaDia {
     columna: int,
     hoy: bool,
     elegida: bool,
+}
+
+/// Una materia del selector: su nombre y el tono que le toca.
+export struct MateriaUI {
+    nombre: string,
+    tono: int,
 }
 
 export component Selector inherits Rectangle {
@@ -35,7 +42,7 @@ export component Selector inherits Rectangle {
     in property <[string]> minutos: [];
 
     // Materia.
-    in property <[string]> materias: [];
+    in property <[MateriaUI]> materias: [];
     in-out property <string> materia-nueva: "";
     in-out property <bool> escribiendo: false;
 
@@ -267,48 +274,16 @@ export component Selector inherits Rectangle {
                         VerticalLayout {
                             spacing: Tema.espacio-2xs;
 
-                            Rectangle {
-                                height: Tema.alto-fila-selector;
-                                border-radius: Tema.radio-pequeno;
-                                background: sin-ta.has-hover ? Tema.fondo-hover : transparent;
-
-                                Text {
-                                    x: Tema.espacio-sm;
-                                    width: parent.width - 2 * Tema.espacio-sm;
-                                    height: parent.height;
-                                    vertical-alignment: center;
-                                    text: "Sin materia";
-                                    font-size: Tema.tamano-pequeno;
-                                    color: Tema.texto-tenue;
-                                    overflow: elide;
-                                }
-
-                                sin-ta := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.materia(""); }
-                                }
+                            FichaMateria {
+                                texto: "Sin materia";
+                                tono: 8;
+                                clicked => { root.materia(""); }
                             }
 
-                            for materia in root.materias : Rectangle {
-                                height: Tema.alto-fila-selector;
-                                border-radius: Tema.radio-pequeno;
-                                background: materia-ta.has-hover ? Tema.fondo-hover : transparent;
-
-                                Text {
-                                    x: Tema.espacio-sm;
-                                    width: parent.width - 2 * Tema.espacio-sm;
-                                    height: parent.height;
-                                    vertical-alignment: center;
-                                    text: materia;
-                                    font-size: Tema.tamano-pequeno;
-                                    color: Tema.texto;
-                                    overflow: elide;
-                                }
-
-                                materia-ta := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.materia(materia); }
-                                }
+                            for materia in root.materias : FichaMateria {
+                                texto: materia.nombre;
+                                tono: materia.tono;
+                                clicked => { root.materia(materia.nombre); }
                             }
 
                             if root.materias.length == 0 : Text {

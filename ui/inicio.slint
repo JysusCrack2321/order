@@ -8,6 +8,7 @@
 // se dibuja. Colores, tamaños y tipografía salen siempre de Tema.
 
 import { Tema } from "tema.slint";
+import { PildoraMateria } from "materias.slint";
 import { TareaUI } from "pendientes.slint";
 import {
     ClaseInicioUI,
@@ -129,6 +130,7 @@ export component InicioVista inherits Rectangle {
                         hora: clase.hora;
                         materia: clase.materia;
                         lugar: clase.lugar;
+                        tono: clase.tono;
                         clicked => { root.editar-clase(clase.id); }
                     }
 
@@ -170,7 +172,7 @@ export component InicioVista inherits Rectangle {
                                 Text {
                                     text: root.siguiente.materia;
                                     font-size: Tema.tamano-texto;
-                                    color: Tema.texto;
+                                    color: Tema.materias[root.siguiente.tono];
                                     overflow: elide;
                                 }
 
@@ -272,14 +274,12 @@ export component InicioVista inherits Rectangle {
                             spacing: Tema.espacio-md;
                             cross-axis-alignment: center;
 
-                            Text {
-                                horizontal-stretch: 1;
-                                text: conteo.materia;
-                                font-size: Tema.tamano-pequeno;
-                                color: Tema.texto-suave;
-                                vertical-alignment: center;
-                                overflow: elide;
+                            PildoraMateria {
+                                texto: conteo.materia;
+                                tono: conteo.tono;
                             }
+
+                            Rectangle { horizontal-stretch: 1; }
 
                             Text {
                                 width: Tema.ancho-conteo;
@@ -287,7 +287,7 @@ export component InicioVista inherits Rectangle {
                                 text: "\{conteo.cuantas}";
                                 font-family: Tema.fuente-titulos;
                                 font-size: Tema.tamano-pequeno;
-                                color: Tema.acento;
+                                color: Tema.materias[conteo.tono];
                                 vertical-alignment: center;
                             }
                         }

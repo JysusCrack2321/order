@@ -8,7 +8,7 @@ import { InicioVista } from "inicio.slint";
 import { DiaVista } from "dia.slint";
 import { ClaseInicioUI, ConteoMateriaUI, RecordatorioInicioUI } from "listas.slint";
 import { Marco, Campo, CampoBoton, Chip, Casilla, Boton, Etiqueta, RecordatorioUI } from "formularios.slint";
-import { Selector, CeldaDia } from "selectores.slint";
+import { Selector, CeldaDia, MateriaUI } from "selectores.slint";
 import { ScrollView } from "std-widgets.slint";
 
 component Pestana inherits Rectangle {
@@ -246,7 +246,7 @@ export component AppWindow inherits Window {
     in property <int> sel-minuto: 0;
     in property <[string]> sel-horas: [];
     in property <[string]> sel-minutos: [];
-    in property <[string]> sel-materias: [];
+    in property <[MateriaUI]> sel-materias: [];
     in-out property <string> materia-nueva: "";
     in-out property <bool> materia-escribiendo: false;
 

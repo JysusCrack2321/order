@@ -1,0 +1,74 @@
+// Piezas de color por materia.
+// ---------------------------------------------------------------------------
+// La paleta vive en tema.slint (`Tema.materias` y `Tema.materias-fondo`) y el
+// tono de cada materia lo decide `src/puente.rs` (`tono_materia`): el mismo
+// nombre da siempre el mismo color. Aquí solo se dibuja con ese índice, así
+// que este archivo lo comparten Pendientes, Inicio, Día y el selector.
+
+import { Tema } from "tema.slint";
+
+/// Píldora de materia: el nombre en su tono, con fondo tenue y borde del mismo
+/// color. El ancho se ajusta al texto, hasta un tope.
+export component PildoraMateria inherits Rectangle {
+    in property <string> texto;
+    in property <int> tono: 0;
+    in property <length> ancho-maximo: 220px;
+
+    height: Tema.alto-pildora;
+    width: min(pildora-texto.preferred-width + 2 * Tema.espacio-sm, root.ancho-maximo);
+    border-radius: Tema.alto-pildora / 2;
+    background: Tema.materias-fondo[root.tono];
+    border-width: Tema.linea;
+    border-color: Tema.materias[root.tono];
+
+    pildora-texto := Text {
+        x: Tema.espacio-sm;
+        width: parent.width - 2 * Tema.espacio-sm;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.texto;
+        font-size: Tema.tamano-hora;
+        color: Tema.materias[root.tono];
+        overflow: elide;
+    }
+}
+
+/// Ficha del selector de materias: ocupa el renglón entero, con el filo, el
+/// fondo tenue y el nombre en el color de la materia.
+export component FichaMateria inherits Rectangle {
+    in property <string> texto;
+    in property <int> tono: 0;
+
+    callback clicked();
+
+    height: Tema.alto-ficha-materia;
+    border-radius: Tema.radio;
+    background: Tema.materias-fondo[root.tono];
+    border-width: Tema.linea;
+    border-color: ta.has-hover ? Tema.materias[root.tono] : Tema.borde-suave;
+    clip: true;
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: Tema.ancho-filo-materia;
+        height: parent.height;
+        background: Tema.materias[root.tono];
+    }
+
+    Text {
+        x: Tema.espacio-md;
+        width: parent.width - Tema.espacio-md - Tema.espacio-sm;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.texto;
+        font-size: Tema.tamano-pequeno;
+        color: Tema.materias[root.tono];
+        overflow: elide;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}

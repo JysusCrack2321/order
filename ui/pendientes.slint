@@ -8,8 +8,10 @@
 
 import { Tema } from "tema.slint";
 import { CampoBoton, Casilla, Chip, Etiqueta, TituloTachado } from "formularios.slint";
+import { PildoraMateria } from "materias.slint";
 import { ScrollView } from "std-widgets.slint";
 
+/// Una tarea tal como la dibuja la lista. `tono` es el color de su materia.
 export struct TareaUI {
     id: string,
     titulo: string,
@@ -17,6 +19,7 @@ export struct TareaUI {
     fecha: string,
     vencida: bool,
     hecha: bool,
+    tono: int,
 }
 
 export component PendientesVista inherits Rectangle {
@@ -264,11 +267,11 @@ export component PendientesVista inherits Rectangle {
                             HorizontalLayout {
                                 alignment: start;
                                 spacing: Tema.espacio-sm;
+                                cross-axis-alignment: center;
 
-                                if tarea.materia != "" : Text {
-                                    text: tarea.materia;
-                                    font-size: Tema.tamano-pequeno;
-                                    color: tarea.hecha ? Tema.texto-tenue : Tema.texto-suave;
+                                if tarea.materia != "" : PildoraMateria {
+                                    texto: tarea.materia;
+                                    tono: tarea.tono;
                                 }
 
                                 Text {

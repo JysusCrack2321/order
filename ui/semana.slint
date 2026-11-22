@@ -6,6 +6,7 @@ import { ScrollView } from "std-widgets.slint";
 
 /// Una clase ya colocada en un día. `inicio` y `fin` son minutos desde la
 /// medianoche: la posición vertical se calcula aquí con las medidas del tema.
+/// `tono` es el color de la materia (índice de la paleta de tema.slint).
 export struct BloqueUI {
     id: string,
     materia: string,
@@ -13,6 +14,7 @@ export struct BloqueUI {
     hora: string,
     inicio: int,
     fin: int,
+    tono: int,
 }
 
 /// Una tarea que vence ese día, para la marca bajo la columna.
@@ -301,9 +303,13 @@ export component SemanaVista inherits Rectangle {
                                 width: parent.width - 2 * Tema.espacio-xs - Tema.trazo;
                                 height: (bloque.fin - bloque.inicio) * Tema.alto-minuto - Tema.trazo;
                                 border-radius: Tema.radio-pequeno;
-                                background: bloque-ta.has-hover ? Tema.fondo-hover : Tema.fondo-clase;
+                                background: bloque-ta.has-hover
+                                    ? Tema.fondo-hover
+                                    : Tema.materias-fondo[bloque.tono];
                                 border-width: Tema.linea;
-                                border-color: bloque-ta.has-hover ? Tema.acento-suave : Tema.borde-clase;
+                                border-color: bloque-ta.has-hover
+                                    ? Tema.materias[bloque.tono]
+                                    : Tema.borde-clase;
                                 clip: true;
 
                                 bloque-ta := TouchArea {
@@ -316,7 +322,7 @@ export component SemanaVista inherits Rectangle {
                                     y: 0;
                                     width: Tema.ancho-marca;
                                     height: parent.height;
-                                    background: Tema.acento-suave;
+                                    background: Tema.materias[bloque.tono];
                                 }
 
                                 VerticalLayout {
@@ -329,7 +335,7 @@ export component SemanaVista inherits Rectangle {
                                         text: bloque.materia;
                                         font-size: Tema.tamano-bloque;
                                         font-weight: 600;
-                                        color: Tema.texto;
+                                        color: Tema.materias[bloque.tono];
                                         overflow: elide;
                                     }
                                     Text {

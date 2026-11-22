@@ -45,11 +45,13 @@ component BotonPaso inherits Rectangle {
     }
 }
 
-/// Una clase en la línea de tiempo: hora, eje con su punto y el bloque.
+/// Una clase en la línea de tiempo: hora, eje con su punto y el bloque. El
+/// punto y el bloque van en el color de la materia.
 component FilaTiempo inherits Rectangle {
     in property <string> hora;
     in property <string> materia;
     in property <string> lugar;
+    in property <int> tono: 0;
 
     callback clicked();
 
@@ -89,7 +91,7 @@ component FilaTiempo inherits Rectangle {
         width: Tema.alto-punto;
         height: Tema.alto-punto;
         border-radius: Tema.alto-punto / 2;
-        background: ta.has-hover ? Tema.acento : Tema.acento-suave;
+        background: Tema.materias[root.tono];
     }
 
     // Bloque de la clase.
@@ -99,9 +101,9 @@ component FilaTiempo inherits Rectangle {
         width: parent.width - self.x - Tema.espacio-md;
         height: parent.height - 2 * Tema.espacio-xs;
         border-radius: Tema.radio-pequeno;
-        background: ta.has-hover ? Tema.fondo-hover : Tema.fondo-clase;
+        background: ta.has-hover ? Tema.fondo-hover : Tema.materias-fondo[root.tono];
         border-width: Tema.linea;
-        border-color: ta.has-hover ? Tema.acento-suave : Tema.borde-clase;
+        border-color: ta.has-hover ? Tema.materias[root.tono] : Tema.borde-clase;
 
         HorizontalLayout {
             width: parent.width;
@@ -116,7 +118,7 @@ component FilaTiempo inherits Rectangle {
                 text: root.materia;
                 font-size: Tema.tamano-texto;
                 font-weight: 600;
-                color: Tema.texto;
+                color: Tema.materias[root.tono];
                 vertical-alignment: center;
                 overflow: elide;
             }
@@ -280,6 +282,7 @@ export component DiaVista inherits Rectangle {
                     hora: clase.hora;
                     materia: clase.materia;
                     lugar: clase.lugar;
+                    tono: clase.tono;
                     clicked => { root.editar-clase(clase.id); }
                 }
 
