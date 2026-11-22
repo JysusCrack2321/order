@@ -13,3 +13,4 @@ pub mod ops;
 pub mod presentacion;
 pub mod reloj;
 pub mod semana;
+pub mod sincronizacion;

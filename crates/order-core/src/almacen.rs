@@ -203,15 +203,16 @@ fn nombre_temporal(ruta: &Path) -> String {
     format!(".{nombre}.{}.{n}.tmp", std::process::id())
 }
 
-/// `id` nuevo y corto, p. ej. `t-20261121-a3f9`. La fecha es la de hoy; el
-/// sufijo sale del azar del sistema, sin crate extra.
+/// `id` nuevo y corto, p. ej. `t-20261121-a3f901c2`. La fecha es la de hoy;
+/// el sufijo lleva 32 bits aleatorios del sistema, sin crate extra.
 pub fn nuevo_id(prefijo: char) -> String {
     let fecha = Local::now().format("%Y%m%d");
     let sufijo = sufijo_aleatorio();
-    format!("{prefijo}-{fecha}-{sufijo:04x}")
+    format!("{prefijo}-{fecha}-{sufijo:08x}")
 }
 
-fn sufijo_aleatorio() -> u16 {
+fn sufijo_aleatorio() -> u32 {
+    static CONTADOR: AtomicU64 = AtomicU64::new(0);
     let mut h = RandomState::new().build_hasher();
     h.write_u128(
         SystemTime::now()
@@ -220,7 +221,8 @@ fn sufijo_aleatorio() -> u16 {
             .unwrap_or_default(),
     );
     h.write_u32(std::process::id());
-    (h.finish() & 0xffff) as u16
+    h.write_u64(CONTADOR.fetch_add(1, Ordering::Relaxed));
+    (h.finish() & 0xffff_ffff) as u32
 }
 
 /// Pone `id` a toda clase, tarea y recordatorio que no lo tenga. Es lo que hace
@@ -473,5 +475,22 @@ hecha = false
             !almacen.historial().ruta.exists(),
             "no se crea historial vacío"
         );
+    }
+
+    #[test]
+    fn nuevo_id_usa_32_bits_y_no_colisiona() {
+        let mut ids = std::collections::HashSet::new();
+        for _ in 0..64 {
+            let id = nuevo_id('t');
+            let partes: Vec<&str> = id.split('-').collect();
+            assert_eq!(partes.len(), 3, "id inesperado: {id}");
+            assert_eq!(partes[0], "t");
+            assert_eq!(partes[2].len(), 8, "el sufijo debe tener 8 hex (32 bits): {id}");
+            assert!(
+                u32::from_str_radix(partes[2], 16).is_ok(),
+                "sufijo hexadecimal válido: {id}"
+            );
+            assert!(ids.insert(id), "no deben repetirse ids seguidos");
+        }
     }
 }
