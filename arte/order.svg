@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e1e27"/>
+      <stop offset="50%" stop-color="#16161c"/>
+      <stop offset="100%" stop-color="#101014"/>
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#e0c992"/>
+      <stop offset="50%" stop-color="#c7a96b"/>
+      <stop offset="100%" stop-color="#8f7643"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Fondo -->
+  <rect x="0" y="0" width="256" height="256" rx="56" fill="url(#bgGrad)"/>
+  <rect x="1.5" y="1.5" width="253" height="253" rx="54.5" fill="none" stroke="#c7a96b" stroke-opacity="0.25" stroke-width="1.5"/>
+
+  <!-- Tapas -->
+  <rect x="72" y="40" width="112" height="16" rx="4" fill="url(#goldGrad)"/>
+  <rect x="72" y="200" width="112" height="16" rx="4" fill="url(#goldGrad)"/>
+  <!-- Remates -->
+  <rect x="80" y="45" width="96" height="5" fill="#e9e4d8" opacity="0.5"/>
+  <rect x="80" y="205" width="96" height="5" fill="#e9e4d8" opacity="0.5"/>
+
+  <!-- Columnas -->
+  <rect x="76" y="56" width="6" height="144" fill="url(#goldGrad)"/>
+  <rect x="174" y="56" width="6" height="144" fill="url(#goldGrad)"/>
+
+  <!-- Vidrio (contorno oro fino con relleno sutil) -->
+  <path d="M 92,58 L 164,58 C 164,100 136,112 132,128 C 136,144 164,156 164,198 L 92,198 C 92,156 120,144 124,128 C 120,112 92,100 92,58 Z" 
+        fill="#16161c" fill-opacity="0.4" stroke="url(#goldGrad)" stroke-width="6" stroke-linejoin="round"/>
+
+  <!-- Arena superior -->
+  <path d="M 105,92 C 110,100 118,108 125,125 L 131,125 C 138,108 146,100 151,92 C 135,88 120,88 105,92 Z" 
+        fill="url(#goldGrad)"/>
+
+  <!-- Hilo de arena -->
+  <rect x="126.5" y="128" width="3" height="48" fill="url(#goldGrad)"/>
+
+  <!-- Montículo inferior -->
+  <path d="M 98,196 Q 113,180 128,170 Q 143,180 158,196 Z" 
+        fill="url(#goldGrad)"/>
+</svg>

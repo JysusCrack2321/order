@@ -51,6 +51,35 @@ La tipografía es Cinzel (OFL, incrustada en el binario) para títulos y rótulo
 el texto pequeño usa la sans del sistema (Noto Sans) porque Cinzel a 11–14 px
 pierde legibilidad.
 
+## Icono
+
+La imagen de la app es el reloj de arena de **`arte/order.svg`**. De ahí salen
+dos cosas distintas:
+
+- **Ventana y bandeja**: `ui/app.slint` la usa como `icon` de la ventana y
+  `src/sistema.rs` incrusta `arte/bandeja-{22,32,48}.png` para el
+  `icon_pixmap` (ARGB32) del StatusNotifierItem. Con los píxeles dentro del
+  binario el icono se ve igual aunque el tema no tenga nada parecido;
+  `icon_name = "order"` queda solo de respaldo.
+- **Escritorio**: se instala en el tema hicolor para el `.desktop`.
+
+Paso de instalación (una vez, y de nuevo solo si cambia el SVG):
+
+```bash
+cd ~/apps/order
+rsvg-convert -w 22 -h 22 arte/order.svg -o arte/bandeja-22.png   # ídem 32 y 48
+for n in 16 22 24 32 48 64 128 256; do
+  mkdir -p ~/.local/share/icons/hicolor/${n}x${n}/apps
+  rsvg-convert -w $n -h $n arte/order.svg \
+    -o ~/.local/share/icons/hicolor/${n}x${n}/apps/order.png
+done
+cp arte/order.svg ~/.local/share/icons/hicolor/scalable/apps/order.svg
+gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor   # si existe
+```
+
+Los `.desktop` (el del repo, `~/.local/share/applications/` y
+`~/.config/autostart/`) llevan `Icon=order`, que apunta a esos archivos.
+
 ## Instalar y reinstalar
 
 ```bash

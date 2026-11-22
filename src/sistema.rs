@@ -36,6 +36,11 @@ static DATOS: Mutex<Option<Datos>> = Mutex::new(None);
 /// El icono se queda vivo mientras viva el proceso.
 static BANDEJA: OnceLock<ksni::blocking::Handle<Bandeja>> = OnceLock::new();
 
+/// Los PNG de la bandeja, ya decodificados. Se generan con rsvg-convert desde
+/// arte/order.svg y se incrustan en el binario: el icono se ve igual aunque el
+/// tema no tenga nada parecido.
+static ICONOS: OnceLock<Vec<ksni::Icon>> = OnceLock::new();
+
 /// Publica los datos que acaba de leer la ventana.
 pub fn publicar(datos: &Datos) {
     if let Ok(mut guardados) = DATOS.lock() {
@@ -120,6 +125,24 @@ fn nombre_socket(archivo: Option<&std::ffi::OsStr>) -> String {
 mod pruebas {
     use super::*;
     use std::ffi::OsStr;
+
+    /// Los tres PNG incrustados se decodifican y quedan del tamaño pedido.
+    #[test]
+    fn el_icono_de_la_bandeja_es_argb32() {
+        let iconos = iconos_bandeja();
+        let tamanos: Vec<(i32, i32)> = iconos.iter().map(|i| (i.width, i.height)).collect();
+        assert_eq!(tamanos, vec![(22, 22), (32, 32), (48, 48)]);
+
+        for icono in &iconos {
+            let pixeles = (icono.width * icono.height) as usize;
+            assert_eq!(icono.data.len(), pixeles * 4, "ARGB32: 4 bytes por píxel");
+            // El fondo del SVG es opaco salvo en las esquinas redondeadas.
+            assert!(
+                icono.data.chunks_exact(4).any(|p| p[0] == 0xff),
+                "el icono tiene zonas opacas"
+            );
+        }
+    }
 
     #[test]
     fn el_socket_de_la_copia_no_es_el_de_la_app() {
@@ -208,7 +231,14 @@ impl ksni::Tray for Bandeja {
     }
 
     fn icon_name(&self) -> String {
-        "view-calendar".to_string()
+        // Respaldo: si el vigilante ignora los píxeles, que busque el icono
+        // instalado en el tema (hicolor).
+        "order".to_string()
+    }
+
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        // ARGB32 incrustado: no depende del tema de iconos ni del caché.
+        ICONOS.get_or_init(iconos_bandeja).clone()
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
@@ -235,6 +265,55 @@ impl ksni::Tray for Bandeja {
             .into(),
         ]
     }
+}
+
+/// Los PNG incrustados. Se generan desde arte/order.svg; si alguno faltara o no
+/// fuera PNG, se ignora en vez de tumbar la bandeja.
+static PNG_22: &[u8] = include_bytes!("../arte/bandeja-22.png");
+static PNG_32: &[u8] = include_bytes!("../arte/bandeja-32.png");
+static PNG_48: &[u8] = include_bytes!("../arte/bandeja-48.png");
+
+/// Los tres tamaños que piden los vigilantes de SNI, de menor a mayor.
+fn iconos_bandeja() -> Vec<ksni::Icon> {
+    [PNG_22, PNG_32, PNG_48]
+        .iter()
+        .filter_map(|png| icono_argb(png))
+        .collect()
+}
+
+/// Decodifica un PNG RGBA/RGB a ARGB32 en orden de red (A, R, G, B), que es lo
+/// que espera `icon_pixmap` de StatusNotifierItem.
+fn icono_argb(png: &'static [u8]) -> Option<ksni::Icon> {
+    let mut lector = png::Decoder::new(std::io::Cursor::new(png))
+        .read_info()
+        .ok()?;
+    let (ancho, alto) = {
+        let info = lector.info();
+        (info.width, info.height)
+    };
+    let mut marco = vec![0u8; lector.output_buffer_size()?];
+    let salida = lector.next_frame(&mut marco).ok()?;
+    let pixeles = &marco[..salida.buffer_size()];
+
+    let canales = match salida.color_type {
+        png::ColorType::Rgba => 4,
+        png::ColorType::Rgb => 3,
+        _ => return None,
+    };
+
+    let mut datos = Vec::with_capacity((ancho as usize) * (alto as usize) * 4);
+    for pixel in pixeles.chunks_exact(canales) {
+        datos.push(if canales == 4 { pixel[3] } else { 0xff });
+        datos.push(pixel[0]);
+        datos.push(pixel[1]);
+        datos.push(pixel[2]);
+    }
+
+    Some(ksni::Icon {
+        width: ancho as i32,
+        height: alto as i32,
+        data: datos,
+    })
 }
 
 /// Arranca el icono. Si el escritorio no tiene SNI, se avisa y se sigue: la
