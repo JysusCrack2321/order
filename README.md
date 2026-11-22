@@ -129,9 +129,24 @@ tener el menú Abrir/Salir. En niri con DMS funciona sin nada extra.
 
 ## Agente y adjuntos
 
-Cada petición al agente se arma en memoria con la agenda actual, un resumen de la conversación mantenido por el propio modelo, los últimos 3 intercambios (sin reenviar adjuntos), qué se aplicó o descartó de sus propuestas y la petición nueva («Nueva conversación» borra este contexto).
+Cada petición al agente se arma en este orden:
 
-Desde la barra inferior del agente se pueden adjuntar hasta **5 archivos** por mensaje (PDF o imágenes; máximo **20 páginas** por PDF, imágenes reducidas a **1568 px** en el lado largo en JPEG 85 respetando EXIF, total **≤ 20 MB**; los adjuntos no se guardan en disco). Lo que se envía a cada proveedor depende de sus capacidades:
+1. **Agenda actual** (`Datos actuales de ORDER`).
+2. **`## Documentos de la conversación`**: texto completo extraído de los adjuntos (los PDF se leen conservando sus filas y columnas como `pdftotext -layout` en Rust puro; en fotos se guarda el OCR si lo hay). Tope combinado de **200 000 caracteres**: si se supera, el documento más antiguo se reemplaza por `[documento retirado: nombre]`.
+3. **`## Resumen de lo hablado antes`**: presente tras una compactación.
+4. **`## Conversación`**: todos los intercambios literales (`Usuario:` / `ORDER:`).
+5. **`## Qué pasó con tus propuestas`**: acciones aplicadas o descartadas desde el turno anterior.
+6. **Petición nueva** (+ adjuntos binarios solo en el turno en que se adjuntan).
+
+### Persistencia (`conversacion.json`) y compactación
+
+- El historial vive en **`conversacion.json`** junto a `agente.toml`, con permisos `600` y nunca en la carpeta sincronizada ni en `order.toml`:
+  - **Escritorio**: `~/.config/order/conversacion.json` (o junto a `ORDER_ARCHIVO` si está definida).
+  - **Android**: almacenamiento privado de la app (`filesDir`).
+- Se guarda de forma atómica tras cada turno, compactación y acción aplicada o descartada. **«Nueva conversación»** borra `conversacion.json`.
+- **Compactación**: antes de enviar, si las secciones 2–5 superan el umbral configurable `limite_contexto_tokens` (**60 000** tokens aprox. = caracteres / 4, editable en **Ajustes → Agente → Avanzado**) y hay más de 10 mensajes, el modelo resume todos los mensajes anteriores y conserva intactos los últimos **10** mensajes literales y todos los documentos. Si la API rechaza una petición por longitud de contexto, compacta y reintenta una vez.
+
+Desde la barra inferior del agente se pueden adjuntar hasta **5 archivos** por mensaje (PDF o imágenes; máximo **20 páginas** por PDF, imágenes reducidas a **1568 px** en el lado largo en JPEG 85 respetando EXIF, total **≤ 20 MB**; los binarios no se guardan en disco). Lo que se envía a cada proveedor depende de sus capacidades:
 
 | Proveedor | PDF | Imagen / foto |
 |---|---|---|
