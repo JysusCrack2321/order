@@ -299,6 +299,7 @@ export component AppWindow inherits Window {
     in-out property <string> a-hora: "";
     in-out property <string> a-horas: "";
     in-out property <bool> a-sin-semestre: false;
+    in-out property <bool> a-autostart: false;
 
     // --- Agente -----------------------------------------------------------
     // Barra de abajo y panel de propuestas.
@@ -1007,6 +1008,23 @@ export component AppWindow inherits Window {
 
                         Text {
                             text: "Sin semestre (las clases valen todo el año)";
+                            font-size: Tema.tamano-pequeno;
+                            color: Tema.texto-suave;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Tema.espacio-sm;
+                        cross-axis-alignment: center;
+
+                        Casilla {
+                            marcada: root.a-autostart;
+                            clicked => { root.a-autostart = !root.a-autostart; }
+                        }
+
+                        Text {
+                            text: "Abrir ORDER al iniciar sesión";
                             font-size: Tema.tamano-pequeno;
                             color: Tema.texto-suave;
                             vertical-alignment: center;

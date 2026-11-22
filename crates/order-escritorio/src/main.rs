@@ -10,6 +10,11 @@ use order_core::almacen::Almacen;
 use order_core::{conflictos, modelo};
 
 fn main() -> Result<(), slint::PlatformError> {
+    if std::env::args().skip(1).any(|arg| arg == "--version") {
+        println!("order {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     // Instancia única: si ya corre ORDER, solo se le pide mostrar la ventana.
     // El socket lleva el nombre de ORDER_ARCHIVO, así una copia de prueba no
     // despierta a la app real.

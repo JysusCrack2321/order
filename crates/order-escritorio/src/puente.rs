@@ -1213,6 +1213,7 @@ fn abrir_ajustes(ui: &AppWindow) {
     ui.set_form_encabezado("Ajustes".into());
     ui.set_form_edita(false);
     ui.set_a_sin_semestre(datos.semestre.is_none());
+    ui.set_a_autostart(crate::sistema::inicio_automatico_activo());
     ui.set_a_inicio(inicio.format(FORMATO_FECHA).to_string().into());
     ui.set_a_fin(fin.format(FORMATO_FECHA).to_string().into());
     ui.set_a_hora(hora_texto(datos.ajustes.aviso_dia_antes).into());
@@ -1404,10 +1405,21 @@ fn guardar_ajustes(ui: &AppWindow) {
             return;
         }
     };
+    let autostart = ui.get_a_autostart();
     let resultado = almacen().modificar(|doc| {
         ops::guardar_ajustes(doc, &ajustes)?;
         ops::guardar_semestre(doc, semestre.as_ref())
     });
+    let resultado = match resultado {
+        Ok(datos) => match crate::sistema::configurar_inicio_automatico(autostart) {
+            Ok(()) => Ok(datos),
+            Err(mensaje) => Err(ErrorDatos {
+                linea: None,
+                mensaje,
+            }),
+        },
+        Err(err) => Err(err),
+    };
     terminar(ui, resultado, false);
 }
 

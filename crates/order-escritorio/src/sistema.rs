@@ -19,7 +19,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -116,6 +116,125 @@ pub fn copiar_al_portapapeles(texto: &str) -> bool {
         }
     }
     false
+}
+
+// ---------------------------------------------------------------------------
+// Inicio automático (XDG autostart)
+// ---------------------------------------------------------------------------
+
+/// Indica si existe el archivo `~/.config/autostart/order.desktop` activo.
+pub fn inicio_automatico_activo() -> bool {
+    let Some(config_dir) = directorio_config_usuario() else {
+        return false;
+    };
+    autostart_activo_en(&config_dir)
+}
+
+/// Crea o elimina `~/.config/autostart/order.desktop` apuntando a `$APPIMAGE`
+/// (si se ejecuta como AppImage) o al ejecutable actual.
+pub fn configurar_inicio_automatico(activar: bool) -> Result<(), String> {
+    let config_dir = directorio_config_usuario()
+        .ok_or_else(|| "No se encontró el directorio de configuración del usuario.".to_string())?;
+    let ejecutable = ejecutable_autostart()?;
+    configurar_autostart_en(&config_dir, activar, &ejecutable)
+}
+
+fn directorio_config_usuario() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        if !xdg.is_empty() {
+            return Some(PathBuf::from(xdg));
+        }
+    }
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(|h| PathBuf::from(h).join(".config"))
+}
+
+fn ruta_autostart_en(config_dir: &Path) -> PathBuf {
+    config_dir.join("autostart").join("order.desktop")
+}
+
+fn autostart_activo_en(config_dir: &Path) -> bool {
+    let ruta = ruta_autostart_en(config_dir);
+    let Ok(contenido) = std::fs::read_to_string(&ruta) else {
+        return false;
+    };
+    !contenido
+        .lines()
+        .any(|linea| matches!(linea.trim(), "Hidden=true" | "X-GNOME-Autostart-enabled=false"))
+}
+
+fn ejecutable_autostart() -> Result<PathBuf, String> {
+    if let Some(appimage) = std::env::var_os("APPIMAGE") {
+        if !appimage.is_empty() {
+            return Ok(PathBuf::from(appimage));
+        }
+    }
+    std::env::current_exe()
+        .map_err(|e| format!("No se pudo determinar la ruta del ejecutable: {e}"))
+}
+
+fn escapar_exec_desktop(ruta: &Path) -> String {
+    let texto = ruta.to_string_lossy();
+    let necesita_comillas = texto.is_empty()
+        || texto.chars().any(|c| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    '"' | '\'' | '\\' | '$' | '`' | '>' | '<' | '~' | '|' | '&' | ';' | '*' | '?' | '#' | '(' | ')'
+                )
+        });
+    if !necesita_comillas {
+        return texto.into_owned();
+    }
+    let mut escapado = String::with_capacity(texto.len() + 2);
+    escapado.push('"');
+    for c in texto.chars() {
+        if matches!(c, '"' | '$' | '`' | '\\') {
+            escapado.push('\\');
+        }
+        escapado.push(c);
+    }
+    escapado.push('"');
+    escapado
+}
+
+fn contenido_desktop_autostart(ejecutable: &Path) -> String {
+    let exec = escapar_exec_desktop(ejecutable);
+    format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=ORDER\n\
+         Comment=Horario, tareas y recordatorios para organizarte\n\
+         Exec={exec}\n\
+         Icon=order\n\
+         Terminal=false\n\
+         Categories=Office;Calendar;\n\
+         StartupNotify=false\n\
+         X-GNOME-Autostart-enabled=true\n\
+         NoDisplay=false\n"
+    )
+}
+
+fn configurar_autostart_en(
+    config_dir: &Path,
+    activar: bool,
+    ejecutable: &Path,
+) -> Result<(), String> {
+    let ruta = ruta_autostart_en(config_dir);
+    if activar {
+        if let Some(padre) = ruta.parent() {
+            std::fs::create_dir_all(padre)
+                .map_err(|e| format!("No se pudo crear {}: {e}", padre.display()))?;
+        }
+        std::fs::write(&ruta, contenido_desktop_autostart(ejecutable))
+            .map_err(|e| format!("No se pudo escribir {}: {e}", ruta.display()))?;
+    } else if let Err(e) = std::fs::remove_file(&ruta) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(format!("No se pudo borrar {}: {e}", ruta.display()));
+        }
+    }
+    Ok(())
 }
 
 fn datos_actuales() -> Option<Datos> {
@@ -249,6 +368,35 @@ mod pruebas {
             "mostrar",
             "la orden es mostrar"
         );
+    }
+
+    #[test]
+    fn autostart_crea_y_borra_desktop() {
+        let dir = tempfile::tempdir().expect("directorio temporal");
+        let exe = PathBuf::from("/home/usuario/Mis Apps/ORDER-x86_64.AppImage");
+
+        assert!(!autostart_activo_en(dir.path()));
+
+        configurar_autostart_en(dir.path(), true, &exe).expect("activar autostart");
+        assert!(autostart_activo_en(dir.path()));
+
+        let contenido = std::fs::read_to_string(ruta_autostart_en(dir.path()))
+            .expect("leer desktop generado");
+        assert!(contenido.contains("Exec=\"/home/usuario/Mis Apps/ORDER-x86_64.AppImage\""));
+        assert!(contenido.contains("Categories=Office;Calendar;"));
+        assert!(contenido.contains("X-GNOME-Autostart-enabled=true"));
+
+        configurar_autostart_en(dir.path(), false, &exe).expect("desactivar autostart");
+        assert!(!autostart_activo_en(dir.path()));
+
+        // Desactivar de nuevo cuando no existe no debe fallar.
+        configurar_autostart_en(dir.path(), false, &exe).expect("idempotente al borrar");
+    }
+
+    #[test]
+    fn escapar_exec_sin_espacios_queda_simple() {
+        let exe = PathBuf::from("/usr/local/bin/ORDER.AppImage");
+        assert_eq!(escapar_exec_desktop(&exe), "/usr/local/bin/ORDER.AppImage");
     }
 }
 
