@@ -129,6 +129,8 @@ tener el menú Abrir/Salir. En niri con DMS funciona sin nada extra.
 
 ## Agente y adjuntos
 
+El agente usa **Gemini** por defecto (gratis con clave de Google AI Studio) y abre una guía paso a paso para conectarlo al primer uso si aún no hay clave.
+
 Cada petición al agente se arma en este orden:
 
 1. **Agenda actual** (`Datos actuales de ORDER`).
