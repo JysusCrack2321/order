@@ -1,0 +1,352 @@
+// Vista Semana: navegación entre semanas y rejilla de clases.
+// Los colores, tamaños y la tipografía salen siempre de Tema.
+
+import { Tema } from "tema.slint";
+import { ScrollView } from "std-widgets.slint";
+
+/// Una clase ya colocada en un día. `inicio` y `fin` son minutos desde la
+/// medianoche: la posición vertical se calcula aquí con las medidas del tema.
+export struct BloqueUI {
+    materia: string,
+    lugar: string,
+    hora: string,
+    inicio: int,
+    fin: int,
+}
+
+/// Una tarea que vence ese día, para la marca bajo la columna.
+export struct TareaDiaUI {
+    titulo: string,
+    hora: string,
+    hecha: bool,
+}
+
+export struct DiaUI {
+    nombre: string,
+    fecha: string,
+    es-hoy: bool,
+    bloques: [BloqueUI],
+    tareas: [TareaDiaUI],
+    extra: string,
+}
+
+component BotonNav inherits Rectangle {
+    in property <string> glifo;
+    callback clicked();
+
+    width: Tema.ancho-boton-nav;
+    height: Tema.ancho-boton-nav;
+    border-radius: Tema.radio-pequeno;
+    background: ta.has-hover ? Tema.fondo-hover : transparent;
+    border-width: Tema.linea;
+    border-color: ta.has-hover ? Tema.acento-suave : Tema.borde;
+
+    Text {
+        text: root.glifo;
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-family: Tema.fuente-titulos;
+        font-size: Tema.tamano-pestana;
+        color: ta.has-hover ? Tema.acento : Tema.texto-suave;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component BotonHoy inherits Rectangle {
+    callback clicked();
+
+    width: Tema.ancho-boton-hoy;
+    height: Tema.ancho-boton-nav;
+    border-radius: Tema.radio-pequeno;
+    background: ta.has-hover ? Tema.acento-tenue : transparent;
+    border-width: Tema.linea;
+    border-color: ta.has-hover ? Tema.acento : Tema.acento-suave;
+
+    Text {
+        text: "Hoy";
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-family: Tema.fuente-titulos;
+        font-size: Tema.tamano-pequeno;
+        letter-spacing: Tema.letra-normal;
+        color: ta.has-hover ? Tema.acento : Tema.texto-suave;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component SemanaVista inherits Rectangle {
+    in property <[DiaUI]> dias;
+    in property <string> etiqueta;
+    in property <bool> es-actual: false;
+    // Hora en la que empieza y termina la rejilla (7 y 19 por defecto).
+    in property <int> base: 7;
+    in property <int> fin-hora: 19;
+    in property <[string]> etiquetas-hora;
+    in property <bool> mostrar-ahora: false;
+    in property <int> ahora-min: 0;
+    in property <bool> hay-tareas: false;
+
+    callback anterior();
+    callback siguiente();
+    callback ir-hoy();
+
+    background: transparent;
+
+    VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        spacing: Tema.espacio-md;
+
+        // --- Navegación ---------------------------------------------------
+        HorizontalLayout {
+            spacing: Tema.espacio-sm;
+            cross-axis-alignment: center;
+
+            BotonNav {
+                glifo: "‹";
+                clicked => { root.anterior(); }
+            }
+            BotonNav {
+                glifo: "›";
+                clicked => { root.siguiente(); }
+            }
+
+            Text {
+                text: root.etiqueta;
+                font-family: Tema.fuente-titulos;
+                font-size: Tema.tamano-semana;
+                font-weight: 700;
+                letter-spacing: Tema.letra-normal;
+                color: Tema.texto;
+                vertical-alignment: center;
+            }
+
+            if root.es-actual : Rectangle {
+                width: Tema.ancho-insignia;
+                height: Tema.alto-insignia;
+                border-radius: Tema.radio-pequeno;
+                border-width: Tema.linea;
+                border-color: Tema.acento-suave;
+                background: Tema.acento-tenue;
+
+                Text {
+                    text: "SEMANA ACTUAL";
+                    width: parent.width;
+                    height: parent.height;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    font-family: Tema.fuente-titulos;
+                    font-size: Tema.tamano-hora;
+                    letter-spacing: Tema.letra-normal;
+                    color: Tema.acento;
+                }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            BotonHoy {
+                clicked => { root.ir-hoy(); }
+            }
+        }
+
+        // --- Rejilla ------------------------------------------------------
+        // Va dentro de un ScrollView para que una semana con muchas horas, o
+        // un banner de aviso abierto, no empujen el pie fuera de la ventana.
+        ScrollView {
+                vertical-stretch: 1;
+
+                HorizontalLayout {
+                    spacing: 0;
+
+                // Columna de horas.
+                VerticalLayout {
+                    width: Tema.ancho-gutter;
+                    spacing: 0;
+
+                    Rectangle { height: Tema.alto-cabecera-dia; }
+
+                    Rectangle {
+                        height: (root.fin-hora - root.base) * Tema.alto-hora;
+
+                        for texto[i] in root.etiquetas-hora : Text {
+                            y: i * Tema.alto-hora - Tema.tamano-hora / 2 - Tema.linea;
+                            width: parent.width - Tema.espacio-md;
+                            horizontal-alignment: right;
+                            text: texto;
+                            font-size: Tema.tamano-hora;
+                            color: Tema.texto-tenue;
+                        }
+                    }
+
+                    // Hueco de las marcas de tareas, para alinear con las columnas.
+                    if root.hay-tareas : Rectangle { height: Tema.alto-marcas; }
+                }
+
+                // Un día por columna (lun–vie, más sáb/dom si hay clases).
+                for dia in root.dias : Rectangle {
+                    horizontal-stretch: 1;
+                    background: dia.es-hoy ? Tema.fondo-hoy : transparent;
+                    clip: true;
+
+                    Rectangle {
+                        x: 0;
+                        y: 0;
+                        width: Tema.linea;
+                        height: parent.height;
+                        background: Tema.borde-suave;
+                    }
+
+                    VerticalLayout {
+                        width: parent.width;
+                        spacing: 0;
+
+                        // Cabecera del día.
+                        Rectangle {
+                            height: Tema.alto-cabecera-dia;
+
+                            Text {
+                                x: 0;
+                                y: Tema.espacio-sm;
+                                width: parent.width;
+                                horizontal-alignment: center;
+                                text: dia.nombre;
+                                font-family: Tema.fuente-titulos;
+                                font-size: Tema.tamano-dia;
+                                font-weight: dia.es-hoy ? 700 : 400;
+                                letter-spacing: Tema.letra-normal;
+                                color: dia.es-hoy ? Tema.acento : Tema.texto-suave;
+                            }
+
+                            Text {
+                                x: 0;
+                                y: Tema.espacio-sm + Tema.tamano-dia + Tema.espacio-xs;
+                                width: parent.width;
+                                horizontal-alignment: center;
+                                text: dia.fecha;
+                                font-size: Tema.tamano-hora;
+                                color: dia.es-hoy ? Tema.acento-suave : Tema.texto-tenue;
+                            }
+
+                            Rectangle {
+                                y: parent.height - Tema.linea;
+                                width: parent.width;
+                                height: Tema.linea;
+                                background: Tema.borde-suave;
+                            }
+                        }
+
+                        // Cuerpo con la rejilla horaria y los bloques.
+                        Rectangle {
+                            height: (root.fin-hora - root.base) * Tema.alto-hora;
+                            clip: true;
+
+                            for linea[i] in root.etiquetas-hora : Rectangle {
+                                y: i * Tema.alto-hora;
+                                height: Tema.linea;
+                                width: parent.width;
+                                background: Tema.linea-hora;
+                            }
+
+                            for bloque in dia.bloques : Rectangle {
+                                x: Tema.espacio-xs + Tema.linea;
+                                y: (bloque.inicio - root.base * 60) * Tema.alto-minuto + Tema.linea;
+                                width: parent.width - 2 * Tema.espacio-xs - Tema.trazo;
+                                height: (bloque.fin - bloque.inicio) * Tema.alto-minuto - Tema.trazo;
+                                border-radius: Tema.radio-pequeno;
+                                background: Tema.fondo-clase;
+                                border-width: Tema.linea;
+                                border-color: Tema.borde-clase;
+                                clip: true;
+
+                                Rectangle {
+                                    x: 0;
+                                    y: 0;
+                                    width: Tema.ancho-marca;
+                                    height: parent.height;
+                                    background: Tema.acento-suave;
+                                }
+
+                                VerticalLayout {
+                                    x: Tema.espacio-sm;
+                                    y: Tema.desplazamiento-bloque;
+                                    width: parent.width - Tema.espacio-sm - Tema.espacio-xs;
+                                    spacing: Tema.separacion-linea;
+
+                                    Text {
+                                        text: bloque.materia;
+                                        font-size: Tema.tamano-bloque;
+                                        font-weight: 600;
+                                        color: Tema.texto;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: bloque.hora;
+                                        font-size: Tema.tamano-hora;
+                                        color: Tema.texto-suave;
+                                    }
+                                    if bloque.lugar != "" : Text {
+                                        text: bloque.lugar;
+                                        font-size: Tema.tamano-hora;
+                                        color: Tema.texto-tenue;
+                                        overflow: elide;
+                                    }
+                                }
+                            }
+
+                            // Línea del momento actual, solo en la semana en curso.
+                            if root.mostrar-ahora && dia.es-hoy : Rectangle {
+                                y: (root.ahora-min - root.base * 60) * Tema.alto-minuto;
+                                width: parent.width;
+                                height: Tema.linea;
+                                background: Tema.acento;
+                            }
+                        }
+
+                        // Marcas de las tareas que vencen este día.
+                        if root.hay-tareas : Rectangle {
+                            height: Tema.alto-marcas;
+                            clip: true;
+
+                            Rectangle {
+                                y: 0;
+                                width: parent.width;
+                                height: Tema.linea;
+                                background: Tema.borde-suave;
+                            }
+
+                            VerticalLayout {
+                                padding: Tema.espacio-xs;
+                                spacing: Tema.separacion-linea;
+
+                                for tarea in dia.tareas : Text {
+                                    text: (tarea.hecha ? "✓ " : "• ") + tarea.titulo + "  " + tarea.hora;
+                                    font-size: Tema.tamano-hora;
+                                    color: tarea.hecha ? Tema.texto-tenue : Tema.acento;
+                                    overflow: elide;
+                                }
+
+                                if dia.extra != "" : Text {
+                                    text: dia.extra;
+                                    font-size: Tema.tamano-hora;
+                                    color: Tema.texto-tenue;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

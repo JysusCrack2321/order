@@ -1,0 +1,164 @@
+// Vista Pendientes: tareas sin hacer, de la que vence antes a la que vence
+// después. Las vencidas van resaltadas en terracota.
+//
+// La casilla es todavía un indicador visual: marcarla y editar la tarea llega
+// con los formularios (Tarea 7 del plan).
+
+import { Tema } from "tema.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export struct TareaUI {
+    id: string,
+    titulo: string,
+    materia: string,
+    fecha: string,
+    vencida: bool,
+}
+
+export component PendientesVista inherits Rectangle {
+    in property <[TareaUI]> tareas;
+    in property <string> resumen;
+
+    background: transparent;
+
+    VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        spacing: 0;
+
+        Text {
+            text: "PENDIENTES";
+            font-family: Tema.fuente-titulos;
+            font-size: Tema.tamano-seccion;
+            font-weight: 700;
+            letter-spacing: Tema.letra-seccion;
+            color: Tema.texto-suave;
+        }
+
+        Rectangle { height: Tema.espacio-xs; }
+
+        Text {
+            text: root.resumen;
+            font-size: Tema.tamano-pequeno;
+            color: Tema.texto-tenue;
+        }
+
+        Rectangle { height: Tema.espacio-md; }
+
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                spacing: 0;
+
+                for tarea in root.tareas : Rectangle {
+                    height: Tema.alto-fila;
+                    background: ta.has-hover ? Tema.fondo-hover : transparent;
+
+                    // Filo terracota en las vencidas.
+                    if tarea.vencida : Rectangle {
+                        x: 0;
+                        y: Tema.espacio-sm;
+                        width: Tema.trazo;
+                        height: parent.height - 2 * Tema.espacio-sm;
+                        background: Tema.vencida;
+                    }
+
+                    HorizontalLayout {
+                        width: parent.width;
+                        height: parent.height;
+                        padding-left: Tema.espacio-md;
+                        padding-right: Tema.espacio-md;
+                        spacing: Tema.espacio-md;
+                        cross-axis-alignment: center;
+
+                        Rectangle {
+                            width: Tema.alto-check;
+                            height: Tema.alto-check;
+                            border-radius: Tema.radio-pequeno;
+                            border-width: Tema.linea;
+                            border-color: tarea.vencida ? Tema.vencida : Tema.borde-fuerte;
+                            background: transparent;
+                        }
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: Tema.espacio-2xs;
+
+                            Text {
+                                text: tarea.titulo;
+                                font-size: Tema.tamano-texto;
+                                color: tarea.vencida ? Tema.vencida-texto : Tema.texto;
+                                overflow: elide;
+                            }
+
+                            HorizontalLayout {
+                                alignment: start;
+                                spacing: Tema.espacio-sm;
+
+                                if tarea.materia != "" : Text {
+                                    text: tarea.materia;
+                                    font-size: Tema.tamano-pequeno;
+                                    color: Tema.texto-suave;
+                                }
+
+                                Text {
+                                    text: tarea.fecha;
+                                    font-size: Tema.tamano-pequeno;
+                                    color: tarea.vencida ? Tema.vencida : Tema.texto-tenue;
+                                }
+                            }
+                        }
+
+                        if tarea.vencida : Text {
+                            text: "VENCIDA";
+                            font-family: Tema.fuente-titulos;
+                            font-size: Tema.tamano-hora;
+                            letter-spacing: Tema.letra-normal;
+                            color: Tema.vencida;
+                        }
+                    }
+
+                    Rectangle {
+                        y: parent.height - Tema.linea;
+                        width: parent.width;
+                        height: Tema.linea;
+                        background: Tema.borde-suave;
+                    }
+
+                    ta := TouchArea {
+                        mouse-cursor: default;
+                    }
+                }
+
+                if root.tareas.length == 0 : Rectangle {
+                    height: Tema.alto-vacio;
+
+                    VerticalLayout {
+                        width: parent.width;
+                        height: parent.height;
+                        alignment: center;
+                        spacing: Tema.espacio-xs;
+
+                        Text {
+                            text: "Nada pendiente";
+                            horizontal-alignment: center;
+                            font-family: Tema.fuente-titulos;
+                            font-size: Tema.tamano-semana;
+                            letter-spacing: Tema.letra-normal;
+                            color: Tema.texto-suave;
+                        }
+
+                        Text {
+                            text: "Las tareas que agregues aparecerán aquí.";
+                            horizontal-alignment: center;
+                            font-size: Tema.tamano-pequeno;
+                            color: Tema.texto-tenue;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

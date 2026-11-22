@@ -3,12 +3,16 @@ name = "order"
 version = "0.1.0"
 edition = "2024"
 
+[build-dependencies]
+slint-build = "1.19"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 toml_edit = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
+slint = "1.19"
 
 [dev-dependencies]
 tempfile = "3"

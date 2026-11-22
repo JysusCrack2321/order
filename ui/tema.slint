@@ -1,0 +1,111 @@
+// Tema visual de ORDER.
+// ---------------------------------------------------------------------------
+// Aquí viven TODOS los colores, tamaños, espaciados y familias tipográficas.
+// Ningún otro archivo .slint debe llevar un color o un tamaño escrito a mano:
+// para cambiar el aspecto de la app basta con editar este archivo.
+//
+// Tipografía: Cinzel (OFL, incrustada en el binario) para títulos y rótulos.
+// El texto pequeño —horas, nombres de clase, títulos de tarea, pie— usa la
+// sans del sistema (Noto Sans), porque la Cinzel a 11–14 px pierde legibilidad
+// en minúsculas y acentos.
+// ---------------------------------------------------------------------------
+
+import "fuentes/Cinzel-Regular.ttf";
+import "fuentes/Cinzel-Bold.ttf";
+
+export global Tema {
+    // --- Tipografía -------------------------------------------------------
+    out property <string> fuente-titulos: "Cinzel";
+    out property <string> fuente-texto: "Noto Sans";
+
+    out property <length> tamano-titulo: 25px;
+    out property <length> tamano-semana: 17px;
+    out property <length> tamano-pestana: 14px;
+    out property <length> tamano-seccion: 14px;
+    out property <length> tamano-dia: 13px;
+    out property <length> tamano-texto: 14px;
+    out property <length> tamano-bloque: 12px;
+    out property <length> tamano-pequeno: 12px;
+    out property <length> tamano-hora: 11px;
+    out property <length> tamano-pie: 12px;
+
+    // --- Paleta: carbón cálido, tinta marfil y oro viejo ------------------
+    out property <color> fondo: #101014;
+    out property <color> fondo-panel: #16161c;
+    out property <color> fondo-panel-alto: #1c1c24;
+    out property <color> fondo-hover: #21212b;
+    out property <color> fondo-hoy: #17171f;
+    out property <color> fondo-clase: #1e1e27;
+    out property <color> borde: #2a2a35;
+    out property <color> borde-suave: #202029;
+    out property <color> borde-fuerte: #3a3a48;
+    out property <color> borde-clase: #33333f;
+    out property <color> linea-hora: #1e1e26;
+
+    out property <color> texto: #e9e4d8;
+    out property <color> texto-suave: #a8a296;
+    out property <color> texto-tenue: #6c685f;
+
+    out property <color> acento: #c7a96b;
+    out property <color> acento-suave: #8e7645;
+    out property <color> acento-tenue: #2a2418;
+
+    out property <color> vencida: #c6756b;
+    out property <color> vencida-texto: #e0a49c;
+
+    // Avisos: rojo para el error que bloquea, amarillo para las advertencias
+    // que no bloquean (claves desconocidas en el TOML).
+    out property <color> fondo-error: #3a1d1b;
+    out property <color> borde-error: #8a4238;
+    out property <color> texto-error: #f2b6ad;
+    out property <color> fondo-aviso: #372e1b;
+    out property <color> borde-aviso: #8a6f32;
+    out property <color> texto-aviso: #ebd08c;
+
+    // --- Espaciado y radios ----------------------------------------------
+    out property <length> espacio-xs: 4px;
+    out property <length> espacio-sm: 8px;
+    out property <length> espacio-md: 12px;
+    out property <length> espacio-lg: 18px;
+    out property <length> espacio-xl: 26px;
+
+    out property <length> radio: 6px;
+    out property <length> radio-pequeno: 4px;
+    // Grosores de líneas, filos y trazos.
+    out property <length> linea: 1px;
+    out property <length> trazo: 2px;
+    out property <length> espacio-2xs: 2px;
+    // Interletraje de los rótulos en Cinzel.
+    out property <length> letra-titulo: 3px;
+    out property <length> letra-normal: 1px;
+    out property <length> letra-seccion: 2px;
+    out property <length> separacion-linea: 1px;
+
+    // --- Medidas de la ventana y de la rejilla ---------------------------
+    out property <length> ancho-ventana: 1060px;
+    out property <length> alto-ventana: 780px;
+
+    out property <length> alto-cabecera: 72px;
+    out property <length> alto-cabecera-dia: 46px;
+    out property <length> alto-pie: 34px;
+    out property <length> alto-fila: 58px;
+    out property <length> alto-marcas: 58px;
+    out property <length> alto-boton: 32px;
+    out property <length> alto-linea-aviso: 17px;
+    out property <length> ancho-boton-nav: 30px;
+    out property <length> ancho-gutter: 54px;
+    out property <length> ancho-marca: 3px;
+    out property <length> alto-check: 18px;
+    out property <length> ancho-pestana: 104px;
+    out property <length> ancho-boton-tarea: 112px;
+    out property <length> ancho-boton-hoy: 58px;
+    out property <length> ancho-insignia: 112px;
+    out property <length> alto-insignia: 20px;
+    out property <length> alto-vacio: 220px;
+    out property <length> desplazamiento-bloque: 3px;
+
+    // La rejilla horaria: un pixel por minuto sería excesivo; 40 px por hora
+    // dan 0.6667 px por minuto, suficiente para bloques y la línea "ahora".
+    out property <length> alto-hora: 40px;
+    out property <length> alto-minuto: 0.6667px;
+}
