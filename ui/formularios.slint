@@ -228,6 +228,65 @@ export component CampoBoton inherits VerticalLayout {
     }
 }
 
+/// Campo de una clave: se muestra tapada y el botón de al lado la descubre.
+/// Slint 1.19 no trae `echo-mode`, así que el texto oculto se dibuja como
+/// puntos y el campo real solo aparece cuando se pide verlo.
+export component CampoClave inherits VerticalLayout {
+    in property <string> etiqueta: "";
+    in-out property <string> texto;
+    in property <string> pista: "";
+    in property <bool> ver: false;
+
+    callback alternar();
+
+    spacing: Tema.espacio-xs;
+
+    Etiqueta {
+        text: root.etiqueta;
+    }
+
+    HorizontalLayout {
+        spacing: Tema.espacio-sm;
+
+        Rectangle {
+            horizontal-stretch: 1;
+            height: Tema.alto-campo;
+            border-radius: Tema.radio-pequeno;
+            background: Tema.fondo-campo;
+            border-width: Tema.linea;
+            border-color: Tema.borde-campo;
+
+            if root.ver : TextInput {
+                x: Tema.espacio-sm;
+                width: parent.width - 2 * Tema.espacio-sm;
+                height: parent.height;
+                vertical-alignment: center;
+                text <=> root.texto;
+                color: Tema.texto;
+                font-size: Tema.tamano-pequeno;
+                single-line: true;
+            }
+
+            if !root.ver : Text {
+                x: Tema.espacio-sm;
+                width: parent.width - 2 * Tema.espacio-sm;
+                height: parent.height;
+                vertical-alignment: center;
+                text: root.texto == "" ? root.pista : "••••••••••";
+                color: root.texto == "" ? Tema.texto-tenue : Tema.texto-suave;
+                font-size: Tema.tamano-pequeno;
+                overflow: elide;
+            }
+        }
+
+        Boton {
+            texto: root.ver ? "Ocultar" : "Mostrar";
+            width: Tema.ancho-boton-clave;
+            clicked => { root.alternar(); }
+        }
+    }
+}
+
 /// Ficha seleccionable (día de la semana, opción corta).
 export component Chip inherits Rectangle {
     in property <string> texto;

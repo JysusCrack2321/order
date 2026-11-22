@@ -1,0 +1,208 @@
+// Barra del agente y panel de propuestas.
+// ---------------------------------------------------------------------------
+// La barra vive fija abajo, encima del pie. Lo escrito se manda al modelo; lo
+// que propone se muestra arriba, en tarjetas, y nada se aplica sin un clic.
+// Colores y tamaños salen de tema.slint.
+
+import { Tema } from "tema.slint";
+import { Boton, Etiqueta } from "formularios.slint";
+import { ScrollView } from "std-widgets.slint";
+
+/// Una acción propuesta, ya descrita en español por puente.rs.
+export struct AccionUI {
+    indice: int,
+    descripcion: string,
+}
+
+/// Campo de texto con el botón de enviar. Enter también envía.
+export component BarraAgente inherits Rectangle {
+    in-out property <string> texto;
+    in property <bool> pensando: false;
+    in property <string> aviso: "";
+
+    callback enviar();
+
+    height: Tema.alto-barra-agente;
+    background: Tema.fondo-panel;
+
+    Rectangle {
+        y: 0;
+        width: parent.width;
+        height: Tema.linea;
+        background: Tema.borde;
+    }
+
+    HorizontalLayout {
+        x: Tema.espacio-xl;
+        y: Tema.linea;
+        width: parent.width - 2 * Tema.espacio-xl;
+        height: parent.height - Tema.linea;
+        spacing: Tema.espacio-sm;
+        cross-axis-alignment: center;
+
+        Text {
+            text: "AGENTE";
+            font-family: Tema.fuente-titulos;
+            font-size: Tema.tamano-hora;
+            letter-spacing: Tema.letra-seccion;
+            color: Tema.acento;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            height: Tema.alto-campo;
+            border-radius: Tema.radio-pequeno;
+            background: Tema.fondo-campo;
+            border-width: Tema.linea;
+            border-color: entrada.has-focus ? Tema.acento-suave : Tema.borde-campo;
+
+            entrada := TextInput {
+                x: Tema.espacio-sm;
+                width: parent.width - 2 * Tema.espacio-sm;
+                height: parent.height;
+                vertical-alignment: center;
+                text <=> root.texto;
+                color: Tema.texto;
+                font-size: Tema.tamano-pequeno;
+                single-line: true;
+                accepted => { root.enviar(); }
+            }
+
+            if root.texto == "" && !entrada.has-focus : Text {
+                x: Tema.espacio-sm;
+                width: parent.width - 2 * Tema.espacio-sm;
+                height: parent.height;
+                vertical-alignment: center;
+                text: root.aviso == "" ? "Pídele algo: «taller de control para el viernes»" : root.aviso;
+                color: root.aviso == "" ? Tema.texto-tenue : Tema.texto-error;
+                font-size: Tema.tamano-pequeno;
+                overflow: elide;
+            }
+        }
+
+        if root.pensando : Text {
+            text: "pensando…";
+            font-size: Tema.tamano-hora;
+            color: Tema.texto-tenue;
+        }
+
+        Boton {
+            texto: "Enviar";
+            principal: true;
+            width: Tema.ancho-boton-agente;
+            clicked => { root.enviar(); }
+        }
+    }
+}
+
+/// Panel de respuesta: el texto del modelo y una tarjeta por acción.
+export component PanelAgente inherits Rectangle {
+    in property <string> respuesta;
+    in property <[AccionUI]> acciones;
+    in property <string> nota: "";
+
+    callback aplicar(int);
+    callback descartar(int);
+    callback aplicar-todas();
+    callback cerrar();
+
+    height: Tema.alto-panel-agente;
+    background: Tema.fondo-panel-alto;
+
+    Rectangle {
+        y: 0;
+        width: parent.width;
+        height: Tema.linea;
+        background: Tema.borde;
+    }
+
+    VerticalLayout {
+        x: Tema.espacio-xl;
+        y: Tema.espacio-sm;
+        width: parent.width - 2 * Tema.espacio-xl;
+        height: parent.height - Tema.espacio-sm - Tema.espacio-md;
+        spacing: Tema.espacio-sm;
+
+        HorizontalLayout {
+            spacing: Tema.espacio-sm;
+            cross-axis-alignment: center;
+
+            Etiqueta {
+                text: "RESPUESTA DEL AGENTE";
+                horizontal-stretch: 1;
+            }
+
+            if root.acciones.length > 1 : Boton {
+                texto: "Aplicar todas";
+                principal: true;
+                width: Tema.ancho-boton-largo;
+                clicked => { root.aplicar-todas(); }
+            }
+
+            Boton {
+                texto: "Cerrar";
+                width: Tema.ancho-boton-cerrar;
+                clicked => { root.cerrar(); }
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                spacing: Tema.espacio-sm;
+
+                if root.respuesta != "" : Text {
+                    text: root.respuesta;
+                    wrap: word-wrap;
+                    font-size: Tema.tamano-pequeno;
+                    color: Tema.texto;
+                }
+
+                if root.nota != "" : Text {
+                    text: root.nota;
+                    wrap: word-wrap;
+                    font-size: Tema.tamano-hora;
+                    color: Tema.texto-aviso;
+                }
+
+                for accion[i] in root.acciones : Rectangle {
+                    height: Tema.alto-accion;
+                    border-radius: Tema.radio-pequeno;
+                    background: Tema.fondo-panel;
+                    border-width: Tema.linea;
+                    border-color: Tema.borde;
+
+                    HorizontalLayout {
+                        x: Tema.espacio-md;
+                        width: parent.width - 2 * Tema.espacio-md;
+                        height: parent.height;
+                        spacing: Tema.espacio-sm;
+                        cross-axis-alignment: center;
+
+                        Text {
+                            horizontal-stretch: 1;
+                            text: accion.descripcion;
+                            font-size: Tema.tamano-pequeno;
+                            color: Tema.texto;
+                            overflow: elide;
+                        }
+
+                        Boton {
+                            texto: "Aplicar";
+                            principal: true;
+                            width: Tema.ancho-boton-aplicar;
+                            clicked => { root.aplicar(accion.indice); }
+                        }
+
+                        Boton {
+                            texto: "Descartar";
+                            width: Tema.ancho-boton-descartar;
+                            clicked => { root.descartar(accion.indice); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,5 +1,6 @@
 //! ORDER — horario, tareas y recordatorios en un solo binario.
 
+mod agente;
 mod almacen;
 mod avisos;
 mod filtros;

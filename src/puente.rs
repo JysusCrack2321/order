@@ -10,6 +10,10 @@
 //! nada y el error sale en el banner rojo mientras el formulario sigue abierto
 //! con lo que el usuario había escrito.
 
+use crate::agente::acciones::{self, Accion};
+use crate::agente::cliente::{self, ErrorAgente};
+use crate::agente::config::{self, AgenteConfig, Proveedor};
+use crate::agente::contexto;
 use crate::almacen::Almacen;
 use crate::filtros::{Filtro, TipoFecha};
 use crate::modelo::{
@@ -83,6 +87,7 @@ enum Edicion {
     Clase(String),
     Recordatorio(String),
     Ajustes,
+    Agente,
 }
 
 /// Qué selector está abierto y qué campo del formulario llena.
@@ -121,6 +126,19 @@ struct Estado {
     filtro: Filtro,
     /// El recordatorio abierto se abrió desde Ajustes: al salir se vuelve allí.
     volver_ajustes: bool,
+    // --- Agente ---------------------------------------------------------
+    /// Configuración leída de `agente.toml`.
+    agente: AgenteConfig,
+    /// Propuestas pendientes de confirmar, en el orden en que llegaron.
+    acciones: Vec<Accion>,
+    /// Texto del modelo para el panel.
+    respuesta: String,
+    /// Nota junto a la respuesta (p. ej. no se pudo leer una propuesta).
+    nota: String,
+    pensando: bool,
+    panel: bool,
+    /// Aviso de la barra (clave ausente, por ejemplo).
+    aviso: String,
 }
 
 impl Estado {
@@ -135,6 +153,13 @@ impl Estado {
             seleccion: None,
             filtro: Filtro::default(),
             volver_ajustes: false,
+            agente: config::cargar(),
+            acciones: Vec::new(),
+            respuesta: String::new(),
+            nota: String::new(),
+            pensando: false,
+            panel: false,
+            aviso: String::new(),
         }
     }
 }
@@ -183,6 +208,12 @@ struct Vista {
     pie: String,
     error: SharedString,
     advertencias: Vec<SharedString>,
+    agente_respuesta: SharedString,
+    agente_acciones: Vec<AccionUI>,
+    agente_pensando: bool,
+    agente_panel: bool,
+    agente_aviso: SharedString,
+    agente_nota: SharedString,
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +285,8 @@ pub fn recargar(datos: &Datos) {
     con_estado(|estado| {
         estado.datos = Some(datos.clone());
         estado.error = None;
+        // Las claves también pueden cambiar desde fuera.
+        estado.agente = config::cargar();
     });
     actualizar_si_existe();
 }
@@ -499,6 +532,67 @@ fn conectar(ui: &AppWindow) {
         let Some(ui) = debil.upgrade() else { return };
         aplicar_materia(&ui, &materia);
     });
+
+    // --- Agente ----------------------------------------------------------
+    let debil = ui.as_weak();
+    ui.on_agente_enviar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        enviar_agente(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_agente_cerrar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        con_estado(|estado| {
+            estado.panel = false;
+            estado.respuesta.clear();
+            estado.acciones.clear();
+            estado.nota.clear();
+        });
+        actualizar(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_agente_aplicar(move |indice: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        aplicar_accion(&ui, indice);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_agente_descartar(move |indice: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        descartar_accion(&ui, indice);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_agente_aplicar_todas(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        aplicar_todas(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_abrir_agente(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        abrir_agente(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_elegir_proveedor(move |codigo: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        let proveedor = Proveedor::de_codigo(codigo);
+        // El proveedor trae su URL y su modelo por defecto; el usuario puede
+        // cambiarlos después.
+        let agente = con_estado(|estado| estado.agente.clone()).con_proveedor(proveedor);
+        ui.set_a_proveedor(proveedor.codigo());
+        ui.set_a_url(agente.url_base.into());
+        ui.set_a_modelo(agente.modelo.into());
+    });
+
+    let debil = ui.as_weak();
+    ui.on_alternar_clave(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        ui.set_a_ver_key(!ui.get_a_ver_key());
+    });
 }
 
 fn mover(debil: &Weak<AppWindow>, delta_dias: i64) {
@@ -667,7 +761,8 @@ fn abrir_panel(ui: &AppWindow, cual: i32) {
 
 fn cancelar(ui: &AppWindow) {
     let volver_ajustes = con_estado(|estado| {
-        estado.volver_ajustes && matches!(estado.edicion, Edicion::Recordatorio(_))
+        estado.volver_ajustes
+            && matches!(estado.edicion, Edicion::Recordatorio(_) | Edicion::Agente)
     });
     ui.set_form_confirma(false);
     ui.set_form_error("".into());
@@ -693,6 +788,7 @@ fn guardar(ui: &AppWindow) {
         Edicion::Clase(_) => guardar_clase(ui),
         Edicion::Recordatorio(_) => guardar_recordatorio(ui),
         Edicion::Ajustes => guardar_ajustes(ui),
+        Edicion::Agente => guardar_agente(ui),
         Edicion::Ninguna => {}
     }
 }
@@ -971,6 +1067,251 @@ fn marcar(ui: &AppWindow, id: &str, hecha: bool) {
 }
 
 // ---------------------------------------------------------------------------
+// Agente
+// ---------------------------------------------------------------------------
+
+/// Abre Ajustes → Agente con lo que hay en `agente.toml`.
+fn abrir_agente(ui: &AppWindow) {
+    let agente = con_estado(|estado| estado.agente.clone());
+    con_estado(|estado| {
+        estado.edicion = Edicion::Agente;
+        estado.volver_ajustes = true;
+    });
+    ui.set_form_encabezado("Agente".into());
+    ui.set_form_edita(false);
+    ui.set_a_proveedor(agente.proveedor.codigo());
+    ui.set_a_url(agente.url_base.into());
+    ui.set_a_modelo(agente.modelo.into());
+    ui.set_a_key(agente.api_key.into());
+    ui.set_a_ver_key(false);
+    abrir_panel(ui, 5);
+}
+
+/// Guarda la sección del agente; vuelve a Ajustes.
+fn guardar_agente(ui: &AppWindow) {
+    let prueba = |url: &str, modelo: &str| -> Result<(), String> {
+        if url.trim().is_empty() {
+            return Err("La URL base no puede quedar vacía.".to_string());
+        }
+        if !url.trim().starts_with("http") {
+            return Err("La URL base debe empezar por http:// o https://.".to_string());
+        }
+        if modelo.trim().is_empty() {
+            return Err("El modelo no puede quedar vacío.".to_string());
+        }
+        Ok(())
+    };
+    let url = ui.get_a_url().trim().to_string();
+    let modelo = ui.get_a_modelo().trim().to_string();
+    if let Err(mensaje) = prueba(&url, &modelo) {
+        falta(ui, if url.trim().is_empty() { 1 } else { 2 }, &mensaje);
+        return;
+    }
+
+    let agente = AgenteConfig {
+        proveedor: Proveedor::de_codigo(ui.get_a_proveedor()),
+        url_base: url,
+        modelo,
+        api_key: ui.get_a_key().trim().to_string(),
+        voz: con_estado(|estado| estado.agente.voz.clone()),
+    };
+
+    match config::guardar(&agente) {
+        Ok(()) => {
+            let sin_clave = !agente.lista();
+            con_estado(|estado| {
+                estado.agente = agente;
+                estado.edicion = Edicion::Ninguna;
+                estado.error = None;
+                estado.aviso = if sin_clave {
+                    "Falta la clave del agente: Ajustes → Agente.".to_string()
+                } else {
+                    String::new()
+                };
+            });
+            ui.set_form_error("".into());
+            ui.set_campo_mal(0);
+            ui.set_formulario(0);
+            abrir_ajustes(ui);
+        }
+        Err(mensaje) => {
+            con_estado(|estado| {
+                estado.error = Some(format!("No se pudo guardar agente.toml — {mensaje}"));
+            });
+            actualizar(ui);
+        }
+    }
+}
+
+/// Manda la pregunta al modelo en un hilo y vuelve al bucle de la ventana.
+fn enviar_agente(ui: &AppWindow) {
+    if con_estado(|estado| estado.pensando) {
+        return;
+    }
+    let pregunta = ui.get_agente_texto().trim().to_string();
+    if pregunta.is_empty() {
+        return;
+    }
+    let agente = con_estado(|estado| estado.agente.clone());
+    if !agente.lista() {
+        con_estado(|estado| {
+            estado.aviso = "Falta la clave del agente: Ajustes → Agente.".to_string();
+            estado.error = Some(
+                "El agente no tiene clave. Ábrela en Ajustes → Agente y guárdala.".to_string(),
+            );
+            estado.panel = false;
+        });
+        actualizar(ui);
+        return;
+    }
+
+    let datos = con_estado(|estado| estado.datos.clone()).unwrap_or_else(datos_vacios);
+    let ahora = Local::now();
+    let contexto = contexto::resumen(
+        &datos,
+        ahora.naive_local(),
+        &format!("UTC{}", ahora.format("%:z")),
+    );
+    con_estado(|estado| {
+        estado.pensando = true;
+        estado.panel = false;
+        estado.respuesta.clear();
+        estado.acciones.clear();
+        estado.nota.clear();
+        estado.aviso.clear();
+        estado.error = None;
+    });
+    actualizar(ui);
+
+    let debil = ui.as_weak();
+    std::thread::spawn(move || {
+        let salida = cliente::consultar(&agente, &contexto, &pregunta);
+        // Nadie más toca el estado de la ventana: se vuelve al hilo principal.
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = debil.upgrade() {
+                recibir_agente(&ui, salida);
+            }
+        });
+    });
+}
+
+/// Llega la respuesta (o el error) del hilo del cliente.
+fn recibir_agente(ui: &AppWindow, salida: Result<String, ErrorAgente>) {
+    con_estado(|estado| estado.pensando = false);
+    match salida {
+        Err(error) => {
+            con_estado(|estado| {
+                estado.panel = true;
+                estado.respuesta = error.to_string();
+                estado.acciones.clear();
+                estado.nota.clear();
+            });
+        }
+        Ok(texto) => match acciones::parsear(&texto) {
+            Ok(lectura) => {
+                let respuesta = if lectura.respuesta.is_empty() {
+                    "(sin comentario)".to_string()
+                } else {
+                    lectura.respuesta
+                };
+                con_estado(|estado| {
+                    estado.panel = true;
+                    estado.respuesta = respuesta;
+                    estado.acciones = lectura.acciones;
+                    estado.nota.clear();
+                });
+                // El texto ya se envió: el campo queda libre para la siguiente.
+                ui.set_agente_texto("".into());
+            }
+            Err(mensaje) => {
+                con_estado(|estado| {
+                    estado.panel = true;
+                    estado.respuesta = texto;
+                    estado.acciones.clear();
+                    estado.nota = format!("No pude leer la propuesta: {mensaje}");
+                });
+            }
+        },
+    }
+    actualizar(ui);
+}
+
+fn aplicar_accion(ui: &AppWindow, indice: i32) {
+    let accion = con_estado(|estado| estado.acciones.get(indice.max(0) as usize).cloned());
+    let Some(accion) = accion else { return };
+
+    match acciones::aplicar(&almacen(), &accion) {
+        Ok(datos) => {
+            crate::sistema::publicar(&datos);
+            con_estado(|estado| {
+                estado.datos = Some(datos);
+                estado.error = None;
+                estado.acciones.remove(indice.max(0) as usize);
+                if estado.acciones.is_empty() {
+                    estado.panel = false;
+                    estado.respuesta.clear();
+                }
+            });
+            actualizar(ui);
+        }
+        Err(error) => aviso(ui, &format!("No se pudo aplicar — {error}")),
+    }
+}
+
+fn descartar_accion(ui: &AppWindow, indice: i32) {
+    con_estado(|estado| {
+        let indice = indice.max(0) as usize;
+        if indice < estado.acciones.len() {
+            estado.acciones.remove(indice);
+        }
+        if estado.acciones.is_empty() {
+            estado.panel = false;
+            estado.respuesta.clear();
+        }
+    });
+    actualizar(ui);
+}
+
+/// Aplica en orden; si una falla, se detiene y dice cuántas quedaron hechas.
+fn aplicar_todas(ui: &AppWindow) {
+    let pendientes = con_estado(|estado| estado.acciones.clone());
+    let mut aplicadas = 0;
+    let mut fallo = None;
+    for accion in &pendientes {
+        match acciones::aplicar(&almacen(), accion) {
+            Ok(datos) => {
+                crate::sistema::publicar(&datos);
+                con_estado(|estado| {
+                    estado.datos = Some(datos);
+                    estado.error = None;
+                    if !estado.acciones.is_empty() {
+                        estado.acciones.remove(0);
+                    }
+                });
+                aplicadas += 1;
+            }
+            Err(error) => {
+                fallo = Some(format!("Aplicadas {aplicadas}; falló «{}» — {error}", accion.etiqueta()));
+                break;
+            }
+        }
+    }
+
+    match fallo {
+        Some(mensaje) => {
+            con_estado(|estado| estado.error = Some(mensaje));
+        }
+        None => {
+            con_estado(|estado| {
+                estado.panel = false;
+                estado.respuesta.clear();
+            });
+        }
+    }
+    actualizar(ui);
+}
+
+// ---------------------------------------------------------------------------
 // Volcado a la ventana
 // ---------------------------------------------------------------------------
 
@@ -1021,6 +1362,12 @@ fn actualizar(ui: &AppWindow) {
     ui.set_pie(vista.pie.into());
     ui.set_error(vista.error);
     ui.set_advertencias(ModelRc::new(VecModel::from(vista.advertencias)));
+    ui.set_agente_respuesta(vista.agente_respuesta);
+    ui.set_agente_acciones(ModelRc::new(VecModel::from(vista.agente_acciones)));
+    ui.set_agente_pensando(vista.agente_pensando);
+    ui.set_agente_panel(vista.agente_panel);
+    ui.set_agente_aviso(vista.agente_aviso);
+    ui.set_agente_nota(vista.agente_nota);
 }
 
 fn construir_vista() -> Vista {
@@ -1150,6 +1497,20 @@ fn construir_vista() -> Vista {
                 .cloned()
                 .map(SharedString::from)
                 .collect(),
+            agente_respuesta: estado.respuesta.clone().into(),
+            agente_acciones: estado
+                .acciones
+                .iter()
+                .enumerate()
+                .map(|(indice, accion)| AccionUI {
+                    indice: indice as i32,
+                    descripcion: accion.descripcion(datos).into(),
+                })
+                .collect(),
+            agente_pensando: estado.pensando,
+            agente_panel: estado.panel,
+            agente_aviso: estado.aviso.clone().into(),
+            agente_nota: estado.nota.clone().into(),
         }
     })
 }
@@ -1674,36 +2035,13 @@ fn materias_ui(materias: &[String]) -> Vec<MateriaUI> {
 
 /// La grafía que ya existe para esa materia, o el texto tal cual si es nueva.
 fn canonica(materias: &[String], texto: &str) -> String {
-    let texto = texto.trim();
-    if texto.is_empty() {
-        return String::new();
-    }
-    let clave = clave_materia(texto);
-    materias
-        .iter()
-        .find(|materia| clave_materia(materia) == clave)
-        .cloned()
-        .unwrap_or_else(|| texto.to_string())
+    modelo::canonica_materia(materias, texto)
 }
 
 /// Clave de comparación: minúsculas, sin acentos y con un solo espacio entre
 /// palabras. "Robótica  " y "robotica" dan la misma clave.
 fn clave_materia(texto: &str) -> String {
-    let mut clave = String::new();
-    for caracter in texto.trim().chars() {
-        let plano = match caracter {
-            'á' | 'à' | 'ä' | 'â' | 'ã' | 'Á' | 'À' | 'Ä' | 'Â' | 'Ã' => 'a',
-            'é' | 'è' | 'ë' | 'ê' | 'É' | 'È' | 'Ë' | 'Ê' => 'e',
-            'í' | 'ì' | 'ï' | 'î' | 'Í' | 'Ì' | 'Ï' | 'Î' => 'i',
-            'ó' | 'ò' | 'ö' | 'ô' | 'õ' | 'Ó' | 'Ò' | 'Ö' | 'Ô' | 'Õ' => 'o',
-            'ú' | 'ù' | 'ü' | 'û' | 'Ú' | 'Ù' | 'Ü' | 'Û' => 'u',
-            'ñ' | 'Ñ' => 'n',
-            'ç' | 'Ç' => 'c',
-            otro => otro,
-        };
-        clave.extend(plano.to_lowercase());
-    }
-    clave.split_whitespace().collect::<Vec<_>>().join(" ")
+    modelo::clave_materia(texto)
 }
 
 // ---------------------------------------------------------------------------

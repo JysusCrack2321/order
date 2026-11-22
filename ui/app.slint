@@ -7,8 +7,9 @@ import { PendientesVista, TareaUI } from "pendientes.slint";
 import { InicioVista } from "inicio.slint";
 import { DiaVista } from "dia.slint";
 import { ClaseInicioUI, ConteoMateriaUI, RecordatorioInicioUI } from "listas.slint";
-import { Marco, Campo, CampoBoton, Chip, Casilla, Boton, Etiqueta, RecordatorioUI } from "formularios.slint";
+import { Marco, Campo, CampoBoton, CampoClave, Chip, Casilla, Boton, Etiqueta, RecordatorioUI } from "formularios.slint";
 import { Selector, CeldaDia, MateriaUI } from "selectores.slint";
+import { AccionUI, BarraAgente, PanelAgente } from "agente.slint";
 import { ScrollView } from "std-widgets.slint";
 
 component Pestana inherits Rectangle {
@@ -236,6 +237,22 @@ export component AppWindow inherits Window {
     in-out property <string> a-horas: "";
     in-out property <bool> a-sin-semestre: false;
 
+    // --- Agente -----------------------------------------------------------
+    // Barra de abajo y panel de propuestas.
+    in-out property <string> agente-texto: "";
+    in property <bool> agente-pensando: false;
+    in property <string> agente-respuesta: "";
+    in property <[AccionUI]> agente-acciones: [];
+    in property <bool> agente-panel: false;
+    in property <string> agente-aviso: "";
+    in property <string> agente-nota: "";
+    // Ajustes → Agente (el proveedor va por fichas, 0–3).
+    in-out property <int> a-proveedor: 0;
+    in-out property <string> a-url: "";
+    in-out property <string> a-modelo: "";
+    in-out property <string> a-key: "";
+    in-out property <bool> a-ver-key: false;
+
     // --- Selector abierto (fecha, hora o materia) -------------------------
     // 0 = ninguno · 1 = fecha · 2 = hora · 3 = materia. `sel-campo` dice qué
     // campo del formulario se está llenando; el significado lo pone puente.rs.
@@ -289,6 +306,15 @@ export component AppWindow inherits Window {
     callback selector-aceptar();
     callback selector-escribir();
     callback selector-materia(string);
+    // Agente: enviar, cerrar el panel y aplicar o descartar propuestas.
+    callback agente-enviar();
+    callback agente-cerrar();
+    callback agente-aplicar(int);
+    callback agente-descartar(int);
+    callback agente-aplicar-todas();
+    callback abrir-agente();
+    callback elegir-proveedor(int);
+    callback alternar-clave();
 
     Rectangle {
         width: parent.width;
@@ -487,6 +513,25 @@ export component AppWindow inherits Window {
                     elegir-hora-desde => { root.abrir-hora(24); }
                     elegir-hora-hasta => { root.abrir-hora(25); }
                 }
+            }
+
+            // --- Agente: respuesta y barra fija ---------------------------
+            if root.agente-panel : PanelAgente {
+                respuesta: root.agente-respuesta;
+                acciones: root.agente-acciones;
+                nota: root.agente-nota;
+
+                aplicar(indice) => { root.agente-aplicar(indice); }
+                descartar(indice) => { root.agente-descartar(indice); }
+                aplicar-todas => { root.agente-aplicar-todas(); }
+                cerrar => { root.agente-cerrar(); }
+            }
+
+            BarraAgente {
+                texto <=> root.agente-texto;
+                pensando: root.agente-pensando;
+                aviso: root.agente-aviso;
+                enviar => { root.agente-enviar(); }
             }
 
             // --- Pie ------------------------------------------------------
@@ -832,10 +877,20 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    Boton {
-                        texto: "Agregar recordatorio";
-                        width: Tema.ancho-boton-largo;
-                        clicked => { root.nuevo-recordatorio(); }
+                    HorizontalLayout {
+                        spacing: Tema.espacio-sm;
+
+                        Boton {
+                            texto: "Agregar recordatorio";
+                            width: Tema.ancho-boton-largo;
+                            clicked => { root.nuevo-recordatorio(); }
+                        }
+
+                        Boton {
+                            texto: "Agente…";
+                            width: Tema.ancho-boton-clase;
+                            clicked => { root.abrir-agente(); }
+                        }
                     }
                 }
             }
@@ -895,6 +950,99 @@ export component AppWindow inherits Window {
                         glifo: "◷";
                         mal: root.campo-mal == 2;
                         clicked => { root.abrir-hora(2); }
+                    }
+                }
+            }
+            // --- Agente ---------------------------------------------------
+            if root.formulario == 5 : Marco {
+                encabezado: "Agente";
+                sub: "Responde en la barra de abajo. La clave vive en agente.toml (permisos 600).";
+                alto-panel: Tema.alto-panel-agente-config;
+                ancho-panel: Tema.ancho-formulario-ancho;
+                error: root.form-error;
+                confirma: false;
+                puede-borrar: false;
+
+                guardar => { root.guardar-formulario(); }
+                cancelar => { root.cancelar-formulario(); }
+                pedir-borrar => { }
+                confirmar-borrado => { }
+                no-borrar => { }
+
+                ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        spacing: Tema.espacio-md;
+
+                        VerticalLayout {
+                            spacing: Tema.espacio-xs;
+
+                            Etiqueta {
+                                text: "Proveedor";
+                            }
+
+                            HorizontalLayout {
+                                spacing: Tema.espacio-xs;
+
+                                Chip {
+                                    texto: "DeepSeek";
+                                    ancho: Tema.ancho-ficha-proveedor;
+                                    activo: root.a-proveedor == 0;
+                                    clicked => { root.elegir-proveedor(0); }
+                                }
+
+                                Chip {
+                                    texto: "Gemini";
+                                    ancho: Tema.ancho-ficha-proveedor;
+                                    activo: root.a-proveedor == 1;
+                                    clicked => { root.elegir-proveedor(1); }
+                                }
+
+                                Chip {
+                                    texto: "Claude";
+                                    ancho: Tema.ancho-ficha-proveedor;
+                                    activo: root.a-proveedor == 2;
+                                    clicked => { root.elegir-proveedor(2); }
+                                }
+
+                                Chip {
+                                    texto: "OpenAI";
+                                    ancho: Tema.ancho-ficha-proveedor;
+                                    activo: root.a-proveedor == 3;
+                                    clicked => { root.elegir-proveedor(3); }
+                                }
+                            }
+                        }
+
+                        Campo {
+                            etiqueta: "URL base";
+                            texto <=> root.a-url;
+                            pista: "https://api.deepseek.com";
+                            mal: root.campo-mal == 1;
+                        }
+
+                        Campo {
+                            etiqueta: "Modelo";
+                            texto <=> root.a-modelo;
+                            pista: "deepseek-v4-flash";
+                            mal: root.campo-mal == 2;
+                        }
+
+                        CampoClave {
+                            etiqueta: "API key";
+                            texto <=> root.a-key;
+                            pista: "sk-…";
+                            ver: root.a-ver-key;
+                            alternar => { root.alternar-clave(); }
+                        }
+
+                        if root.a-key == "" : Text {
+                            text: "Sin clave el agente no puede responder; el resto de la app funciona igual.";
+                            wrap: word-wrap;
+                            font-size: Tema.tamano-hora;
+                            color: Tema.texto-aviso;
+                        }
                     }
                 }
             }

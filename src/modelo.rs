@@ -339,6 +339,47 @@ fn mensaje_corto(e: &toml::de::Error) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Materias
+// ---------------------------------------------------------------------------
+// El nombre de una materia se compara sin mayúsculas, sin acentos y con un
+// solo espacio entre palabras: así «Robótica  » y «robotica» son la misma. Lo
+// usan la ventana (para el selector de materias) y el agente (para respetar la
+// grafía que ya existe en el archivo).
+
+/// Clave de comparación de una materia.
+pub fn clave_materia(texto: &str) -> String {
+    let mut clave = String::new();
+    for caracter in texto.trim().chars() {
+        let plano = match caracter {
+            'á' | 'à' | 'ä' | 'â' | 'ã' | 'Á' | 'À' | 'Ä' | 'Â' | 'Ã' => 'a',
+            'é' | 'è' | 'ë' | 'ê' | 'É' | 'È' | 'Ë' | 'Ê' => 'e',
+            'í' | 'ì' | 'ï' | 'î' | 'Í' | 'Ì' | 'Ï' | 'Î' => 'i',
+            'ó' | 'ò' | 'ö' | 'ô' | 'õ' | 'Ó' | 'Ò' | 'Ö' | 'Ô' | 'Õ' => 'o',
+            'ú' | 'ù' | 'ü' | 'û' | 'Ú' | 'Ù' | 'Ü' | 'Û' => 'u',
+            'ñ' | 'Ñ' => 'n',
+            'ç' | 'Ç' => 'c',
+            otro => otro,
+        };
+        clave.extend(plano.to_lowercase());
+    }
+    clave.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// La grafía que ya existe para esa materia, o el texto tal cual si es nueva.
+pub fn canonica_materia(materias: &[String], texto: &str) -> String {
+    let texto = texto.trim();
+    if texto.is_empty() {
+        return String::new();
+    }
+    let clave = clave_materia(texto);
+    materias
+        .iter()
+        .find(|materia| clave_materia(materia) == clave)
+        .cloned()
+        .unwrap_or_else(|| texto.to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Advertencias por claves desconocidas
 // ---------------------------------------------------------------------------
 // `parsear` acepta el archivo aunque lleve claves que el modelo no conoce
