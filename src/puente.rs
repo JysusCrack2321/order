@@ -64,6 +64,27 @@ enum Edicion {
     Ajustes,
 }
 
+/// Qué selector está abierto y qué campo del formulario llena.
+#[derive(Clone, Copy, PartialEq)]
+enum Selector {
+    Fecha,
+    Hora,
+    Materia,
+}
+
+/// Estado del selector abierto. El calendario y la hora se editan aquí y se
+/// vuelcan a la ventana; al aceptar se escribe el texto en el campo.
+#[derive(Clone)]
+struct Seleccion {
+    tipo: Selector,
+    campo: i32,
+    anio: i32,
+    mes: u32,
+    dia: u32,
+    hora: u32,
+    minuto: u32,
+}
+
 /// Lo que la ventana necesita en cada refresco.
 struct Estado {
     datos: Option<Datos>,
@@ -72,6 +93,7 @@ struct Estado {
     error: Option<String>,
     advertencias: Vec<String>,
     edicion: Edicion,
+    seleccion: Option<Seleccion>,
 }
 
 impl Estado {
@@ -82,6 +104,7 @@ impl Estado {
             error: None,
             advertencias: Vec::new(),
             edicion: Edicion::Ninguna,
+            seleccion: None,
         }
     }
 }
@@ -271,6 +294,73 @@ fn conectar(ui: &AppWindow) {
     ui.on_confirmar_borrado(move || {
         let Some(ui) = debil.upgrade() else { return };
         borrar(&ui);
+    });
+
+    // --- Selectores de fecha, hora y materia ------------------------------
+    let debil = ui.as_weak();
+    ui.on_abrir_fecha(move |campo: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        abrir_selector_fecha(&ui, campo);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_abrir_hora(move |campo: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        abrir_selector_hora(&ui, campo);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_abrir_materia(move |campo: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        abrir_selector_materia(&ui, campo);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_selector_cerrar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        cerrar_selector(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_selector_mes(move |delta: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        cambiar_mes(&ui, delta);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_selector_dia(move |dia: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        elegir_dia(&ui, dia);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_selector_hora(move |hora: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        elegir_hora(&ui, hora, None);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_selector_minuto(move |minuto: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        elegir_hora(&ui, -1, Some(minuto));
+    });
+
+    let debil = ui.as_weak();
+    ui.on_selector_aceptar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        aceptar_selector(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_selector_escribir(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        ui.set_materia_escribiendo(true);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_selector_materia(move |materia: SharedString| {
+        let Some(ui) = debil.upgrade() else { return };
+        aplicar_materia(&ui, &materia);
     });
 }
 
@@ -463,17 +553,18 @@ fn guardar_tarea(ui: &AppWindow) {
         return;
     }
     let Some(fecha) = interpretar_fecha(&ui.get_f_fecha()) else {
-        falta(ui, 2, "La fecha de entrega debe ir como 2026-11-28.");
+        falta(ui, 2, "Elige la fecha de entrega.");
         return;
     };
     let Some(hora) = interpretar_hora(&ui.get_f_hora()) else {
-        falta(ui, 3, "La hora de entrega debe ir como 23:59.");
+        falta(ui, 3, "Elige la hora de entrega.");
         return;
     };
 
+    let materias = materias_actuales();
     let nueva = NuevaTarea {
         titulo,
-        materia: opcional(&ui.get_f_materia()),
+        materia: opcional(&canonica(&materias, &ui.get_f_materia())),
         vence: fecha.and_time(hora),
     };
     let hecha = ui.get_f_hecha();
@@ -509,11 +600,11 @@ fn guardar_clase(ui: &AppWindow) {
         return;
     }
     let Some(inicio) = interpretar_hora(&ui.get_f_hora()) else {
-        falta(ui, 2, "La hora de inicio debe ir como 07:00.");
+        falta(ui, 2, "Elige la hora de inicio.");
         return;
     };
     let Some(fin) = interpretar_hora(&ui.get_f_fin()) else {
-        falta(ui, 3, "La hora de fin debe ir como 09:00.");
+        falta(ui, 3, "Elige la hora de fin.");
         return;
     };
     if fin <= inicio {
@@ -525,6 +616,7 @@ fn guardar_clase(ui: &AppWindow) {
         Edicion::Clase(id) => id,
         _ => String::new(),
     };
+    let materia = canonica(&materias_actuales(), &materia);
     let clase = Clase {
         id,
         materia,
@@ -545,7 +637,7 @@ fn guardar_recordatorio(ui: &AppWindow) {
         return;
     }
     let Some(hora) = interpretar_hora(&ui.get_r_hora()) else {
-        falta(ui, 2, "La hora debe ir como 18:00.");
+        falta(ui, 2, "Elige la hora del recordatorio.");
         return;
     };
     let dias = dias_elegidos(ui);
@@ -574,11 +666,11 @@ fn guardar_ajustes(ui: &AppWindow) {
     let mut semestre = None;
     if !ui.get_a_sin_semestre() {
         let Some(inicio) = interpretar_fecha(&ui.get_a_inicio()) else {
-            falta(ui, 1, "El inicio del semestre debe ir como 2026-08-03.");
+            falta(ui, 1, "Elige el inicio del semestre.");
             return;
         };
         let Some(fin) = interpretar_fecha(&ui.get_a_fin()) else {
-            falta(ui, 2, "El fin del semestre debe ir como 2026-12-05.");
+            falta(ui, 2, "Elige el fin del semestre.");
             return;
         };
         if fin < inicio {
@@ -589,7 +681,7 @@ fn guardar_ajustes(ui: &AppWindow) {
     }
 
     let Some(aviso) = interpretar_hora(&ui.get_a_hora()) else {
-        falta(ui, 3, "La hora del aviso debe ir como 20:00.");
+        falta(ui, 3, "Elige la hora del aviso.");
         return;
     };
     let horas = ui
@@ -872,6 +964,364 @@ fn recordatorios_ui(datos: &Datos) -> Vec<RecordatorioUI> {
             hora: recordatorio.hora.format("%H:%M").to_string().into(),
         })
         .collect()
+}
+
+
+// ---------------------------------------------------------------------------
+// Selectores de fecha, hora y materia
+// ---------------------------------------------------------------------------
+// Las fechas y las horas no se escriben a mano: se eligen. El calendario y la
+// lista de horas se calculan aquí (y se prueban aquí); el .slint solo dibuja.
+
+fn abrir_selector_fecha(ui: &AppWindow, campo: i32) {
+    let fecha = fecha_del_campo(ui, campo).unwrap_or_else(|| Local::now().date_naive());
+    con_estado(|estado| {
+        estado.seleccion = Some(Seleccion {
+            tipo: Selector::Fecha,
+            campo,
+            anio: fecha.year(),
+            mes: fecha.month(),
+            dia: fecha.day(),
+            hora: 0,
+            minuto: 0,
+        });
+    });
+    ui.set_sel_titulo("Fecha".into());
+    ui.set_selector_tipo(1);
+    pintar_calendario(ui);
+}
+
+fn abrir_selector_hora(ui: &AppWindow, campo: i32) {
+    let hora = hora_del_campo(ui, campo).unwrap_or_else(|| hora(23, 59));
+    con_estado(|estado| {
+        estado.seleccion = Some(Seleccion {
+            tipo: Selector::Hora,
+            campo,
+            anio: 0,
+            mes: 0,
+            dia: 0,
+            hora: hora.hour(),
+            minuto: hora.minute(),
+        });
+    });
+    ui.set_sel_horas(modelo_textos(&horas_texto()));
+    ui.set_sel_minutos(modelo_textos(&minutos_texto()));
+    ui.set_sel_titulo("Hora".into());
+    ui.set_selector_tipo(2);
+    pintar_hora(ui);
+}
+
+fn abrir_selector_materia(ui: &AppWindow, campo: i32) {
+    let materias = materias_actuales();
+    con_estado(|estado| {
+        estado.seleccion = Some(Seleccion {
+            tipo: Selector::Materia,
+            campo,
+            anio: 0,
+            mes: 0,
+            dia: 0,
+            hora: 0,
+            minuto: 0,
+        });
+    });
+    ui.set_sel_materias(modelo_textos(&materias));
+    ui.set_materia_nueva("".into());
+    ui.set_materia_escribiendo(false);
+    ui.set_sel_titulo("Materia".into());
+    ui.set_selector_tipo(3);
+}
+
+fn cerrar_selector(ui: &AppWindow) {
+    con_estado(|estado| estado.seleccion = None);
+    ui.set_selector_tipo(0);
+    ui.set_materia_nueva("".into());
+    ui.set_materia_escribiendo(false);
+}
+
+fn cambiar_mes(ui: &AppWindow, delta: i32) {
+    let Some(mut seleccion) = con_estado(|estado| estado.seleccion.clone()) else {
+        return;
+    };
+    if seleccion.tipo != Selector::Fecha {
+        return;
+    }
+    let (anio, mes) = mes_vecino(seleccion.anio, seleccion.mes, delta);
+    seleccion.anio = anio;
+    seleccion.mes = mes;
+    seleccion.dia = seleccion.dia.min(dias_del_mes(anio, mes) as u32).max(1);
+    con_estado(|estado| estado.seleccion = Some(seleccion));
+    pintar_calendario(ui);
+}
+
+fn elegir_dia(ui: &AppWindow, dia: i32) {
+    let Some(mut seleccion) = con_estado(|estado| estado.seleccion.clone()) else {
+        return;
+    };
+    if seleccion.tipo != Selector::Fecha || dia < 1 {
+        return;
+    }
+    seleccion.dia = dia as u32;
+    con_estado(|estado| estado.seleccion = Some(seleccion));
+    pintar_calendario(ui);
+}
+
+/// `hora` negativa significa "solo cambió el minuto" (los dos botones de la
+/// lista de horas y minutos llaman aquí).
+fn elegir_hora(ui: &AppWindow, hora_elegida: i32, minuto_elegido: Option<i32>) {
+    let Some(mut seleccion) = con_estado(|estado| estado.seleccion.clone()) else {
+        return;
+    };
+    if seleccion.tipo != Selector::Hora {
+        return;
+    }
+    if (0..24).contains(&hora_elegida) {
+        seleccion.hora = hora_elegida as u32;
+    }
+    if let Some(minuto) = minuto_elegido.filter(|m| (0..60).contains(m)) {
+        seleccion.minuto = minuto as u32;
+    }
+    con_estado(|estado| estado.seleccion = Some(seleccion));
+    pintar_hora(ui);
+}
+
+fn aceptar_selector(ui: &AppWindow) {
+    let Some(seleccion) = con_estado(|estado| estado.seleccion.clone()) else {
+        return;
+    };
+    match seleccion.tipo {
+        Selector::Fecha => {
+            if let Some(fecha) =
+                NaiveDate::from_ymd_opt(seleccion.anio, seleccion.mes, seleccion.dia)
+            {
+                poner_fecha_en_campo(ui, seleccion.campo, fecha);
+            }
+            cerrar_selector(ui);
+        }
+        Selector::Hora => {
+            if let Some(hora) =
+                NaiveTime::from_hms_opt(seleccion.hora, seleccion.minuto, 0)
+            {
+                poner_hora_en_campo(ui, seleccion.campo, hora);
+            }
+            cerrar_selector(ui);
+        }
+        Selector::Materia => {
+            if ui.get_materia_escribiendo() {
+                let texto = ui.get_materia_nueva().to_string();
+                aplicar_materia(ui, &texto);
+            } else {
+                cerrar_selector(ui);
+            }
+        }
+    }
+}
+
+/// Elige una materia de la lista (o vacía con "Sin materia"). Se guarda con la
+/// grafía que ya existe en el archivo aunque se haya escrito distinto.
+fn aplicar_materia(ui: &AppWindow, texto: &str) {
+    let materia = canonica(&materias_actuales(), texto);
+    let campo = con_estado(|estado| estado.seleccion.as_ref().map(|s| s.campo));
+    if matches!(campo, Some(1)) {
+        ui.set_f_materia(materia.into());
+    }
+    cerrar_selector(ui);
+}
+
+fn pintar_calendario(ui: &AppWindow) {
+    let Some(seleccion) = con_estado(|estado| estado.seleccion.clone()) else {
+        return;
+    };
+    ui.set_sel_mes_texto(etiqueta_mes(seleccion.anio, seleccion.mes).into());
+    ui.set_sel_celdas(ModelRc::new(VecModel::from(celdas_mes(
+        seleccion.anio,
+        seleccion.mes,
+        seleccion.dia,
+    ))));
+}
+
+fn pintar_hora(ui: &AppWindow) {
+    let Some(seleccion) = con_estado(|estado| estado.seleccion.clone()) else {
+        return;
+    };
+    ui.set_sel_hora(seleccion.hora as i32);
+    ui.set_sel_minuto(seleccion.minuto as i32);
+    ui.set_sel_hora_texto(format!("{:02}:{:02}", seleccion.hora, seleccion.minuto).into());
+}
+
+/// La fecha que muestra el campo que se va a llenar, si ya tiene una válida.
+fn fecha_del_campo(ui: &AppWindow, campo: i32) -> Option<NaiveDate> {
+    match con_estado(|estado| estado.edicion.clone()) {
+        Edicion::Tarea(_) if campo == 2 => interpretar_fecha(&ui.get_f_fecha()),
+        Edicion::Ajustes if campo == 1 => interpretar_fecha(&ui.get_a_inicio()),
+        Edicion::Ajustes if campo == 2 => interpretar_fecha(&ui.get_a_fin()),
+        _ => None,
+    }
+}
+
+/// La hora que muestra el campo que se va a llenar, si ya tiene una válida.
+fn hora_del_campo(ui: &AppWindow, campo: i32) -> Option<NaiveTime> {
+    match con_estado(|estado| estado.edicion.clone()) {
+        Edicion::Tarea(_) if campo == 3 => interpretar_hora(&ui.get_f_hora()),
+        Edicion::Clase(_) if campo == 2 => interpretar_hora(&ui.get_f_hora()),
+        Edicion::Clase(_) if campo == 3 => interpretar_hora(&ui.get_f_fin()),
+        Edicion::Recordatorio(_) if campo == 2 => interpretar_hora(&ui.get_r_hora()),
+        Edicion::Ajustes if campo == 3 => interpretar_hora(&ui.get_a_hora()),
+        _ => None,
+    }
+}
+
+fn poner_fecha_en_campo(ui: &AppWindow, campo: i32, fecha: NaiveDate) {
+    let texto = SharedString::from(fecha.format(FORMATO_FECHA).to_string());
+    match con_estado(|estado| estado.edicion.clone()) {
+        Edicion::Tarea(_) if campo == 2 => ui.set_f_fecha(texto),
+        Edicion::Ajustes if campo == 1 => ui.set_a_inicio(texto),
+        Edicion::Ajustes if campo == 2 => ui.set_a_fin(texto),
+        _ => {}
+    }
+}
+
+fn poner_hora_en_campo(ui: &AppWindow, campo: i32, hora: NaiveTime) {
+    let texto = SharedString::from(hora.format(FORMATO_HORA).to_string());
+    match con_estado(|estado| estado.edicion.clone()) {
+        Edicion::Tarea(_) if campo == 3 => ui.set_f_hora(texto),
+        Edicion::Clase(_) if campo == 2 => ui.set_f_hora(texto),
+        Edicion::Clase(_) if campo == 3 => ui.set_f_fin(texto),
+        Edicion::Recordatorio(_) if campo == 2 => ui.set_r_hora(texto),
+        Edicion::Ajustes if campo == 3 => ui.set_a_hora(texto),
+        _ => {}
+    }
+}
+
+fn modelo_textos(textos: &[String]) -> ModelRc<SharedString> {
+    ModelRc::new(VecModel::from(
+        textos
+            .iter()
+            .map(|texto| SharedString::from(texto.as_str()))
+            .collect::<Vec<_>>(),
+    ))
+}
+
+fn horas_texto() -> Vec<String> {
+    (0..24).map(|hora| format!("{hora:02}")).collect()
+}
+
+fn minutos_texto() -> Vec<String> {
+    (0..60).map(|minuto| format!("{minuto:02}")).collect()
+}
+
+fn etiqueta_mes(anio: i32, mes: u32) -> String {
+    let nombre = MESES_LARGOS
+        .get(mes.saturating_sub(1) as usize)
+        .copied()
+        .unwrap_or("mes");
+    format!("{nombre} de {anio}")
+}
+
+/// El mes que está `delta` meses antes o después, cruzando años.
+fn mes_vecino(anio: i32, mes: u32, delta: i32) -> (i32, u32) {
+    let total = anio * 12 + mes as i32 - 1 + delta;
+    (total.div_euclid(12), (total.rem_euclid(12) + 1) as u32)
+}
+
+fn dias_del_mes(anio: i32, mes: u32) -> i32 {
+    let (siguiente_anio, siguiente_mes) = mes_vecino(anio, mes, 1);
+    NaiveDate::from_ymd_opt(siguiente_anio, siguiente_mes, 1)
+        .and_then(|primero| primero.pred_opt())
+        .map(|ultimo| ultimo.day() as i32)
+        .unwrap_or(30)
+}
+
+/// Seis semanas de siete casillas, con el día 1 en su columna real.
+fn celdas_mes(anio: i32, mes: u32, elegido: u32) -> Vec<CeldaDia> {
+    let Some(primero) = NaiveDate::from_ymd_opt(anio, mes, 1) else {
+        return Vec::new();
+    };
+    let desfase = primero.weekday().num_days_from_monday() as i32;
+    let dias = dias_del_mes(anio, mes);
+    let hoy = Local::now().date_naive();
+
+    (0..42)
+        .map(|i| {
+            let dia = i - desfase + 1;
+            let dentro = (1..=dias).contains(&dia);
+            CeldaDia {
+                dia: if dentro { dia } else { 0 },
+                fila: i / 7,
+                columna: i % 7,
+                hoy: dentro && hoy.year() == anio && hoy.month() == mes && hoy.day() as i32 == dia,
+                elegida: dentro && dia == elegido as i32,
+            }
+        })
+        .collect()
+}
+
+/// Las materias del archivo, en el orden en que aparecen (primero las clases),
+/// sin repetir aunque cambien mayúsculas o acentos.
+fn materias_de(datos: &Datos) -> Vec<String> {
+    let mut lista: Vec<String> = Vec::new();
+    let mut claves: Vec<String> = Vec::new();
+    for materia in datos
+        .clases
+        .iter()
+        .map(|clase| &clase.materia)
+        .chain(datos.tareas.iter().filter_map(|tarea| tarea.materia.as_ref()))
+    {
+        let materia = materia.trim();
+        if materia.is_empty() {
+            continue;
+        }
+        let clave = clave_materia(materia);
+        if claves.contains(&clave) {
+            continue;
+        }
+        claves.push(clave);
+        lista.push(materia.to_string());
+    }
+    lista
+}
+
+fn materias_actuales() -> Vec<String> {
+    con_estado(|estado| {
+        estado
+            .datos
+            .as_ref()
+            .map(materias_de)
+            .unwrap_or_default()
+    })
+}
+
+/// La grafía que ya existe para esa materia, o el texto tal cual si es nueva.
+fn canonica(materias: &[String], texto: &str) -> String {
+    let texto = texto.trim();
+    if texto.is_empty() {
+        return String::new();
+    }
+    let clave = clave_materia(texto);
+    materias
+        .iter()
+        .find(|materia| clave_materia(materia) == clave)
+        .cloned()
+        .unwrap_or_else(|| texto.to_string())
+}
+
+/// Clave de comparación: minúsculas, sin acentos y con un solo espacio entre
+/// palabras. "Robótica  " y "robotica" dan la misma clave.
+fn clave_materia(texto: &str) -> String {
+    let mut clave = String::new();
+    for caracter in texto.trim().chars() {
+        let plano = match caracter {
+            'á' | 'à' | 'ä' | 'â' | 'ã' | 'Á' | 'À' | 'Ä' | 'Â' | 'Ã' => 'a',
+            'é' | 'è' | 'ë' | 'ê' | 'É' | 'È' | 'Ë' | 'Ê' => 'e',
+            'í' | 'ì' | 'ï' | 'î' | 'Í' | 'Ì' | 'Ï' | 'Î' => 'i',
+            'ó' | 'ò' | 'ö' | 'ô' | 'õ' | 'Ó' | 'Ò' | 'Ö' | 'Ô' | 'Õ' => 'o',
+            'ú' | 'ù' | 'ü' | 'û' | 'Ú' | 'Ù' | 'Ü' | 'Û' => 'u',
+            'ñ' | 'Ñ' => 'n',
+            'ç' | 'Ç' => 'c',
+            otro => otro,
+        };
+        clave.extend(plano.to_lowercase());
+    }
+    clave.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 // ---------------------------------------------------------------------------
@@ -1201,6 +1651,73 @@ mod pruebas {
         assert_eq!(dias_texto(&[Dia::Lun, Dia::Mie, Dia::Dom]), "Lun, Mié, Dom");
         assert_eq!(indice_dia(Dia::Lun), 0);
         assert_eq!(indice_dia(Dia::Dom), 6);
+    }
+
+    /// El calendario pone el día 1 en su columna y marca el elegido.
+    #[test]
+    fn calendario_del_mes() {
+        // Noviembre de 2026 empieza en domingo (columna 6) y tiene 30 días.
+        let celdas = celdas_mes(2026, 11, 21);
+        assert_eq!(celdas.len(), 42, "siempre seis semanas");
+        assert!(celdas[..6].iter().all(|celda| celda.dia == 0), "huecos");
+        assert_eq!(celdas[6].dia, 1, "el 1 va en la columna del domingo");
+        assert_eq!(celdas[6].columna, 6);
+        assert_eq!(celdas[6].fila, 0);
+        let veintiuno = celdas.iter().find(|celda| celda.dia == 21).unwrap();
+        assert!(veintiuno.elegida, "el día elegido va marcado");
+        assert_eq!(
+            celdas.iter().filter(|celda| celda.elegida).count(),
+            1,
+            "solo uno elegido"
+        );
+    }
+
+    #[test]
+    fn meses_vecinos_cruzan_el_anio() {
+        assert_eq!(mes_vecino(2026, 12, 1), (2027, 1));
+        assert_eq!(mes_vecino(2026, 1, -1), (2025, 12));
+        assert_eq!(mes_vecino(2026, 11, -1), (2026, 10));
+        assert_eq!(dias_del_mes(2028, 2), 29, "año bisiesto");
+        assert_eq!(dias_del_mes(2026, 11), 30);
+        assert_eq!(etiqueta_mes(2026, 11), "noviembre de 2026");
+    }
+
+    /// La lista de materias no repite y manda la grafía del archivo.
+    #[test]
+    fn materias_sin_duplicados_ni_acentos() {
+        let mut d = datos();
+        d.clases.push(Clase {
+            id: "c-uno".into(),
+            materia: "Robótica".into(),
+            dia: Dia::Lun,
+            inicio: hora(7, 0),
+            fin: hora(9, 0),
+            lugar: None,
+        });
+        d.clases.push(Clase {
+            id: "c-dos".into(),
+            materia: "CONTROL".into(),
+            dia: Dia::Mar,
+            inicio: hora(7, 0),
+            fin: hora(9, 0),
+            lugar: None,
+        });
+        d.tareas.push(Tarea {
+            id: "t-uno".into(),
+            titulo: "Taller".into(),
+            materia: Some("robotica".into()),
+            vence: momento(2026, 11, 28, 23, 59),
+            hecha: false,
+            hecha_en: None,
+        });
+
+        let lista = materias_de(&d);
+        assert_eq!(lista, vec!["Robótica".to_string(), "CONTROL".to_string()]);
+        assert_eq!(canonica(&lista, " robotica "), "Robótica");
+        assert_eq!(canonica(&lista, "control"), "CONTROL");
+        assert_eq!(canonica(&lista, "Cálculo"), "Cálculo");
+        assert_eq!(canonica(&lista, "   "), "");
+        assert_eq!(clave_materia("  Análisis   Numérico "), "analisis numerico");
     }
 
     /// Un campo vacío no se guarda como cadena vacía en el TOML.

@@ -142,6 +142,63 @@ export component Campo inherits VerticalLayout {
     }
 }
 
+/// Campo que no se escribe: un botón que muestra el valor elegido y abre un
+/// selector (fecha, hora o materia).
+export component CampoBoton inherits VerticalLayout {
+    in property <string> etiqueta: "";
+    in property <string> valor: "";
+    in property <string> pista: "";
+    in property <string> glifo: "▾";
+    in property <bool> mal: false;
+    in property <bool> apagado: false;
+
+    callback clicked();
+
+    spacing: Tema.espacio-xs;
+
+    Etiqueta {
+        text: root.etiqueta;
+        mal: root.mal;
+        apagada: root.apagado;
+    }
+
+    Rectangle {
+        height: Tema.alto-campo;
+        border-radius: Tema.radio-pequeno;
+        background: root.apagado ? Tema.fondo-panel : Tema.fondo-campo;
+        border-width: Tema.linea;
+        border-color: root.mal ? Tema.vencida : (ta.has-hover ? Tema.acento-suave : Tema.borde-campo);
+
+        Text {
+            x: Tema.espacio-sm;
+            width: parent.width - 3 * Tema.espacio-sm;
+            height: parent.height;
+            vertical-alignment: center;
+            text: root.valor == "" ? root.pista : root.valor;
+            color: root.valor == "" ? Tema.texto-tenue : Tema.texto;
+            font-size: Tema.tamano-pequeno;
+            overflow: elide;
+        }
+
+        Text {
+            x: parent.width - 2 * Tema.espacio-sm;
+            width: Tema.espacio-md;
+            height: parent.height;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            text: root.glifo;
+            color: ta.has-hover ? Tema.acento : Tema.texto-tenue;
+            font-size: Tema.tamano-hora;
+        }
+
+        ta := TouchArea {
+            enabled: !root.apagado;
+            mouse-cursor: pointer;
+            clicked => { root.clicked(); }
+        }
+    }
+}
+
 /// Ficha seleccionable (día de la semana, opción corta).
 export component Chip inherits Rectangle {
     in property <string> texto;

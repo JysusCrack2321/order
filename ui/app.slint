@@ -4,7 +4,8 @@
 import { Tema } from "tema.slint";
 import { SemanaVista, DiaUI } from "semana.slint";
 import { PendientesVista, TareaUI } from "pendientes.slint";
-import { Marco, Campo, Chip, Casilla, Boton, Etiqueta, RecordatorioUI } from "formularios.slint";
+import { Marco, Campo, CampoBoton, Chip, Casilla, Boton, Etiqueta, RecordatorioUI } from "formularios.slint";
+import { Selector, CeldaDia } from "selectores.slint";
 import { ScrollView } from "std-widgets.slint";
 
 component Pestana inherits Rectangle {
@@ -190,6 +191,22 @@ export component AppWindow inherits Window {
     in-out property <string> a-horas: "";
     in-out property <bool> a-sin-semestre: false;
 
+    // --- Selector abierto (fecha, hora o materia) -------------------------
+    // 0 = ninguno · 1 = fecha · 2 = hora · 3 = materia. `sel-campo` dice qué
+    // campo del formulario se está llenando; el significado lo pone puente.rs.
+    in-out property <int> selector-tipo: 0;
+    in property <string> sel-titulo: "";
+    in property <string> sel-mes-texto: "";
+    in property <[CeldaDia]> sel-celdas: [];
+    in property <string> sel-hora-texto: "";
+    in property <int> sel-hora: 0;
+    in property <int> sel-minuto: 0;
+    in property <[string]> sel-horas: [];
+    in property <[string]> sel-minutos: [];
+    in property <[string]> sel-materias: [];
+    in-out property <string> materia-nueva: "";
+    in-out property <bool> materia-escribiendo: false;
+
     callback semana-anterior();
     callback semana-siguiente();
     callback ir-hoy();
@@ -204,6 +221,17 @@ export component AppWindow inherits Window {
     callback guardar-formulario();
     callback cancelar-formulario();
     callback confirmar-borrado();
+    callback abrir-fecha(int);
+    callback abrir-hora(int);
+    callback abrir-materia(int);
+    callback selector-cerrar();
+    callback selector-mes(int);
+    callback selector-dia(int);
+    callback selector-hora(int);
+    callback selector-minuto(int);
+    callback selector-aceptar();
+    callback selector-escribir();
+    callback selector-materia(string);
 
     Rectangle {
         width: parent.width;
@@ -407,29 +435,35 @@ export component AppWindow inherits Window {
                         mal: root.campo-mal == 1;
                     }
 
-                    Campo {
+                    CampoBoton {
                         etiqueta: "Materia (opcional)";
-                        texto <=> root.f-materia;
-                        pista: "Control";
+                        valor: root.f-materia;
+                        pista: "Elegir materia";
+                        glifo: "▾";
+                        clicked => { root.abrir-materia(1); }
                     }
 
                     HorizontalLayout {
                         spacing: Tema.espacio-md;
 
-                        Campo {
+                        CampoBoton {
                             horizontal-stretch: 1;
                             etiqueta: "Fecha de entrega";
-                            texto <=> root.f-fecha;
-                            pista: "2026-11-28";
+                            valor: root.f-fecha;
+                            pista: "Elegir fecha";
+                            glifo: "▦";
                             mal: root.campo-mal == 2;
+                            clicked => { root.abrir-fecha(2); }
                         }
 
-                        Campo {
+                        CampoBoton {
                             width: Tema.ancho-campo-hora;
                             etiqueta: "Hora";
-                            texto <=> root.f-hora;
-                            pista: "23:59";
+                            valor: root.f-hora;
+                            pista: "Elegir hora";
+                            glifo: "◷";
                             mal: root.campo-mal == 3;
+                            clicked => { root.abrir-hora(3); }
                         }
                     }
 
@@ -471,11 +505,13 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     spacing: Tema.espacio-md;
 
-                    Campo {
+                    CampoBoton {
                         etiqueta: "Materia";
-                        texto <=> root.f-materia;
-                        pista: "Control";
+                        valor: root.f-materia;
+                        pista: "Elegir materia";
+                        glifo: "▾";
                         mal: root.campo-mal == 1;
+                        clicked => { root.abrir-materia(1); }
                     }
 
                     VerticalLayout {
@@ -501,20 +537,24 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         spacing: Tema.espacio-md;
 
-                        Campo {
+                        CampoBoton {
                             horizontal-stretch: 1;
                             etiqueta: "Inicio";
-                            texto <=> root.f-hora;
-                            pista: "07:00";
+                            valor: root.f-hora;
+                            pista: "Elegir hora";
+                            glifo: "◷";
                             mal: root.campo-mal == 2;
+                            clicked => { root.abrir-hora(2); }
                         }
 
-                        Campo {
+                        CampoBoton {
                             horizontal-stretch: 1;
                             etiqueta: "Fin";
-                            texto <=> root.f-fin;
-                            pista: "09:00";
+                            valor: root.f-fin;
+                            pista: "Elegir hora";
+                            glifo: "◷";
                             mal: root.campo-mal == 3;
+                            clicked => { root.abrir-hora(3); }
                         }
                     }
 
@@ -565,34 +605,40 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         spacing: Tema.espacio-md;
 
-                        Campo {
+                        CampoBoton {
                             horizontal-stretch: 1;
                             etiqueta: "Inicio del semestre";
-                            texto <=> root.a-inicio;
-                            pista: "2026-08-03";
+                            valor: root.a-inicio;
+                            pista: "Elegir fecha";
+                            glifo: "▦";
                             mal: root.campo-mal == 1;
                             apagado: root.a-sin-semestre;
+                            clicked => { root.abrir-fecha(1); }
                         }
 
-                        Campo {
+                        CampoBoton {
                             horizontal-stretch: 1;
                             etiqueta: "Fin del semestre";
-                            texto <=> root.a-fin;
-                            pista: "2026-12-05";
+                            valor: root.a-fin;
+                            pista: "Elegir fecha";
+                            glifo: "▦";
                             mal: root.campo-mal == 2;
                             apagado: root.a-sin-semestre;
+                            clicked => { root.abrir-fecha(2); }
                         }
                     }
 
                     HorizontalLayout {
                         spacing: Tema.espacio-md;
 
-                        Campo {
+                        CampoBoton {
                             horizontal-stretch: 1;
                             etiqueta: "Aviso del día antes";
-                            texto <=> root.a-hora;
-                            pista: "20:00";
+                            valor: root.a-hora;
+                            pista: "Elegir hora";
+                            glifo: "◷";
                             mal: root.campo-mal == 3;
+                            clicked => { root.abrir-hora(3); }
                         }
 
                         Campo {
@@ -720,15 +766,44 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    Campo {
+                    CampoBoton {
                         width: Tema.ancho-campo-hora;
                         etiqueta: "Hora";
-                        texto <=> root.r-hora;
-                        pista: "18:00";
+                        valor: root.r-hora;
+                        pista: "Elegir hora";
+                        glifo: "◷";
                         mal: root.campo-mal == 2;
+                        clicked => { root.abrir-hora(2); }
                     }
                 }
             }
+        }
+
+        // -----------------------------------------------------------------
+        // Selector encima de todo: calendario, horas o materias.
+        // -----------------------------------------------------------------
+        if root.selector-tipo != 0 : Selector {
+            tipo: root.selector-tipo;
+            titulo: root.sel-titulo;
+            etiqueta-mes: root.sel-mes-texto;
+            celdas: root.sel-celdas;
+            hora-texto: root.sel-hora-texto;
+            hora-elegida: root.sel-hora;
+            minuto-elegido: root.sel-minuto;
+            horas: root.sel-horas;
+            minutos: root.sel-minutos;
+            materias: root.sel-materias;
+            materia-nueva <=> root.materia-nueva;
+            escribiendo <=> root.materia-escribiendo;
+
+            cerrar => { root.selector-cerrar(); }
+            mes(delta) => { root.selector-mes(delta); }
+            dia(valor) => { root.selector-dia(valor); }
+            hora(valor) => { root.selector-hora(valor); }
+            minuto(valor) => { root.selector-minuto(valor); }
+            aceptar => { root.selector-aceptar(); }
+            escribir => { root.selector-escribir(); }
+            materia(valor) => { root.selector-materia(valor); }
         }
     }
 }

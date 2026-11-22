@@ -1,0 +1,372 @@
+// Selectores propios de ORDER: fecha (calendario), hora (listas) y materia
+// (lista de las ya usadas + escribir una nueva).
+// ---------------------------------------------------------------------------
+// Se dibujan encima de la ventana, con el mismo tema que el resto: la lógica
+// del calendario y de las materias vive en puente.rs; aquí solo se presenta.
+// Nada de valores de color o tamaño escritos a mano: todo sale de tema.slint.
+
+import { Tema } from "tema.slint";
+import { Boton, Campo } from "formularios.slint";
+import { ScrollView } from "std-widgets.slint";
+
+/// Una casilla del calendario. `dia` en 0 es un hueco antes o después del mes.
+export struct CeldaDia {
+    dia: int,
+    fila: int,
+    columna: int,
+    hoy: bool,
+    elegida: bool,
+}
+
+export component Selector inherits Rectangle {
+    // 1 = fecha · 2 = hora · 3 = materia
+    in property <int> tipo: 0;
+    in property <string> titulo: "";
+
+    // Fecha.
+    in property <string> etiqueta-mes: "";
+    in property <[CeldaDia]> celdas: [];
+
+    // Hora.
+    in property <string> hora-texto: "";
+    in property <int> hora-elegida: 0;
+    in property <int> minuto-elegido: 0;
+    in property <[string]> horas: [];
+    in property <[string]> minutos: [];
+
+    // Materia.
+    in property <[string]> materias: [];
+    in-out property <string> materia-nueva: "";
+    in-out property <bool> escribiendo: false;
+
+    callback cerrar();
+    callback mes(int);
+    callback dia(int);
+    callback hora(int);
+    callback minuto(int);
+    callback aceptar();
+    callback escribir();
+    callback materia(string);
+
+    background: Tema.fondo-velo;
+
+    // El velo se come los clics: nada de lo de abajo se activa por accidente.
+    TouchArea {
+        clicked => { }
+    }
+
+    panel := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: Tema.ancho-selector;
+        height: Tema.alto-selector;
+        background: Tema.fondo-panel;
+        border-radius: Tema.radio;
+        border-width: Tema.linea;
+        border-color: Tema.borde-fuerte;
+
+        VerticalLayout {
+            x: Tema.espacio-lg;
+            y: Tema.espacio-lg;
+            width: parent.width - 2 * Tema.espacio-lg;
+            height: parent.height - 2 * Tema.espacio-lg;
+            spacing: Tema.espacio-md;
+
+            Text {
+                height: Tema.espacio-lg;
+                vertical-alignment: center;
+                text: root.titulo;
+                font-family: Tema.fuente-titulos;
+                font-size: Tema.tamano-seccion;
+                letter-spacing: Tema.letra-seccion;
+                color: Tema.texto;
+                overflow: elide;
+            }
+
+            // --- Calendario ------------------------------------------------
+            if root.tipo == 1 : VerticalLayout {
+                spacing: Tema.espacio-sm;
+
+                HorizontalLayout {
+                    spacing: Tema.espacio-xs;
+                    cross-axis-alignment: center;
+
+                    Boton {
+                        texto: "‹";
+                        width: Tema.ancho-boton-nav-mes;
+                        clicked => { root.mes(-1); }
+                    }
+
+                    Text {
+                        horizontal-stretch: 1;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        text: root.etiqueta-mes;
+                        font-size: Tema.tamano-texto;
+                        color: Tema.texto;
+                        overflow: elide;
+                    }
+
+                    Boton {
+                        texto: "›";
+                        width: Tema.ancho-boton-nav-mes;
+                        clicked => { root.mes(1); }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Tema.espacio-2xs;
+
+                    for letra in ["L", "M", "X", "J", "V", "S", "D"] : Text {
+                        width: Tema.ancho-celda-dia;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        text: letra;
+                        font-family: Tema.fuente-titulos;
+                        font-size: Tema.tamano-hora;
+                        color: Tema.texto-tenue;
+                    }
+                }
+
+                GridLayout {
+                    spacing: Tema.espacio-2xs;
+
+                    for celda in root.celdas : Rectangle {
+                        row: celda.fila;
+                        col: celda.columna;
+                        width: Tema.ancho-celda-dia;
+                        height: Tema.alto-celda-dia;
+                        border-radius: Tema.radio-pequeno;
+                        background: celda.elegida ? Tema.acento-tenue : (celda.dia > 0 && celda-ta.has-hover ? Tema.fondo-hover : transparent);
+                        border-width: Tema.linea;
+                        border-color: celda.elegida ? Tema.acento : (celda.hoy ? Tema.acento-suave : transparent);
+                        visible: celda.dia > 0;
+
+                        Text {
+                            width: parent.width;
+                            height: parent.height;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            text: "\{celda.dia}";
+                            font-size: Tema.tamano-pequeno;
+                            color: celda.elegida ? Tema.acento : (celda.hoy ? Tema.texto : Tema.texto-suave);
+                        }
+
+                        celda-ta := TouchArea {
+                            enabled: celda.dia > 0;
+                            mouse-cursor: pointer;
+                            clicked => { root.dia(celda.dia); }
+                        }
+                    }
+                }
+            }
+
+            // --- Hora ------------------------------------------------------
+            if root.tipo == 2 : VerticalLayout {
+                spacing: Tema.espacio-sm;
+
+                Text {
+                    height: Tema.alto-boton;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    text: root.hora-texto;
+                    font-family: Tema.fuente-titulos;
+                    font-size: Tema.tamano-titulo;
+                    letter-spacing: Tema.letra-titulo;
+                    color: Tema.acento;
+                }
+
+                HorizontalLayout {
+                    height: Tema.alto-lista-selector;
+                    spacing: Tema.espacio-md;
+
+                    ScrollView {
+                        horizontal-stretch: 1;
+                        height: parent.height;
+
+                        VerticalLayout {
+                            spacing: Tema.espacio-2xs;
+
+                            for texto[i] in root.horas : Rectangle {
+                                height: Tema.alto-fila-selector;
+                                border-radius: Tema.radio-pequeno;
+                                background: i == root.hora-elegida ? Tema.acento-tenue : (hora-ta.has-hover ? Tema.fondo-hover : transparent);
+                                border-width: Tema.linea;
+                                border-color: i == root.hora-elegida ? Tema.acento : transparent;
+
+                                Text {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    text: texto;
+                                    font-size: Tema.tamano-pequeno;
+                                    color: i == root.hora-elegida ? Tema.acento : Tema.texto-suave;
+                                }
+
+                                hora-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.hora(i); }
+                                }
+                            }
+                        }
+                    }
+
+                    ScrollView {
+                        horizontal-stretch: 1;
+                        height: parent.height;
+
+                        VerticalLayout {
+                            spacing: Tema.espacio-2xs;
+
+                            for texto[i] in root.minutos : Rectangle {
+                                height: Tema.alto-fila-selector;
+                                border-radius: Tema.radio-pequeno;
+                                background: i == root.minuto-elegido ? Tema.acento-tenue : (minuto-ta.has-hover ? Tema.fondo-hover : transparent);
+                                border-width: Tema.linea;
+                                border-color: i == root.minuto-elegido ? Tema.acento : transparent;
+
+                                Text {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    text: texto;
+                                    font-size: Tema.tamano-pequeno;
+                                    color: i == root.minuto-elegido ? Tema.acento : Tema.texto-suave;
+                                }
+
+                                minuto-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.minuto(i); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    height: Tema.espacio-md;
+                    vertical-alignment: center;
+                    text: "Horas a la izquierda, minutos a la derecha.";
+                    font-size: Tema.tamano-hora;
+                    color: Tema.texto-tenue;
+                }
+            }
+
+            // --- Materia ---------------------------------------------------
+            if root.tipo == 3 : VerticalLayout {
+                spacing: Tema.espacio-sm;
+
+                if !root.escribiendo : VerticalLayout {
+                    spacing: Tema.espacio-sm;
+
+                    ScrollView {
+                        height: Tema.alto-lista-selector;
+
+                        VerticalLayout {
+                            spacing: Tema.espacio-2xs;
+
+                            Rectangle {
+                                height: Tema.alto-fila-selector;
+                                border-radius: Tema.radio-pequeno;
+                                background: sin-ta.has-hover ? Tema.fondo-hover : transparent;
+
+                                Text {
+                                    x: Tema.espacio-sm;
+                                    width: parent.width - 2 * Tema.espacio-sm;
+                                    height: parent.height;
+                                    vertical-alignment: center;
+                                    text: "Sin materia";
+                                    font-size: Tema.tamano-pequeno;
+                                    color: Tema.texto-tenue;
+                                    overflow: elide;
+                                }
+
+                                sin-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.materia(""); }
+                                }
+                            }
+
+                            for materia in root.materias : Rectangle {
+                                height: Tema.alto-fila-selector;
+                                border-radius: Tema.radio-pequeno;
+                                background: materia-ta.has-hover ? Tema.fondo-hover : transparent;
+
+                                Text {
+                                    x: Tema.espacio-sm;
+                                    width: parent.width - 2 * Tema.espacio-sm;
+                                    height: parent.height;
+                                    vertical-alignment: center;
+                                    text: materia;
+                                    font-size: Tema.tamano-pequeno;
+                                    color: Tema.texto;
+                                    overflow: elide;
+                                }
+
+                                materia-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.materia(materia); }
+                                }
+                            }
+
+                            if root.materias.length == 0 : Text {
+                                height: Tema.alto-fila-selector;
+                                vertical-alignment: center;
+                                text: "Aún no hay materias en el archivo.";
+                                font-size: Tema.tamano-pequeno;
+                                color: Tema.texto-tenue;
+                            }
+                        }
+                    }
+
+                    Boton {
+                        texto: "Escribir una nueva";
+                        width: Tema.ancho-boton-largo;
+                        clicked => { root.escribir(); }
+                    }
+                }
+
+                if root.escribiendo : VerticalLayout {
+                    spacing: Tema.espacio-sm;
+
+                    Campo {
+                        etiqueta: "Materia nueva";
+                        texto <=> root.materia-nueva;
+                        pista: "Cálculo";
+                    }
+
+                    Text {
+                        height: Tema.alto-fila-selector;
+                        vertical-alignment: center;
+                        text: "Si coincide con una existente, se guarda con su grafía.";
+                        font-size: Tema.tamano-hora;
+                        color: Tema.texto-tenue;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            Rectangle { vertical-stretch: 1; }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing: Tema.espacio-sm;
+
+                Rectangle { horizontal-stretch: 1; }
+
+                Boton {
+                    texto: "Cancelar";
+                    clicked => { root.cerrar(); }
+                }
+
+                if root.tipo != 3 || root.escribiendo : Boton {
+                    texto: "Aceptar";
+                    principal: true;
+                    clicked => { root.aceptar(); }
+                }
+            }
+        }
+    }
+}
