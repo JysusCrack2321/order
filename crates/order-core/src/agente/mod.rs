@@ -5,6 +5,7 @@
 //! por `Almacen::modificar` y las funciones de `ops`.
 
 pub mod acciones;
+pub mod adjuntos;
 pub mod cliente;
 pub mod config;
 pub mod contexto;

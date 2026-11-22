@@ -11,7 +11,10 @@
 //! `acciones::parsear` lo lea y la ventana muestre las tarjetas.
 
 use crate::agente::acciones;
+use crate::agente::adjuntos::{self, Adjunto, ContenidoAdjunto, ErrorAdjunto};
 use crate::agente::config::{AgenteConfig, Proveedor};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::{Value, json};
 use std::fmt;
 use std::time::Duration;
@@ -41,6 +44,8 @@ pub enum ErrorAgente {
     Respuesta(String),
     /// `stop_reason: "refusal"` de Claude.
     Rechazo(String),
+    /// Problema con los adjuntos (límites, PDF dañado, sin texto).
+    Adjunto(ErrorAdjunto),
 }
 
 impl fmt::Display for ErrorAgente {
@@ -63,7 +68,14 @@ impl fmt::Display for ErrorAgente {
                 write!(f, "respuesta inesperada del proveedor: {detalle}")
             }
             ErrorAgente::Rechazo(detalle) => write!(f, "el modelo rechazó la petición: {detalle}"),
+            ErrorAgente::Adjunto(err) => write!(f, "{err}"),
         }
+    }
+}
+
+impl From<ErrorAdjunto> for ErrorAgente {
+    fn from(err: ErrorAdjunto) -> Self {
+        ErrorAgente::Adjunto(err)
     }
 }
 
@@ -75,6 +87,7 @@ pub fn consultar(
     config: &AgenteConfig,
     contexto: &str,
     pregunta: &str,
+    adjuntos: &[Adjunto],
 ) -> Result<String, ErrorAgente> {
     if config.url_base.trim().is_empty() {
         return Err(ErrorAgente::Configuracion(
@@ -92,8 +105,8 @@ pub fn consultar(
 
     let agente = agente_http();
     match config.proveedor {
-        Proveedor::Claude => claude(&agente, config, contexto, pregunta),
-        _ => openai(&agente, config, contexto, pregunta),
+        Proveedor::Claude => claude(&agente, config, contexto, pregunta, adjuntos),
+        _ => openai(&agente, config, contexto, pregunta, adjuntos),
     }
 }
 
@@ -144,6 +157,15 @@ fn prompt_usuario(contexto: &str, pregunta: &str) -> String {
     format!("Datos actuales de ORDER:\n{contexto}\nPetición del usuario:\n{pregunta}\n")
 }
 
+fn prompt_usuario_con_adjuntos(contexto: &str, pregunta: &str, texto_adjuntos: Option<&str>) -> String {
+    match texto_adjuntos {
+        Some(adj) if !adj.trim().is_empty() => format!(
+            "Datos actuales de ORDER:\n{contexto}\nArchivos adjuntos:\n{adj}\n\nPetición del usuario:\n{pregunta}\n"
+        ),
+        _ => prompt_usuario(contexto, pregunta),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // OpenAI-compatible
 // ---------------------------------------------------------------------------
@@ -153,9 +175,10 @@ fn openai(
     config: &AgenteConfig,
     contexto: &str,
     pregunta: &str,
+    adjuntos: &[Adjunto],
 ) -> Result<String, ErrorAgente> {
     let url = endpoint_chat(&config.url_base);
-    let mut cuerpo = cuerpo_openai(config, contexto, pregunta, true);
+    let mut cuerpo = cuerpo_openai(config, contexto, pregunta, adjuntos, true)?;
     let (mut estado, mut texto) = enviar(
         agente,
         &url,
@@ -166,7 +189,7 @@ fn openai(
     // Gemini rechaza `response_format`; si el error viene por ese campo, se
     // reintenta sin él.
     if reintentar_sin_formato(estado, &texto) {
-        cuerpo = cuerpo_openai(config, contexto, pregunta, false);
+        cuerpo = cuerpo_openai(config, contexto, pregunta, adjuntos, false)?;
         (estado, texto) = enviar(
             agente,
             &url,
@@ -195,19 +218,69 @@ fn cuerpo_openai(
     config: &AgenteConfig,
     contexto: &str,
     pregunta: &str,
+    adjuntos: &[Adjunto],
     formato: bool,
-) -> Value {
+) -> Result<Value, ErrorAgente> {
+    let contenido_usuario = if adjuntos.is_empty() {
+        Value::String(prompt_usuario(contexto, pregunta))
+    } else {
+        let ve_imagenes = config.ve_imagenes();
+        adjuntos::validar(adjuntos, config.proveedor, ve_imagenes)?;
+        if ve_imagenes {
+            let mut partes = Vec::new();
+            for adjunto in adjuntos {
+                match &adjunto.contenido {
+                    ContenidoAdjunto::Pdf { paginas_jpeg, .. } => {
+                        if paginas_jpeg.is_empty() {
+                            return Err(ErrorAgente::Adjunto(ErrorAdjunto::PdfDanado(
+                                "el PDF no tiene páginas renderizadas".to_string(),
+                            )));
+                        }
+                        for pag in paginas_jpeg {
+                            partes.push(json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": format!("data:image/jpeg;base64,{}", BASE64.encode(pag))
+                                }
+                            }));
+                        }
+                    }
+                    ContenidoAdjunto::Imagen { jpeg, .. } => {
+                        partes.push(json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:image/jpeg;base64,{}", BASE64.encode(jpeg))
+                            }
+                        }));
+                    }
+                }
+            }
+            partes.push(json!({
+                "type": "text",
+                "text": prompt_usuario(contexto, pregunta)
+            }));
+            Value::Array(partes)
+        } else {
+            let texto_adjuntos = adjuntos::a_texto(adjuntos)?;
+            Value::String(prompt_usuario_con_adjuntos(
+                contexto,
+                pregunta,
+                Some(&texto_adjuntos),
+            ))
+        }
+    };
+
     let mut cuerpo = json!({
         "model": config.modelo.trim(),
         "messages": [
             {"role": "system", "content": sistema()},
-            {"role": "user", "content": prompt_usuario(contexto, pregunta)}
+            {"role": "user", "content": contenido_usuario}
         ]
     });
     if formato {
         cuerpo["response_format"] = json!({"type": "json_object"});
     }
-    cuerpo
+    Ok(cuerpo)
 }
 
 /// ¿El 400 fue por `response_format`? Entonces se reintenta sin el campo.
@@ -247,9 +320,10 @@ fn claude(
     config: &AgenteConfig,
     contexto: &str,
     pregunta: &str,
+    adjuntos: &[Adjunto],
 ) -> Result<String, ErrorAgente> {
     let url = endpoint_claude(&config.url_base);
-    let cuerpo = cuerpo_claude(config, contexto, pregunta);
+    let cuerpo = cuerpo_claude(config, contexto, pregunta, adjuntos)?;
     let (estado, texto) = enviar(
         agente,
         &url,
@@ -278,17 +352,79 @@ fn endpoint_claude(url_base: &str) -> String {
     }
 }
 
-fn cuerpo_claude(config: &AgenteConfig, contexto: &str, pregunta: &str) -> Value {
-    json!({
+fn cuerpo_claude(
+    config: &AgenteConfig,
+    contexto: &str,
+    pregunta: &str,
+    adjuntos: &[Adjunto],
+) -> Result<Value, ErrorAgente> {
+    let contenido = if adjuntos.is_empty() {
+        Value::String(prompt_usuario(contexto, pregunta))
+    } else {
+        adjuntos::validar(adjuntos, Proveedor::Claude, true)?;
+        let mut bloques = Vec::new();
+        for adjunto in adjuntos {
+            match &adjunto.contenido {
+                ContenidoAdjunto::Pdf {
+                    bytes,
+                    paginas_jpeg,
+                    ..
+                } => {
+                    let usar_pdf_crudo = !bytes.is_empty()
+                        && (paginas_jpeg.is_empty()
+                            || adjuntos::contar_paginas_pdf(bytes)
+                                .is_ok_and(|n| n <= adjuntos::MAX_PAGINAS_PDF));
+                    if usar_pdf_crudo {
+                        bloques.push(json!({
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": BASE64.encode(bytes)
+                            }
+                        }));
+                    } else {
+                        for pag in paginas_jpeg {
+                            bloques.push(json!({
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/jpeg",
+                                    "data": BASE64.encode(pag)
+                                }
+                            }));
+                        }
+                    }
+                }
+                ContenidoAdjunto::Imagen { jpeg, .. } => {
+                    bloques.push(json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": BASE64.encode(jpeg)
+                        }
+                    }));
+                }
+            }
+        }
+        bloques.push(json!({
+            "type": "text",
+            "text": prompt_usuario(contexto, pregunta)
+        }));
+        Value::Array(bloques)
+    };
+
+    Ok(json!({
         "model": config.modelo.trim(),
         "max_tokens": MAX_TOKENS,
         "system": sistema(),
-        "messages": [{"role": "user", "content": prompt_usuario(contexto, pregunta)}],
+        "messages": [{"role": "user", "content": contenido}],
         "output_config": {
             "effort": "low",
             "format": {"type": "json_schema", "schema": acciones::esquema()}
         }
-    })
+    }))
 }
 
 fn respuesta_claude(valor: &Value) -> Result<String, ErrorAgente> {
@@ -416,7 +552,7 @@ mod pruebas {
     #[test]
     fn cuerpo_openai_lleva_lo_que_pide_la_api() {
         let config = config(Proveedor::DeepSeek);
-        let cuerpo = cuerpo_openai(&config, "datos", "crea una tarea", true);
+        let cuerpo = cuerpo_openai(&config, "datos", "crea una tarea", &[], true).expect("cuerpo");
         assert_eq!(cuerpo["model"], "deepseek-v4-flash");
         assert_eq!(cuerpo["response_format"]["type"], "json_object");
         let mensajes = cuerpo["messages"].as_array().expect("mensajes");
@@ -427,14 +563,14 @@ mod pruebas {
         assert!(mensajes[1]["content"].as_str().unwrap().contains("crea una tarea"));
 
         // El reintento para Gemini va sin `response_format`.
-        let sin = cuerpo_openai(&config, "datos", "pregunta", false);
+        let sin = cuerpo_openai(&config, "datos", "pregunta", &[], false).expect("sin formato");
         assert!(sin.get("response_format").is_none());
     }
 
     #[test]
     fn cuerpo_claude_sin_thinking_ni_temperatura() {
         let config = config(Proveedor::Claude);
-        let cuerpo = cuerpo_claude(&config, "datos", "hazlo");
+        let cuerpo = cuerpo_claude(&config, "datos", "hazlo", &[]).expect("cuerpo");
         assert_eq!(cuerpo["model"], "claude-opus-5-5");
         assert_eq!(cuerpo["max_tokens"], MAX_TOKENS);
         assert_eq!(cuerpo["output_config"]["effort"], "low");
@@ -448,6 +584,117 @@ mod pruebas {
         }
         assert_eq!(cuerpo["messages"].as_array().expect("mensajes").len(), 1);
         assert_eq!(cuerpo["messages"][0]["role"], "user");
+    }
+
+    #[test]
+    fn cuerpo_claude_manda_document_e_imagen_antes_del_texto() {
+        let config = config(Proveedor::Claude);
+        let pdf = crate::agente::adjuntos::pruebas_ayuda::pdf_con_paginas(&["Horario de Control"]);
+        let adjuntos = vec![
+            Adjunto {
+                nombre: "horario.pdf".into(),
+                contenido: ContenidoAdjunto::Pdf {
+                    bytes: pdf.clone(),
+                    paginas_jpeg: vec![],
+                    texto_ocr: None,
+                },
+            },
+            Adjunto {
+                nombre: "foto.jpg".into(),
+                contenido: ContenidoAdjunto::Imagen {
+                    jpeg: vec![0xFF, 0xD8, 0xFF, 0xD9],
+                    texto_ocr: None,
+                },
+            },
+        ];
+
+        let cuerpo = cuerpo_claude(&config, "datos", "agrega las clases", &adjuntos).expect("cuerpo");
+        let content = cuerpo["messages"][0]["content"].as_array().expect("bloques");
+        assert_eq!(content.len(), 3);
+        assert_eq!(content[0]["type"], "document");
+        assert_eq!(content[0]["source"]["type"], "base64");
+        assert_eq!(content[0]["source"]["media_type"], "application/pdf");
+        assert_eq!(content[0]["source"]["data"], BASE64.encode(&pdf));
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["media_type"], "image/jpeg");
+        assert_eq!(content[2]["type"], "text");
+        assert!(content[2]["text"].as_str().unwrap().contains("agrega las clases"));
+    }
+
+    #[test]
+    fn cuerpo_gemini_manda_image_url_data_url() {
+        let config = config(Proveedor::Gemini);
+        let adjuntos = vec![
+            Adjunto {
+                nombre: "enunciado.pdf".into(),
+                contenido: ContenidoAdjunto::Pdf {
+                    bytes: vec![],
+                    paginas_jpeg: vec![vec![1, 2, 3], vec![4, 5, 6]],
+                    texto_ocr: None,
+                },
+            },
+            Adjunto {
+                nombre: "tablero.jpg".into(),
+                contenido: ContenidoAdjunto::Imagen {
+                    jpeg: vec![7, 8, 9],
+                    texto_ocr: None,
+                },
+            },
+        ];
+
+        let cuerpo = cuerpo_openai(&config, "datos", "lee el enunciado", &adjuntos, false).expect("cuerpo");
+        let content = cuerpo["messages"][1]["content"].as_array().expect("bloques");
+        assert_eq!(content.len(), 4);
+        assert_eq!(content[0]["type"], "image_url");
+        assert_eq!(
+            content[0]["image_url"]["url"],
+            format!("data:image/jpeg;base64,{}", BASE64.encode([1, 2, 3]))
+        );
+        assert_eq!(content[2]["type"], "image_url");
+        assert_eq!(
+            content[2]["image_url"]["url"],
+            format!("data:image/jpeg;base64,{}", BASE64.encode([7, 8, 9]))
+        );
+        assert_eq!(content[3]["type"], "text");
+    }
+
+    #[test]
+    fn cuerpo_deepseek_y_otro_solo_texto() {
+        let pdf = crate::agente::adjuntos::pruebas_ayuda::pdf_con_paginas(&["Taller 3 para el viernes"]);
+        let adjuntos = vec![
+            Adjunto {
+                nombre: "taller.pdf".into(),
+                contenido: ContenidoAdjunto::Pdf {
+                    bytes: pdf,
+                    paginas_jpeg: vec![vec![1, 2, 3]],
+                    texto_ocr: None,
+                },
+            },
+            Adjunto {
+                nombre: "nota.jpg".into(),
+                contenido: ContenidoAdjunto::Imagen {
+                    jpeg: vec![9, 9],
+                    texto_ocr: Some("Parcial el lunes 8am".into()),
+                },
+            },
+        ];
+
+        let deepseek = config(Proveedor::DeepSeek);
+        let cuerpo = cuerpo_openai(&deepseek, "datos", "resume", &adjuntos, true).expect("deepseek");
+        let texto = cuerpo["messages"][1]["content"].as_str().expect("solo texto");
+        assert!(texto.contains("--- archivo: taller.pdf (página 1) ---"), "{texto}");
+        assert!(texto.contains("Taller 3 para el viernes"), "{texto}");
+        assert!(texto.contains("--- archivo: nota.jpg ---"), "{texto}");
+        assert!(texto.contains("Parcial el lunes 8am"), "{texto}");
+
+        // «Otro» sin ve_imagenes se comporta como DeepSeek; con ve_imagenes como Gemini.
+        let mut otro = config(Proveedor::OpenAICompatible);
+        let cuerpo_sin = cuerpo_openai(&otro, "datos", "resume", &adjuntos, false).expect("otro sin");
+        assert!(cuerpo_sin["messages"][1]["content"].is_string());
+
+        otro.ve_imagenes = true;
+        let cuerpo_con = cuerpo_openai(&otro, "datos", "resume", &adjuntos, false).expect("otro con");
+        assert!(cuerpo_con["messages"][1]["content"].is_array());
     }
 
     #[test]
@@ -526,7 +773,7 @@ mod pruebas {
     fn sin_clave_no_llama() {
         let mut config = AgenteConfig::default();
         config.api_key.clear();
-        let error = consultar(&config, "datos", "hola").expect_err("sin clave");
+        let error = consultar(&config, "datos", "hola", &[]).expect_err("sin clave");
         assert!(matches!(error, ErrorAgente::Configuracion(_)));
         assert!(error.to_string().contains("clave"), "{error}");
     }

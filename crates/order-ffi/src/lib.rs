@@ -1324,7 +1324,7 @@ pub fn enviar_al_agente(
         &format!("UTC{}", ahora.format("%:z")),
     );
 
-    let salida = cliente::consultar(&cfg, &resumen_ctx, pregunta)
+    let salida = cliente::consultar(&cfg, &resumen_ctx, pregunta, &[])
         .map_err(|e| ErrorFfi::Operacion {
             mensaje: e.to_string(),
         })?;

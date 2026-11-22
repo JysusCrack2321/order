@@ -1233,7 +1233,7 @@ fn enviar_agente(ui: &AppWindow) {
 
     let debil = ui.as_weak();
     std::thread::spawn(move || {
-        let salida = cliente::consultar(&agente, &contexto, &pregunta);
+        let salida = cliente::consultar(&agente, &contexto, &pregunta, &[]);
         // Nadie más toca el estado de la ventana: se vuelve al hilo principal.
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = debil.upgrade() {

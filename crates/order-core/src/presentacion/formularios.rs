@@ -275,6 +275,7 @@ pub fn validar_agente(
         url_base: url,
         modelo,
         api_key,
+        ve_imagenes: false,
         voz,
     })
 }

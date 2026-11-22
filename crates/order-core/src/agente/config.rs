@@ -198,6 +198,7 @@ pub struct AgenteConfig {
     pub url_base: String,
     pub modelo: String,
     pub api_key: String,
+    pub ve_imagenes: bool,
     pub voz: Voz,
 }
 
@@ -209,6 +210,7 @@ impl Default for AgenteConfig {
             url_base: url_base.to_string(),
             modelo: modelo.to_string(),
             api_key: String::new(),
+            ve_imagenes: false,
             voz: Voz::default(),
         }
     }
@@ -218,6 +220,16 @@ impl AgenteConfig {
     /// ¿Hay clave para hablar con el modelo?
     pub fn lista(&self) -> bool {
         !self.api_key.trim().is_empty()
+    }
+
+    /// ¿El proveedor / modelo elegido recibe imágenes directamente?
+    /// Claude y Gemini sí; DeepSeek no; «Otro» depende de `ve_imagenes`.
+    pub fn ve_imagenes(&self) -> bool {
+        match self.proveedor {
+            Proveedor::Claude | Proveedor::Gemini => true,
+            Proveedor::DeepSeek => false,
+            Proveedor::OpenAICompatible => self.ve_imagenes,
+        }
     }
 
     /// Cambia de proveedor y pone su URL y su modelo por defecto.
@@ -380,6 +392,7 @@ mod pruebas {
             url_base: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
             modelo: "gemini-flash-latest".into(),
             api_key: "clave de prueba".into(),
+            ve_imagenes: false,
             voz: Voz {
                 proveedor: VozProveedor::Groq,
                 url_base: "https://api.groq.com/openai/v1".into(),
@@ -389,6 +402,18 @@ mod pruebas {
         };
         guardar_en(&ruta, &config).expect("guardar");
         assert_eq!(cargar_de(&ruta), config);
+    }
+
+    #[test]
+    fn ve_imagenes_segun_proveedor() {
+        assert!(AgenteConfig::default().con_proveedor(Proveedor::Claude).ve_imagenes());
+        assert!(AgenteConfig::default().con_proveedor(Proveedor::Gemini).ve_imagenes());
+        assert!(!AgenteConfig::default().con_proveedor(Proveedor::DeepSeek).ve_imagenes());
+
+        let mut otro = AgenteConfig::default().con_proveedor(Proveedor::OpenAICompatible);
+        assert!(!otro.ve_imagenes());
+        otro.ve_imagenes = true;
+        assert!(otro.ve_imagenes());
     }
 
     /// La clave no puede quedar legible para los demás usuarios del equipo.
