@@ -13,7 +13,7 @@
 use crate::agente::acciones;
 use crate::agente::adjuntos::{self, Adjunto, ContenidoAdjunto, ErrorAdjunto};
 use crate::agente::config::{AgenteConfig, Proveedor};
-use crate::agente::conversacion::Conversacion;
+use crate::agente::conversacion::{Conversacion, PROMPT_COMPACTACION};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::{Value, json};
@@ -82,8 +82,8 @@ impl From<ErrorAdjunto> for ErrorAgente {
 
 impl std::error::Error for ErrorAgente {}
 
-/// Pregunta al modelo y devuelve su texto (el JSON crudo de `respuesta`,
-/// `acciones` y `resumen`). Bloquea hasta 60 s: la ventana la llama desde un hilo.
+/// Pregunta al modelo y devuelve su texto (el JSON crudo de `respuesta` y
+/// `acciones`). Bloquea hasta 60 s: la ventana la llama desde un hilo.
 pub fn consultar(
     config: &AgenteConfig,
     contexto: &str,
@@ -91,6 +91,89 @@ pub fn consultar(
     adjuntos: &[Adjunto],
     conversacion: &Conversacion,
 ) -> Result<String, ErrorAgente> {
+    validar_config_basica(config)?;
+
+    let agente = agente_http();
+    match config.proveedor {
+        Proveedor::Claude => claude(&agente, config, contexto, pregunta, adjuntos, conversacion),
+        _ => openai(&agente, config, contexto, pregunta, adjuntos, conversacion),
+    }
+}
+
+/// Resume los mensajes antiguos (todos menos los últimos 10) junto con el
+/// resumen anterior usando el mismo proveedor y modelo en texto libre, sin
+/// esquema JSON de acciones.
+pub fn compactar(
+    config: &AgenteConfig,
+    conversacion: &Conversacion,
+) -> Result<String, ErrorAgente> {
+    validar_config_basica(config)?;
+    let Some(contenido) = conversacion.texto_para_compactar() else {
+        return Ok(conversacion.resumen().to_string());
+    };
+
+    let agente = agente_http();
+    match config.proveedor {
+        Proveedor::Claude => {
+            let url = endpoint_claude(&config.url_base);
+            let cuerpo = cuerpo_compactacion_claude(config, &contenido);
+            let (estado, texto) = enviar(
+                &agente,
+                &url,
+                &cuerpo,
+                &[
+                    ("x-api-key", config.api_key.trim().to_string()),
+                    ("anthropic-version", VERSION_ANTHROPIC.to_string()),
+                    ("content-type", "application/json".to_string()),
+                ],
+            )?;
+            comprobar(estado, &texto)?;
+            let valor: Value = serde_json::from_str(&texto)
+                .map_err(|e| ErrorAgente::Respuesta(format!("no es JSON: {e}")))?;
+            respuesta_claude(&valor)
+        }
+        _ => {
+            let url = endpoint_chat(&config.url_base);
+            let cuerpo = cuerpo_compactacion_openai(config, &contenido);
+            let (estado, texto) = enviar(
+                &agente,
+                &url,
+                &cuerpo,
+                &[("Authorization", format!("Bearer {}", config.api_key.trim()))],
+            )?;
+            comprobar(estado, &texto)?;
+            let valor: Value = serde_json::from_str(&texto)
+                .map_err(|e| ErrorAgente::Respuesta(format!("no es JSON: {e}")))?;
+            texto_openai(&valor)
+        }
+    }
+}
+
+/// Indica si el error del proveedor corresponde a un contexto demasiado largo.
+pub fn es_error_contexto_largo(err: &ErrorAgente) -> bool {
+    let ErrorAgente::Servidor(codigo, detalle) = err else {
+        return false;
+    };
+    if !matches!(*codigo, 400 | 413) {
+        return false;
+    }
+    let lower = detalle.to_lowercase();
+    [
+        "context_length",
+        "context length",
+        "maximum context",
+        "too many tokens",
+        "token limit",
+        "too long",
+        "prompt is too long",
+        "exceeds the maximum",
+        "context window",
+    ]
+    .iter()
+    .any(|patron| lower.contains(patron))
+}
+
+fn validar_config_basica(config: &AgenteConfig) -> Result<(), ErrorAgente> {
     if config.url_base.trim().is_empty() {
         return Err(ErrorAgente::Configuracion(
             "la URL base está vacía".to_string(),
@@ -104,12 +187,7 @@ pub fn consultar(
             "no hay clave (Ajustes → Agente)".to_string(),
         ));
     }
-
-    let agente = agente_http();
-    match config.proveedor {
-        Proveedor::Claude => claude(&agente, config, contexto, pregunta, adjuntos, conversacion),
-        _ => openai(&agente, config, contexto, pregunta, adjuntos, conversacion),
-    }
+    Ok(())
 }
 
 fn agente_http() -> ureq::Agent {
@@ -127,7 +205,7 @@ pub fn sistema() -> String {
         r#"Eres el asistente de ORDER, una app personal de horario, tareas y recordatorios.
 
 Respondes SIEMPRE con un único objeto JSON, sin texto fuera del JSON:
-{{"respuesta": "texto corto en español", "acciones": [ ... ], "resumen": "resumen breve de la conversación"}}
+{{"respuesta": "texto corto en español", "acciones": [ ... ]}}
 
 Formatos exactos (los mismos del archivo):
 - vencimiento de tarea: "YYYY-MM-DDTHH:MM" (hora local, 24 h)
@@ -151,7 +229,6 @@ Reglas:
 4. Propón una acción por cada cosa que se pida; no apliques nada tú: el usuario confirma.
 5. Si falta un dato imprescindible (por ejemplo, el vencimiento de una tarea nueva), pregunta en "respuesta" sin acciones.
 6. "respuesta" va en español, corta (una o dos frases), sin markdown ni bloques de código.
-7. En "resumen" escribe un resumen actualizado de toda la conversación (máximo 5 líneas), solo con lo que sirva para seguirla.
 "#
     )
 }
@@ -310,6 +387,16 @@ fn cuerpo_openai(
     Ok(cuerpo)
 }
 
+fn cuerpo_compactacion_openai(config: &AgenteConfig, contenido: &str) -> Value {
+    json!({
+        "model": config.modelo.trim(),
+        "messages": [
+            {"role": "system", "content": PROMPT_COMPACTACION},
+            {"role": "user", "content": contenido}
+        ]
+    })
+}
+
 /// ¿El 400 fue por `response_format`? Entonces se reintenta sin el campo.
 fn reintentar_sin_formato(estado: u16, cuerpo: &str) -> bool {
     estado == 400 && cuerpo.contains("response_format")
@@ -454,6 +541,15 @@ fn cuerpo_claude(
             "format": {"type": "json_schema", "schema": acciones::esquema()}
         }
     }))
+}
+
+fn cuerpo_compactacion_claude(config: &AgenteConfig, contenido: &str) -> Value {
+    json!({
+        "model": config.modelo.trim(),
+        "max_tokens": MAX_TOKENS,
+        "system": PROMPT_COMPACTACION,
+        "messages": [{"role": "user", "content": contenido}]
+    })
 }
 
 fn respuesta_claude(valor: &Value) -> Result<String, ErrorAgente> {
@@ -830,18 +926,19 @@ mod pruebas {
         assert!(sistema.contains("no inventes un id") || sistema.contains("Nunca inventes un id"));
         assert!(sistema.contains("grafía exacta de las materias"));
         assert!(sistema.contains("pregunta"));
-        assert!(sistema.contains("\"resumen\""));
+        assert!(!sistema.contains("\"resumen\""));
     }
 
     #[test]
     fn cuerpos_claude_y_openai_incluyen_conversacion_en_orden() {
         let mut conv = Conversacion::nueva();
+        conv.agregar_documento("horario.pdf", "LUNES  Control  11:00 - 13:00");
         conv.registrar_turno(
             "pon taller el jueves",
             &["horario.pdf".into()],
             "Propongo el jueves.",
-            Some("Hablan de taller de Control.".into()),
         );
+        conv.aplicar_compactacion("Hablan de taller de Control.");
         conv.anotar_resultado("Crear la tarea «Taller» (jueves)", true);
 
         let openai_cfg = config(Proveedor::DeepSeek);
@@ -869,13 +966,59 @@ mod pruebas {
 
         for texto in [texto_oai, texto_cld] {
             let p1 = texto.find("Datos actuales de ORDER:").expect("1. agenda");
-            let p2 = texto.find("Resumen de la conversación:").expect("2. resumen");
-            let p3 = texto.find("Últimos intercambios:").expect("3. intercambios");
-            let p4 = texto.find("Qué pasó con tus propuestas:").expect("4. resultados");
-            let p5 = texto.find("Petición del usuario:").expect("5. peticion");
-            assert!(p1 < p2 && p2 < p3 && p3 < p4 && p4 < p5, "{texto}");
+            let p2 = texto
+                .find("## Documentos de la conversación")
+                .expect("2. docs");
+            let p3 = texto
+                .find("## Resumen de lo hablado antes")
+                .expect("3. resumen");
+            let p4 = texto.find("## Conversación").expect("4. conversacion");
+            let p5 = texto
+                .find("## Qué pasó con tus propuestas")
+                .expect("5. resultados");
+            let p6 = texto.find("Petición del usuario:").expect("6. peticion");
+            assert!(p1 < p2 && p2 < p3 && p3 < p4 && p4 < p5 && p5 < p6, "{texto}");
             assert!(texto.contains("[adjuntó: horario.pdf]"), "{texto}");
+            assert!(texto.contains("ORDER: Propongo el jueves."), "{texto}");
             assert!(texto.contains("no, mejor el viernes"), "{texto}");
         }
+    }
+
+    #[test]
+    fn cuerpo_compactacion_usa_prompt_sin_esquema() {
+        let mut conv = Conversacion::nueva();
+        for i in 1..=6 {
+            conv.registrar_turno(&format!("pregunta {i}"), &[], &format!("respuesta {i}"));
+        }
+        let contenido = conv.texto_para_compactar().expect("para compactar");
+
+        let openai_cfg = config(Proveedor::DeepSeek);
+        let oai = cuerpo_compactacion_openai(&openai_cfg, &contenido);
+        assert_eq!(oai["messages"][0]["content"], PROMPT_COMPACTACION);
+        assert!(oai["messages"][1]["content"].as_str().unwrap().contains("pregunta 1"));
+        assert!(oai.get("response_format").is_none());
+
+        let claude_cfg = config(Proveedor::Claude);
+        let cld = cuerpo_compactacion_claude(&claude_cfg, &contenido);
+        assert_eq!(cld["system"], PROMPT_COMPACTACION);
+        assert!(cld["messages"][0]["content"].as_str().unwrap().contains("pregunta 1"));
+        assert!(cld.get("output_config").is_none());
+    }
+
+    #[test]
+    fn detecta_error_contexto_demasiado_largo() {
+        assert!(es_error_contexto_largo(&ErrorAgente::Servidor(
+            400,
+            "This model's maximum context length is 65536 tokens".into()
+        )));
+        assert!(es_error_contexto_largo(&ErrorAgente::Servidor(
+            413,
+            "prompt is too long".into()
+        )));
+        assert!(!es_error_contexto_largo(&ErrorAgente::Servidor(
+            500,
+            "context length exceeded".into()
+        )));
+        assert!(!es_error_contexto_largo(&ErrorAgente::Limite));
     }
 }

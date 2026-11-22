@@ -1432,7 +1432,6 @@ fn recibir_agente(
                         pregunta,
                         nombres_adjuntos,
                         &respuesta,
-                        lectura.resumen,
                     );
                     estado.panel = true;
                     estado.respuesta = respuesta;

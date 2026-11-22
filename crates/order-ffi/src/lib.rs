@@ -1637,7 +1637,7 @@ fn construir_respuesta_agente(
             }
             if let Ok(mut conv) = CONVERSACION.lock() {
                 conv.tomar_resultados();
-                conv.registrar_turno(pregunta, nombres_adjuntos, &respuesta, lectura.resumen);
+                conv.registrar_turno(pregunta, nombres_adjuntos, &respuesta);
             }
             RespuestaAgenteFfi {
                 respuesta,
@@ -2786,7 +2786,7 @@ hora = "18:00"
         .expect("segunda");
         let recibido2 = h2.join().expect("join 2");
         assert!(
-            recibido2.contains("El usuario pidió tareas para Control y una lectura."),
+            recibido2.contains("crea dos tareas"),
             "{recibido2}"
         );
         assert!(

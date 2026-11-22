@@ -289,11 +289,7 @@ pub fn a_texto(adjuntos: &[Adjunto]) -> Result<String, ErrorAdjunto> {
     let mut total_bytes = 0usize;
 
     for adjunto in adjuntos {
-        let nombre = if adjunto.nombre.trim().is_empty() {
-            "adjunto"
-        } else {
-            adjunto.nombre.trim()
-        };
+        let nombre = nombre_limpio(&adjunto.nombre);
         match &adjunto.contenido {
             ContenidoAdjunto::Pdf {
                 bytes,
@@ -308,62 +304,12 @@ pub fn a_texto(adjuntos: &[Adjunto]) -> Result<String, ErrorAdjunto> {
                     extraidas.truncate(MAX_PAGINAS_PDF);
                     extraidas
                 };
-                let sin_texto = paginas_sin_texto(&paginas);
-                let ocr_limpio = texto_ocr
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|t| !t.is_empty());
-
-                let mut bloques_archivo = Vec::new();
-
-                if paginas.is_empty() {
-                    if let Some(ocr) = ocr_limpio {
-                        bloques_archivo.push(format!("--- archivo: {nombre} (página 1) ---\n{ocr}"));
-                    }
-                } else {
-                    let ocr_partes: Vec<&str> = ocr_limpio
-                        .map(|ocr| ocr.split('\u{000C}').map(str::trim).collect())
-                        .unwrap_or_default();
-
-                    if !ocr_partes.is_empty() && ocr_partes.len() == sin_texto.len() {
-                        for (pos, &idx_pagina) in sin_texto.iter().enumerate() {
-                            if !ocr_partes[pos].is_empty() {
-                                paginas[idx_pagina] = ocr_partes[pos].to_string();
-                            }
-                        }
-                        for (idx, texto) in paginas.iter().enumerate() {
-                            if !texto.trim().is_empty() {
-                                bloques_archivo.push(format!(
-                                    "--- archivo: {nombre} (página {}) ---\n{}",
-                                    idx + 1,
-                                    texto.trim()
-                                ));
-                            }
-                        }
-                    } else {
-                        for (idx, texto) in paginas.iter().enumerate() {
-                            if !sin_texto.contains(&idx) && !texto.trim().is_empty() {
-                                bloques_archivo.push(format!(
-                                    "--- archivo: {nombre} (página {}) ---\n{}",
-                                    idx + 1,
-                                    texto.trim()
-                                ));
-                            }
-                        }
-                        if let Some(ocr) = ocr_limpio {
-                            if sin_texto.len() == 1 {
-                                let num = sin_texto[0] + 1;
-                                bloques_archivo.push(format!(
-                                    "--- archivo: {nombre} (página {num}) ---\n{ocr}"
-                                ));
-                            } else {
-                                bloques_archivo.push(format!(
-                                    "--- archivo: {nombre} (OCR) ---\n{ocr}"
-                                ));
-                            }
-                        }
-                    }
-                }
+                let bloques_archivo = combinar_paginas_pdf_y_ocr(&mut paginas, texto_ocr.as_deref())
+                    .into_iter()
+                    .map(|(etiqueta, texto)| {
+                        format!("--- archivo: {nombre} ({etiqueta}) ---\n{texto}")
+                    })
+                    .collect::<Vec<_>>();
 
                 if bloques_archivo.is_empty() {
                     return Err(ErrorAdjunto::SinTextoLegible);
@@ -396,6 +342,110 @@ pub fn a_texto(adjuntos: &[Adjunto]) -> Result<String, ErrorAdjunto> {
     }
 
     Ok(bloques.join("\n\n"))
+}
+
+/// Extrae el texto representativo de cada adjunto para conservarlo en el
+/// historial persistente de la conversación (incluido para modelos con visión).
+/// Si no hay texto embebido ni OCR disponible, devuelve texto vacío junto al nombre.
+pub fn documentos_de_adjuntos(adjuntos: &[Adjunto]) -> Vec<(String, String)> {
+    let mut salida = Vec::with_capacity(adjuntos.len());
+    for adjunto in adjuntos {
+        let nombre = nombre_limpio(&adjunto.nombre).to_string();
+        let texto = match &adjunto.contenido {
+            ContenidoAdjunto::Pdf {
+                bytes, texto_ocr, ..
+            } => {
+                let mut paginas = if bytes.is_empty() {
+                    Vec::new()
+                } else {
+                    extraer_texto_pdf(bytes)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .take(MAX_PAGINAS_PDF)
+                        .collect()
+                };
+                let partes = combinar_paginas_pdf_y_ocr(&mut paginas, texto_ocr.as_deref());
+                if partes.is_empty() {
+                    String::new()
+                } else if partes.len() == 1 {
+                    partes[0].1.clone()
+                } else {
+                    partes
+                        .into_iter()
+                        .map(|(etiqueta, contenido)| format!("[{etiqueta}]\n{contenido}"))
+                        .collect::<Vec<_>>()
+                        .join("\n\n")
+                }
+            }
+            ContenidoAdjunto::Imagen { texto_ocr, .. } => texto_ocr
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string(),
+        };
+        salida.push((nombre, texto));
+    }
+    salida
+}
+
+fn nombre_limpio(nombre: &str) -> &str {
+    let limpio = nombre.trim();
+    if limpio.is_empty() {
+        "adjunto"
+    } else {
+        limpio
+    }
+}
+
+fn combinar_paginas_pdf_y_ocr(
+    paginas: &mut [String],
+    texto_ocr: Option<&str>,
+) -> Vec<(String, String)> {
+    let sin_texto = paginas_sin_texto(paginas);
+    let ocr_limpio = texto_ocr.map(str::trim).filter(|t| !t.is_empty());
+    let mut salida = Vec::new();
+
+    if paginas.is_empty() {
+        if let Some(ocr) = ocr_limpio {
+            salida.push(("página 1".to_string(), ocr.to_string()));
+        }
+        return salida;
+    }
+
+    let ocr_partes: Vec<&str> = ocr_limpio
+        .map(|ocr| ocr.split('\u{000C}').map(str::trim).collect())
+        .unwrap_or_default();
+
+    if !ocr_partes.is_empty() && ocr_partes.len() == sin_texto.len() {
+        for (pos, &idx_pagina) in sin_texto.iter().enumerate() {
+            if !ocr_partes[pos].is_empty() {
+                paginas[idx_pagina] = ocr_partes[pos].to_string();
+            }
+        }
+        for (idx, texto) in paginas.iter().enumerate() {
+            let limpio = texto.trim();
+            if !limpio.is_empty() {
+                salida.push((format!("página {}", idx + 1), limpio.to_string()));
+            }
+        }
+    } else {
+        for (idx, texto) in paginas.iter().enumerate() {
+            let limpio = texto.trim();
+            if !sin_texto.contains(&idx) && !limpio.is_empty() {
+                salida.push((format!("página {}", idx + 1), limpio.to_string()));
+            }
+        }
+        if let Some(ocr) = ocr_limpio {
+            if sin_texto.len() == 1 {
+                let num = sin_texto[0] + 1;
+                salida.push((format!("página {num}"), ocr.to_string()));
+            } else {
+                salida.push(("OCR".to_string(), ocr.to_string()));
+            }
+        }
+    }
+
+    salida
 }
 
 fn asegurar_descifrado(doc: &mut Document, nombre: &str) -> Result<(), ErrorAdjunto> {
@@ -625,5 +675,32 @@ mod pruebas {
         assert!(texto.contains("--- archivo: programa.pdf (página 1) ---\nClase de Calculo"));
         assert!(texto.contains("--- archivo: programa.pdf (página 2) ---\nParcial el 28 de noviembre"));
         assert!(texto.contains("--- archivo: programa.pdf (página 3) ---\nLaboratorio 2"));
+    }
+
+    #[test]
+    fn extrae_documentos_para_historial_con_y_sin_texto() {
+        let pdf = pdf_con_paginas(&["Clase de Control", ""]);
+        let adjuntos = vec![
+            Adjunto {
+                nombre: "horario.pdf".into(),
+                contenido: ContenidoAdjunto::Pdf {
+                    bytes: pdf,
+                    paginas_jpeg: vec![vec![1, 2, 3]],
+                    texto_ocr: None,
+                },
+            },
+            Adjunto {
+                nombre: "foto.jpg".into(),
+                contenido: ContenidoAdjunto::Imagen {
+                    jpeg: vec![0xFF, 0xD8, 0xFF],
+                    texto_ocr: None,
+                },
+            },
+        ];
+        let docs = documentos_de_adjuntos(&adjuntos);
+        assert_eq!(docs.len(), 2);
+        assert_eq!(docs[0].0, "horario.pdf");
+        assert!(docs[0].1.contains("Clase de Control"));
+        assert_eq!(docs[1], ("foto.jpg".into(), String::new()));
     }
 }

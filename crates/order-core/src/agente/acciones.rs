@@ -296,13 +296,9 @@ pub fn esquema() -> Value {
         "type": "object",
         "properties": {
             "respuesta": texto,
-            "acciones": { "type": "array", "items": accion },
-            "resumen": {
-                "type": "string",
-                "description": "Resumen actualizado de toda la conversación, incluida esta petición y tu respuesta; máximo 5 líneas; solo lo que sirva para seguirla (de qué se habla, qué quiere el usuario, qué decidió)"
-            }
+            "acciones": { "type": "array", "items": accion }
         },
-        "required": ["respuesta", "acciones", "resumen"],
+        "required": ["respuesta", "acciones"],
         "additionalProperties": false
     })
 }
@@ -977,13 +973,13 @@ hora = \"18:00\"
         assert!(dia("festivo").is_err());
     }
 
-    /// El esquema que se le da a Claude nombra todos los tipos de acción y `resumen`.
+    /// El esquema que se le da a Claude nombra todos los tipos de acción y ya no pide `resumen`.
     #[test]
     fn esquema_completo() {
         let esquema = esquema();
-        assert_eq!(esquema["properties"]["resumen"]["type"], "string");
+        assert!(esquema["properties"].get("resumen").is_none());
         let requeridos = esquema["required"].as_array().expect("required");
-        assert!(requeridos.iter().any(|v| v == "resumen"), "falta resumen");
+        assert!(!requeridos.iter().any(|v| v == "resumen"));
         let tipos = esquema["properties"]["acciones"]["items"]["properties"]["tipo"]["enum"]
             .as_array()
             .expect("enum de tipos");

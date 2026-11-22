@@ -1,6 +1,8 @@
 //! Lectura y validación de los campos de formulario y de filtros.
 
-use crate::agente::config::{AgenteConfig, Proveedor, Voz, VozProveedor};
+use crate::agente::config::{
+    AgenteConfig, LIMITE_CONTEXTO_POR_DEFECTO, Proveedor, Voz, VozProveedor,
+};
 use crate::filtros::TipoFecha;
 use crate::modelo::{Ajustes, Clase, Dia, FORMATO_FECHA, FORMATO_HORA, Recordatorio, Semestre};
 use crate::ops::NuevaTarea;
@@ -276,8 +278,28 @@ pub fn validar_agente(
         modelo,
         api_key,
         ve_imagenes: false,
+        limite_contexto_tokens: LIMITE_CONTEXTO_POR_DEFECTO,
         voz,
     })
+}
+
+/// Valida el campo de límite de contexto (en tokens); vacío usa `60 000`.
+pub fn validar_limite_contexto(texto: &str) -> Result<u32, ErrorCampo> {
+    let limpio = texto.trim();
+    if limpio.is_empty() {
+        return Ok(LIMITE_CONTEXTO_POR_DEFECTO);
+    }
+    let valor = limpio
+        .parse::<u32>()
+        .ok()
+        .filter(|v| *v > 0)
+        .ok_or_else(|| {
+            error(
+                6,
+                "El límite de contexto debe ser un número entero mayor que cero.",
+            )
+        })?;
+    Ok(valor)
 }
 
 #[cfg(test)]
@@ -424,5 +446,13 @@ mod pruebas {
             err.mensaje,
             "La URL de la voz debe empezar por https:// o http://."
         );
+    }
+
+    #[test]
+    fn valida_limite_contexto() {
+        assert_eq!(validar_limite_contexto("").unwrap(), 60_000);
+        assert_eq!(validar_limite_contexto("  12000 ").unwrap(), 12_000);
+        assert_eq!(validar_limite_contexto("0").unwrap_err().campo, 6);
+        assert_eq!(validar_limite_contexto("abc").unwrap_err().campo, 6);
     }
 }

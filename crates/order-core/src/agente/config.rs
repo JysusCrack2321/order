@@ -190,6 +190,13 @@ impl Voz {
     }
 }
 
+/// Límite de contexto por defecto en tokens aproximados antes de compactar.
+pub const LIMITE_CONTEXTO_POR_DEFECTO: u32 = 60_000;
+
+fn limite_contexto_defecto() -> u32 {
+    LIMITE_CONTEXTO_POR_DEFECTO
+}
+
 /// Lo que se guarda en `agente.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -199,6 +206,8 @@ pub struct AgenteConfig {
     pub modelo: String,
     pub api_key: String,
     pub ve_imagenes: bool,
+    #[serde(default = "limite_contexto_defecto")]
+    pub limite_contexto_tokens: u32,
     pub voz: Voz,
 }
 
@@ -211,6 +220,7 @@ impl Default for AgenteConfig {
             modelo: modelo.to_string(),
             api_key: String::new(),
             ve_imagenes: false,
+            limite_contexto_tokens: LIMITE_CONTEXTO_POR_DEFECTO,
             voz: Voz::default(),
         }
     }
@@ -393,6 +403,7 @@ mod pruebas {
             modelo: "gemini-flash-latest".into(),
             api_key: "clave de prueba".into(),
             ve_imagenes: false,
+            limite_contexto_tokens: 45_000,
             voz: Voz {
                 proveedor: VozProveedor::Groq,
                 url_base: "https://api.groq.com/openai/v1".into(),
