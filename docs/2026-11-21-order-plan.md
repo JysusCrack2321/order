@@ -81,6 +81,16 @@ Claves TOML: `[ajustes]`, `[semestre]`, `[[clase]]`, `[[tarea]]`, `[[recordatori
 - [ ] Implementar `modelo.rs`. `cargo test` → pasa.
 - [ ] Commit `feat: modelo de datos`.
 
+### Tarea 1b: Advertencias por claves desconocidas
+
+**Archivos:** modificar `src/modelo.rs`.
+
+**Interfaces producidas:** `pub fn advertencias(texto: &str) -> Vec<ErrorDatos>` (no cambia `parsear`). Devuelve una entrada por cada clave que el modelo no conoce, con línea y mensaje del tipo `clave desconocida "titlo" en [[tarea]]`. Las advertencias **no bloquean**: los datos se cargan igual. La UI (Tarea 6) las muestra en un banner amarillo, distinto del rojo de error.
+
+- [ ] Pruebas que fallan: `advierte_clave_mal_escrita` (`titlo = "x"` en la línea 3 de un `[[tarea]]` → 1 advertencia con `linea == Some(3)` y el mensaje contiene `titlo`); `ejemplo_sin_advertencias` (`advertencias(include_str!("../ejemplo.toml"))` está vacío).
+- [ ] Implementar (p. ej. con `serde_ignored` o comparando contra las claves conocidas). `cargo test` → pasa.
+- [ ] Commit `feat: advertencias por claves desconocidas`.
+
 ### Tarea 2: Almacén (lectura/escritura segura)
 
 **Archivos:** crear `src/almacen.rs`.
@@ -190,7 +200,7 @@ Claves: `t:{id}:dia:{fecha de vence}`, `t:{id}:horas:{fecha de vence}`, `r:{id}:
 **Archivos:** crear `ui/tema.slint`, `ui/app.slint`, `ui/semana.slint`, `ui/pendientes.slint`, `ui/fuentes/`, `build.rs`, `src/puente.rs`; modificar `src/main.rs`.
 
 **Interfaces consumidas:** `Almacen::cargar`, `semana::{semana, pendientes, lunes_de, vencida}`.
-**Interfaces producidas:** `puente::mostrar_ventana()` crea la ventana la primera vez y la muestra; `puente::refrescar(datos: &Datos)` actualiza los modelos; `puente::mostrar_error(e: Option<&ErrorDatos>)` controla el banner.
+**Interfaces producidas:** `puente::mostrar_ventana()` crea la ventana la primera vez y la muestra; `puente::refrescar(datos: &Datos)` actualiza los modelos; `puente::mostrar_error(e: Option<&ErrorDatos>)` controla el banner rojo; `puente::mostrar_advertencias(a: &[ErrorDatos])` controla el banner amarillo (Tarea 1b).
 
 - [ ] Descargar Cinzel (Google Fonts, OFL) a `ui/fuentes/` con su `OFL.txt`; importarla en `tema.slint`.
 - [ ] `tema.slint`: global `Tema` con colores (tema oscuro), espaciados, tamaños de letra y familia. Ningún color fuera de este archivo.

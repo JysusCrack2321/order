@@ -141,6 +141,8 @@ Skill nueva de Hermes (p. ej. `order-tareas`, en `~/.hermes/skills/`) que explic
 
 ## 7. Previsto para después (no construir, pero no cerrar la puerta)
 - **Cuadro del agente:** toda creación de tareas pasa por una única función (p. ej. `agregar_tarea`) que hoy usa el formulario; el cuadro de texto futuro llamará a DeepSeek (key en `~/.hermes/.env`), mostrará la tarea propuesta para confirmar y usará esa misma función.
+- **App de teléfono + sincronización** (decisión del usuario, 2026-11-21): sincronizar `~/.config/order/` con **Syncthing**, usando la **Orange Pi** (siempre encendida) como tercer nodo para que portátil y celular no tengan que coincidir encendidos. Sin nube ni cuentas. Supabase se consideró y se descartó por ahora (nube, cuenta, BD y el TOML dejaría de ser la fuente); si se retoma, solo se reemplaza `src/almacen.rs`.
+- **Archivo compartido con la pareja** (decisión del usuario, 2026-11-21): un segundo archivo `compartido.toml`, en su propia carpeta de Syncthing compartida solo con ella vía la Orange Pi (ella no necesita Pi; solo Syncthing o la futura app). ORDER muestra lo propio más lo compartido con una etiqueta, y ambos pueden editar lo compartido. El `order.toml` personal nunca se comparte. Es una fuente editable, de la misma familia que las fuentes `.ics` de abajo.
 - **Fuentes `.ics`:** sección `[[fuente]]` en el TOML con `nombre` y `url`; sus tareas se muestran con etiqueta, solo lectura. El modelo interno de tarea debería admitir un campo de origen.
 
 ## 8. Restricciones
@@ -157,3 +159,10 @@ El plan de implementación se corta en encargos pequeños e independientes para 
 - Paleta concreta del tema oscuro (Cinzel para títulos y cuerpo legible; si Cinzel en tamaño pequeño no se lee bien, usar otra fuente solo para texto pequeño y avisar).
 - Frecuencia del reloj de avisos.
 - Formato del `id` de tarea.
+
+## 11. Cambios tras la primera prueba del usuario (2026-11-21)
+1. La ventana debe redimensionarse bien: el contenido llena todo el tamaño de la ventana (hoy queda fijo arriba a la izquierda).
+2. Una clase puede repetirse en **varios días** (misma materia, hora y lugar). En el TOML: `dias = ["lun", "mie"]`; se sigue aceptando el `dia = "lun"` antiguo.
+3. Nuevas vistas: **Inicio** (resumen, pestaña por defecto), **Día** (un día con sus clases, tareas y recordatorios, navegable ‹ › y "Hoy") además de **Semana** y **Pendientes**.
+4. Las tareas **hechas siguen visibles** (tachadas) en Pendientes, con un interruptor para mostrarlas u ocultarlas. El archivado a `historial.toml` a los 30 días se mantiene.
+5. **Filtros en Pendientes**: por materia, por fecha/rango (hoy, esta semana, rango) y por hora de entrega; combinables.

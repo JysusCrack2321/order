@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ORDER
+Comment=Horario, tareas y recordatorios del semestre
+Exec=/home/jysusman/.cargo/bin/order
+Icon=view-calendar
+Terminal=false
+Categories=Utility;Office;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+NoDisplay=false
