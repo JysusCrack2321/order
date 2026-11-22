@@ -3,4 +3,5 @@ resolver = "3"
 members = [
     "crates/order-core",
     "crates/order-escritorio",
+    "crates/order-ffi",
 ]
