@@ -132,7 +132,8 @@ fn dia_completo(datos: &Datos, fecha: NaiveDate) -> DiaVista {
     }
 }
 
-/// Los recordatorios que tocan en una fecha, por hora.
+/// Los recordatorios que tocan en una fecha, por hora y, a la misma hora, por
+/// texto: el orden no depende de cómo estén escritos en el archivo.
 pub fn recordatorios_de(datos: &Datos, fecha: NaiveDate) -> Vec<RecordatorioVisto> {
     let dia = dia_de(fecha);
     let mut lista: Vec<RecordatorioVisto> = datos
@@ -146,32 +147,42 @@ pub fn recordatorios_de(datos: &Datos, fecha: NaiveDate) -> Vec<RecordatorioVist
             hora: recordatorio.hora,
         })
         .collect();
-    lista.sort_by_key(|recordatorio| recordatorio.hora);
+    lista.sort_by(|a, b| a.hora.cmp(&b.hora).then(a.texto.cmp(&b.texto)));
     lista
 }
 
-/// Los `cuantos` recordatorios que vienen después de `ahora`, en orden. Se
-/// buscan en los próximos ocho días: con uno por semana basta para tener
-/// siempre alguno si hay recordatorios.
+/// Los `cuantos` recordatorios que vienen después de `ahora`, en orden y con
+/// cada recordatorio **una sola vez**: aparece solo su próxima ocurrencia. Un
+/// "Revisar Moodle" de lunes a viernes sale una vez, no cinco, y el orden es
+/// el de la ocurrencia que toca (el de hoy antes que el de mañana). Se buscan
+/// en los próximos ocho días: con uno por semana basta para tener siempre
+/// alguno si hay recordatorios.
 pub fn proximos_recordatorios(
     datos: &Datos,
     ahora: NaiveDateTime,
     cuantos: usize,
 ) -> Vec<RecordatorioVisto> {
-    let mut lista = Vec::new();
+    let mut lista: Vec<RecordatorioVisto> = Vec::new();
     for adelanto in 0..8 {
         let fecha = ahora.date() + Days::new(adelanto);
         for recordatorio in recordatorios_de(datos, fecha) {
             if fecha.and_time(recordatorio.hora) <= ahora {
                 continue;
             }
+            // Ya sale más arriba con una ocurrencia anterior: no se repite.
+            let repetido = lista.iter().any(|visto| {
+                (!visto.id.is_empty() && visto.id == recordatorio.id)
+                    || (visto.id.is_empty() && visto.texto == recordatorio.texto)
+            });
+            if repetido {
+                continue;
+            }
             lista.push(recordatorio);
-        }
-        if lista.len() >= cuantos {
-            break;
+            if lista.len() >= cuantos {
+                return lista;
+            }
         }
     }
-    lista.truncate(cuantos);
     lista
 }
 
@@ -606,21 +617,70 @@ mod pruebas {
         assert_eq!(jueves.bloques[0].materia, "Robótica");
     }
 
-    /// Los próximos recordatorios salen en orden y sin pasados.
+    /// Los próximos recordatorios salen en orden, sin pasados y con cada uno
+    /// una sola vez: solo su próxima ocurrencia.
     #[test]
     fn proximos_recordatorios_en_orden() {
         let (d, ahora) = miércoles(8, 0);
         let lista = proximos_recordatorios(&d, ahora, 5);
         assert_eq!(
             lista.iter().map(|r| r.texto.as_str()).collect::<Vec<_>>(),
-            vec!["Revisar Moodle", "Revisar Classroom", "Revisar Moodle"],
-            "miércoles 18:00, lunes 9:00 y el miércoles siguiente"
+            vec!["Revisar Moodle", "Revisar Classroom"],
+            "miércoles 18:00 y lunes 9:00; el miércoles siguiente no repite Moodle"
         );
+        assert_eq!(lista[0].fecha, fecha(2026, 11, 25), "primero el de hoy");
+        assert_eq!(lista[1].fecha, fecha(2026, 11, 30), "después el del lunes");
         assert_eq!(proximos_recordatorios(&d, ahora, 1).len(), 1, "respeta el tope");
 
         // Después de la hora del recordatorio de hoy, el de hoy ya no cuenta.
         let tarde = proximos_recordatorios(&d, momento(2026, 11, 25, 19, 0), 1);
         assert_eq!(tarde[0].texto, "Revisar Classroom");
+    }
+
+    /// Un recordatorio de lunes a viernes aparece una sola vez, con la
+    /// ocurrencia que viene antes; pasada esa hora, con la del día siguiente.
+    #[test]
+    fn recordatorio_repetido_aparece_una_vez() {
+        let mut d = datos(Vec::new(), Vec::new(), None);
+        d.recordatorios = vec![recordatorio(
+            "Revisar Moodle",
+            &[Dia::Lun, Dia::Mar, Dia::Mie, Dia::Jue, Dia::Vie],
+            18,
+            0,
+        )];
+
+        // Miércoles 25-nov-2026, 8:00: la próxima es hoy a las 18:00.
+        let lista = proximos_recordatorios(&d, momento(2026, 11, 25, 8, 0), 5);
+        assert_eq!(lista.len(), 1, "no se repite aunque toque cinco días");
+        assert_eq!(lista[0].texto, "Revisar Moodle");
+        assert_eq!(lista[0].fecha, fecha(2026, 11, 25));
+
+        // Pasadas las 18:00 de hoy, la próxima ocurrencia es mañana.
+        let tarde = proximos_recordatorios(&d, momento(2026, 11, 25, 19, 0), 5);
+        assert_eq!(tarde.len(), 1);
+        assert_eq!(tarde[0].fecha, fecha(2026, 11, 26));
+
+        // En Inicio también sale una sola vez.
+        let resumen = inicio(&d, momento(2026, 11, 25, 8, 0));
+        assert_eq!(resumen.recordatorios.len(), 1);
+        assert_eq!(resumen.recordatorios[0].texto, "Revisar Moodle");
+    }
+
+    /// Dos recordatorios a la misma hora salen ordenados por su texto, uno
+    /// junto al otro, sin desaparecer ninguno.
+    #[test]
+    fn recordatorios_distintos_a_la_misma_hora() {
+        let mut d = datos(Vec::new(), Vec::new(), None);
+        d.recordatorios = vec![
+            recordatorio("Revisar Moodle", &[Dia::Mie], 18, 0),
+            recordatorio("Revisar Classroom", &[Dia::Mie], 18, 0),
+        ];
+        let lista = proximos_recordatorios(&d, momento(2026, 11, 25, 8, 0), 5);
+        assert_eq!(
+            lista.iter().map(|r| r.texto.as_str()).collect::<Vec<_>>(),
+            vec!["Revisar Classroom", "Revisar Moodle"],
+            "mismo momento: manda el orden de la hora, luego el texto"
+        );
     }
 
     #[test]

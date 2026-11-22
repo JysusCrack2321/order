@@ -1817,33 +1817,14 @@ fn pie(datos: &Datos, pendientes: usize, ahora: NaiveDateTime) -> String {
     texto
 }
 
-/// El próximo recordatorio que toca, buscando en los próximos ocho días.
+/// El próximo recordatorio que toca, buscando en los próximos ocho días. Sale
+/// de la misma lista sin repetidos que la pestaña Inicio, así que el pie dice
+/// siempre el que viene antes, y una sola vez aunque el recordatorio sea diario.
 fn proximo_recordatorio(datos: &Datos, ahora: NaiveDateTime) -> Option<(String, NaiveDateTime)> {
-    let mut mejor: Option<(&Recordatorio, NaiveDateTime)> = None;
-    for adelanto in 0..8 {
-        let fecha = ahora.date() + TimeDelta::days(adelanto);
-        let dia = dia_de(fecha.weekday());
-        for recordatorio in &datos.recordatorios {
-            if !recordatorio.dias.contains(&dia) {
-                continue;
-            }
-            let Some(candidato) =
-                fecha.and_hms_opt(recordatorio.hora.hour(), recordatorio.hora.minute(), 0)
-            else {
-                continue;
-            };
-            if candidato <= ahora {
-                continue;
-            }
-            if mejor
-                .as_ref()
-                .is_none_or(|(_, momento)| candidato < *momento)
-            {
-                mejor = Some((recordatorio, candidato));
-            }
-        }
-    }
-    mejor.map(|(recordatorio, momento)| (recordatorio.texto.clone(), momento))
+    let proximo = semana::proximos_recordatorios(datos, ahora, 1)
+        .into_iter()
+        .next()?;
+    Some((proximo.texto, proximo.fecha.and_time(proximo.hora)))
 }
 
 fn dia_de(dia: Weekday) -> Dia {
@@ -2042,6 +2023,28 @@ mod pruebas {
         assert_eq!(
             pie(&datos(), 1, momento(2026, 11, 20, 10, 0)),
             "Hoy: 1 tarea pendiente"
+        );
+    }
+
+    /// El pie enseña el próximo recordatorio una sola vez, aunque sea diario.
+    #[test]
+    fn el_pie_no_repite_recordatorios() {
+        let mut d = datos();
+        d.recordatorios.push(Recordatorio {
+            id: "r-moodle".into(),
+            texto: "Revisar Moodle".into(),
+            dias: vec![Dia::Lun, Dia::Mar, Dia::Mie, Dia::Jue, Dia::Vie],
+            hora: NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
+        });
+        // Viernes 20-nov-2026, 17:00: el de hoy a las 18:00.
+        assert_eq!(
+            pie(&d, 0, momento(2026, 11, 20, 17, 0)),
+            "Hoy: sin tareas pendientes · Revisar Moodle 18:00"
+        );
+        // Pasadas las 18:00, el lunes a la misma hora: una sola vez.
+        assert_eq!(
+            pie(&d, 0, momento(2026, 11, 20, 19, 0)),
+            "Hoy: sin tareas pendientes · Revisar Moodle lun 18:00"
         );
     }
 
