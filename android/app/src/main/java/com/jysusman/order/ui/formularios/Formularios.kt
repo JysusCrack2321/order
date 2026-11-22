@@ -72,6 +72,7 @@ sealed interface FormularioActivo {
     data object Agente : FormularioActivo
     data object Moodle : FormularioActivo
     data object Calendarios : FormularioActivo
+    data object Dispositivos : FormularioActivo
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -127,6 +128,7 @@ fun ContenedorFormularioSheet(
                 alAbrirAgente = { alAbrirFormulario(FormularioActivo.Agente) },
                 alAbrirMoodle = { alAbrirFormulario(FormularioActivo.Moodle) },
                 alAbrirCalendarios = { alAbrirFormulario(FormularioActivo.Calendarios) },
+                alAbrirDispositivos = { alAbrirFormulario(FormularioActivo.Dispositivos) },
                 alNuevoRecordatorio = {
                     alAbrirFormulario(FormularioActivo.Recordatorio(id = null, volverAjustes = true))
                 },
@@ -149,6 +151,11 @@ fun ContenedorFormularioSheet(
             FormularioActivo.Calendarios -> HojaCalendarios(
                 repositorio = repositorio,
                 materias = materias,
+                alVolver = { alAbrirFormulario(FormularioActivo.Ajustes) },
+            )
+
+            FormularioActivo.Dispositivos -> HojaDispositivos(
+                repositorio = repositorio,
                 alVolver = { alAbrirFormulario(FormularioActivo.Ajustes) },
             )
         }
@@ -642,6 +649,7 @@ private fun HojaAjustes(
     alAbrirAgente: () -> Unit,
     alAbrirMoodle: () -> Unit,
     alAbrirCalendarios: () -> Unit,
+    alAbrirDispositivos: () -> Unit,
     alNuevoRecordatorio: () -> Unit,
     alEditarRecordatorio: (String) -> Unit,
     alCerrar: () -> Unit,
@@ -916,6 +924,19 @@ private fun HojaAjustes(
         ) {
             Text(
                 text = "Calendarios…",
+                fontSize = OrderTema.TamanoPequeno,
+                color = OrderTema.Texto,
+            )
+        }
+
+        OutlinedButton(
+            onClick = alAbrirDispositivos,
+            shape = RoundedCornerShape(OrderTema.Radio),
+            border = BorderStroke(OrderTema.Linea, OrderTema.Borde),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = "Dispositivos…",
                 fontSize = OrderTema.TamanoPequeno,
                 color = OrderTema.Texto,
             )

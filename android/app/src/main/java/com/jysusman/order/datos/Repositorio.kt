@@ -12,9 +12,11 @@ import com.jysusman.order.ffi.AvisoFfi
 import com.jysusman.order.ffi.CalendarioMesFfi
 import com.jysusman.order.ffi.CalendarioVistaFfi
 import com.jysusman.order.ffi.ClaseFormFfi
+import com.jysusman.order.ffi.CodigoEmparejamientoFfi
 import com.jysusman.order.ffi.ConflictoFfi
 import com.jysusman.order.ffi.DiaFfi
 import com.jysusman.order.ffi.DiaVistaFfi
+import com.jysusman.order.ffi.DispositivoSyncFfi
 import com.jysusman.order.ffi.ErrorFfi
 import com.jysusman.order.ffi.EstadoConexionFfi
 import com.jysusman.order.ffi.EstadoMoodleFfi
@@ -32,11 +34,14 @@ import com.jysusman.order.ffi.TextosConexionAgenteFfi
 import com.jysusman.order.ffi.TipoFechaFfi
 import com.jysusman.order.ffi.VozProveedorInfoFfi
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -97,6 +102,14 @@ data class EstadoOrder(
     val calendariosAviso: String = "",
     val calendariosError: String = "",
     val icalOfertaPortapapeles: String? = null,
+    val p2pActivo: Boolean = false,
+    val p2pNombre: String = "",
+    val p2pSincronizando: Boolean = false,
+    val p2pOcupado: Boolean = false,
+    val p2pDispositivos: List<DispositivoSyncFfi> = emptyList(),
+    val p2pCodigo: CodigoEmparejamientoFfi? = null,
+    val p2pAviso: String = "",
+    val p2pError: String = "",
 )
 
 /**
@@ -113,10 +126,15 @@ class Repositorio(
     private val rutaConfigAgente: String = "",
     private val rutaConfigMoodle: String = "",
     private val rutaConfigCalendarios: String = "",
+    private val rutaConfigSync: String = "",
     private val onDatosActualizados: () -> Unit = {},
     procesadorAdjuntos: ProcesadorPlataforma? = null,
 ) {
     private val mutex = Mutex()
+    private val mutexP2p = Mutex()
+    private val scopeP2p = CoroutineScope(SupervisorJob() + dispatcherIo)
+    private var ultimaSecuenciaP2p: ULong = 0uL
+    private var conteoAlGenerarCodigoP2p: Int = 0
     private val preparadorAdjuntos = procesadorAdjuntos?.let { PreparadorAdjuntos(puente, it) }
     private val ofertasIcalDescartadas = mutableSetOf<String>()
 
@@ -283,6 +301,7 @@ class Repositorio(
             }
         }
         recargar()
+        dispararSyncTrasCambioLocal()
     }
 
     // --- Navegación de Día y Semana ----------------------------------------
@@ -1398,15 +1417,296 @@ class Repositorio(
                     },
                 )
             }
-        }.onFailure { err ->
+            }.onFailure { err ->
+                _estado.update {
+                    it.copy(
+                        calendarios = nuevaLista ?: it.calendarios,
+                        calendariosOcupado = false,
+                        calendariosAviso = if (silencioso) it.calendariosAviso else "",
+                        calendariosError = if (silencioso) it.calendariosError else mensajeDeError(err),
+                    )
+                }
+            }
+    }
+
+    // --- Sincronización P2P (iroh) -----------------------------------------
+
+    suspend fun iniciarSincronizacionP2p() {
+        if (rutaConfigSync.isBlank()) return
+        val rutaDatos = _estado.value.rutaArchivo
+        if (rutaDatos.isBlank()) return
+
+        val inicio = withContext(dispatcherIo) {
+            runCatching {
+                puente.syncIniciar(rutaDatos, rutaConfigSync)
+                val est = puente.syncEstado()
+                val lista = puente.syncDispositivos()
+                est to lista
+            }
+        }
+        inicio.onSuccess { (est, lista) ->
+            ultimaSecuenciaP2p = est.secuenciaCambio
             _estado.update {
                 it.copy(
-                    calendarios = nuevaLista ?: it.calendarios,
-                    calendariosOcupado = false,
-                    calendariosAviso = if (silencioso) it.calendariosAviso else "",
-                    calendariosError = if (silencioso) it.calendariosError else mensajeDeError(err),
+                    p2pActivo = est.activo,
+                    p2pNombre = est.nombre,
+                    p2pSincronizando = est.sincronizando,
+                    p2pDispositivos = lista,
+                    p2pError = "",
                 )
             }
+            if (lista.isNotEmpty()) {
+                sincronizarP2p(silencioso = true)
+            }
+        }.onFailure { err ->
+            _estado.update { it.copy(p2pError = mensajeDeError(err)) }
+        }
+    }
+
+    fun detenerSincronizacionP2p() {
+        if (rutaConfigSync.isBlank()) return
+        runCatching { puente.syncDetener() }
+        _estado.update { it.copy(p2pActivo = false, p2pSincronizando = false) }
+    }
+
+    suspend fun verificarCambiosRemotosP2p() {
+        if (rutaConfigSync.isBlank() || !_estado.value.p2pActivo) return
+        val lectura = withContext(dispatcherIo) {
+            runCatching {
+                val est = puente.syncEstado()
+                val lista = puente.syncDispositivos()
+                est to lista
+            }
+        }.getOrNull() ?: return
+
+        val (est, lista) = lectura
+        val secuenciaNueva = est.secuenciaCambio > ultimaSecuenciaP2p
+        if (secuenciaNueva) {
+            ultimaSecuenciaP2p = est.secuenciaCambio
+            recargar()
+        }
+        val codigoAbierto = _estado.value.p2pCodigo != null
+        val emparejoNuevo = codigoAbierto && lista.size > conteoAlGenerarCodigoP2p
+        _estado.update {
+            it.copy(
+                p2pNombre = est.nombre,
+                p2pSincronizando = est.sincronizando || it.p2pOcupado,
+                p2pDispositivos = lista,
+                p2pCodigo = if (emparejoNuevo) null else it.p2pCodigo,
+                p2pAviso = if (emparejoNuevo) "Dispositivo emparejado y listo." else it.p2pAviso,
+            )
+        }
+    }
+
+    suspend fun refrescarDispositivosP2p() {
+        if (rutaConfigSync.isBlank()) return
+        val lectura = withContext(dispatcherIo) {
+            runCatching {
+                puente.syncEstado() to puente.syncDispositivos()
+            }
+        }.getOrNull() ?: return
+        _estado.update {
+            it.copy(
+                p2pActivo = lectura.first.activo,
+                p2pNombre = lectura.first.nombre,
+                p2pSincronizando = lectura.first.sincronizando,
+                p2pDispositivos = lectura.second,
+            )
+        }
+    }
+
+    suspend fun cambiarNombreDispositivoP2p(nombre: String) {
+        if (rutaConfigSync.isBlank()) return
+        val res = withContext(dispatcherIo) {
+            runCatching {
+                puente.syncNombre(nombre)
+                puente.syncEstado()
+            }
+        }
+        res.onSuccess { est ->
+            _estado.update {
+                it.copy(
+                    p2pNombre = est.nombre,
+                    p2pError = "",
+                    p2pAviso = "Nombre actualizado.",
+                )
+            }
+        }.onFailure { err ->
+            _estado.update { it.copy(p2pError = mensajeDeError(err)) }
+        }
+    }
+
+    suspend fun generarCodigoEmparejamientoP2p() {
+        if (rutaConfigSync.isBlank()) return
+        if (!_estado.value.p2pActivo) {
+            iniciarSincronizacionP2p()
+        }
+        val res = withContext(dispatcherIo) {
+            runCatching {
+                val lista = puente.syncDispositivos()
+                val codigo = puente.syncCodigoEmparejamiento()
+                lista.size to codigo
+            }
+        }
+        res.onSuccess { (conteo, codigo) ->
+            conteoAlGenerarCodigoP2p = conteo
+            _estado.update {
+                it.copy(
+                    p2pCodigo = codigo,
+                    p2pError = "",
+                    p2pAviso = "",
+                )
+            }
+        }.onFailure { err ->
+            _estado.update { it.copy(p2pError = mensajeDeError(err)) }
+        }
+    }
+
+    fun cerrarCodigoEmparejamientoP2p() {
+        _estado.update { it.copy(p2pCodigo = null) }
+    }
+
+    fun anotarErrorP2p(mensaje: String) {
+        _estado.update { it.copy(p2pError = mensaje) }
+    }
+
+    suspend fun emparejarP2p(enlaceOPalabras: String): Boolean {
+        if (rutaConfigSync.isBlank() || _estado.value.p2pOcupado) return false
+        if (!_estado.value.p2pActivo) {
+            iniciarSincronizacionP2p()
+        }
+        _estado.update {
+            it.copy(
+                p2pOcupado = true,
+                p2pSincronizando = true,
+                p2pError = "",
+                p2pAviso = "Conectando con el dispositivo…",
+            )
+        }
+        val res = withContext(dispatcherIo) {
+            runCatching {
+                val disp = puente.syncEmparejar(enlaceOPalabras)
+                val lista = puente.syncDispositivos()
+                val est = puente.syncEstado()
+                Triple(disp, lista, est)
+            }
+        }
+        return res.fold(
+            onSuccess = { (disp, lista, est) ->
+                ultimaSecuenciaP2p = est.secuenciaCambio
+                recargar()
+                _estado.update {
+                    it.copy(
+                        p2pOcupado = false,
+                        p2pSincronizando = false,
+                        p2pDispositivos = lista,
+                        p2pCodigo = null,
+                        p2pError = "",
+                        p2pAviso = "Emparejado con ${disp.nombre}.",
+                    )
+                }
+                true
+            },
+            onFailure = { err ->
+                _estado.update {
+                    it.copy(
+                        p2pOcupado = false,
+                        p2pSincronizando = false,
+                        p2pAviso = "",
+                        p2pError = mensajeDeError(err),
+                    )
+                }
+                false
+            },
+        )
+    }
+
+    suspend fun quitarDispositivoP2p(id: String) {
+        if (rutaConfigSync.isBlank() || _estado.value.p2pOcupado) return
+        val res = withContext(dispatcherIo) {
+            runCatching {
+                puente.syncQuitar(id)
+                puente.syncDispositivos()
+            }
+        }
+        res.onSuccess { lista ->
+            _estado.update {
+                it.copy(
+                    p2pDispositivos = lista,
+                    p2pError = "",
+                    p2pAviso = "Dispositivo quitado.",
+                )
+            }
+        }.onFailure { err ->
+            _estado.update { it.copy(p2pError = mensajeDeError(err)) }
+        }
+    }
+
+    suspend fun sincronizarP2p(silencioso: Boolean = false) {
+        if (rutaConfigSync.isBlank() || !_estado.value.p2pActivo) return
+        mutexP2p.withLock {
+            val dispositivosActuales = _estado.value.p2pDispositivos
+            if (dispositivosActuales.isEmpty()) {
+                if (!silencioso) {
+                    _estado.update { it.copy(p2pAviso = "No hay dispositivos emparejados.", p2pError = "") }
+                }
+                return
+            }
+            _estado.update {
+                it.copy(
+                    p2pSincronizando = true,
+                    p2pOcupado = !silencioso,
+                    p2pError = if (silencioso) it.p2pError else "",
+                    p2pAviso = if (silencioso) it.p2pAviso else "Sincronizando con dispositivos…",
+                )
+            }
+            val res = withContext(dispatcherIo) {
+                runCatching {
+                    val resumen = puente.syncAhora()
+                    val lista = puente.syncDispositivos()
+                    val est = puente.syncEstado()
+                    Triple(resumen, lista, est)
+                }
+            }
+            res.onSuccess { (resumen, lista, est) ->
+                ultimaSecuenciaP2p = est.secuenciaCambio
+                if (resumen.cambiosLocales) {
+                    recargar()
+                }
+                _estado.update {
+                    it.copy(
+                        p2pSincronizando = false,
+                        p2pOcupado = false,
+                        p2pDispositivos = lista,
+                        p2pAviso = if (silencioso) {
+                            it.p2pAviso
+                        } else if (resumen.exitosos == 0u) {
+                            "Sin conexión con los otros dispositivos."
+                        } else if (resumen.cambiosLocales) {
+                            "Sincronizado con ${resumen.exitosos} dispositivo(s) · agenda actualizada."
+                        } else {
+                            "Sincronizado con ${resumen.exitosos} dispositivo(s)."
+                        },
+                    )
+                }
+            }.onFailure { err ->
+                _estado.update {
+                    it.copy(
+                        p2pSincronizando = false,
+                        p2pOcupado = false,
+                        p2pError = if (silencioso) it.p2pError else mensajeDeError(err),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun dispararSyncTrasCambioLocal() {
+        if (rutaConfigSync.isBlank() || !_estado.value.p2pActivo || _estado.value.p2pDispositivos.isEmpty()) {
+            return
+        }
+        scopeP2p.launch {
+            sincronizarP2p(silencioso = true)
         }
     }
 
@@ -1446,6 +1746,7 @@ class Repositorio(
                         )
                     }
                     withContext(dispatcherIo) { onDatosActualizados() }
+                    dispararSyncTrasCambioLocal()
                     true
                 },
                 onFailure = { err ->
@@ -1491,6 +1792,7 @@ class Repositorio(
                         )
                     }
                     withContext(dispatcherIo) { onDatosActualizados() }
+                    dispararSyncTrasCambioLocal()
                     null
                 },
                 onFailure = { err ->

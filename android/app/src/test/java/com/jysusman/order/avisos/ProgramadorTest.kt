@@ -10,10 +10,13 @@ import com.jysusman.order.ffi.AvisoProgramableFfi
 import com.jysusman.order.ffi.CalendarioMesFfi
 import com.jysusman.order.ffi.CalendarioVistaFfi
 import com.jysusman.order.ffi.ClaseFormFfi
+import com.jysusman.order.ffi.CodigoEmparejamientoFfi
 import com.jysusman.order.ffi.ConflictoFfi
 import com.jysusman.order.ffi.DiaFfi
 import com.jysusman.order.ffi.DiaVistaFfi
+import com.jysusman.order.ffi.DispositivoSyncFfi
 import com.jysusman.order.ffi.EstadoMoodleFfi
+import com.jysusman.order.ffi.EstadoSyncFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
@@ -27,6 +30,7 @@ import com.jysusman.order.ffi.ResultadoAplicarTodasFfi
 import com.jysusman.order.ffi.ResultadoConexionFfi
 import com.jysusman.order.ffi.ResumenArchivoFfi
 import com.jysusman.order.ffi.ResumenSyncFfi
+import com.jysusman.order.ffi.ResumenSyncP2pFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ffi.TareaFormFfi
 import com.jysusman.order.ffi.TextosConexionAgenteFfi
@@ -237,4 +241,13 @@ private class FakePuenteAvisos(
     override fun calendarioAgregar(rutaConfig: String, url: String, nombre: String, materia: String): CalendarioVistaFfi = throw UnsupportedOperationException()
     override fun calendarioQuitar(rutaConfig: String, id: String) {}
     override fun calendariosSincronizar(rutaDatos: String, rutaConfig: String): ResumenSyncFfi = ResumenSyncFfi(0u, 0u, 0u)
+    override fun syncIniciar(rutaDatos: String, rutaConfig: String) {}
+    override fun syncDetener() {}
+    override fun syncCodigoEmparejamiento(): CodigoEmparejamientoFfi = throw UnsupportedOperationException()
+    override fun syncEmparejar(enlaceOPalabras: String): DispositivoSyncFfi = throw UnsupportedOperationException()
+    override fun syncDispositivos(): List<DispositivoSyncFfi> = emptyList()
+    override fun syncQuitar(id: String) {}
+    override fun syncAhora(): ResumenSyncP2pFfi = ResumenSyncP2pFfi(0u, 0u, false, emptyList())
+    override fun syncEstado(): EstadoSyncFfi = EstadoSyncFfi(false, "", "", false, 0uL, 0u, "")
+    override fun syncNombre(nombre: String) {}
 }

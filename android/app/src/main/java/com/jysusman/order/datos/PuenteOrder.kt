@@ -10,10 +10,13 @@ import com.jysusman.order.ffi.AvisoProgramableFfi
 import com.jysusman.order.ffi.CalendarioMesFfi
 import com.jysusman.order.ffi.CalendarioVistaFfi
 import com.jysusman.order.ffi.ClaseFormFfi
+import com.jysusman.order.ffi.CodigoEmparejamientoFfi
 import com.jysusman.order.ffi.ConflictoFfi
 import com.jysusman.order.ffi.DiaFfi
 import com.jysusman.order.ffi.DiaVistaFfi
+import com.jysusman.order.ffi.DispositivoSyncFfi
 import com.jysusman.order.ffi.EstadoMoodleFfi
+import com.jysusman.order.ffi.EstadoSyncFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
@@ -27,6 +30,7 @@ import com.jysusman.order.ffi.ResultadoAplicarTodasFfi
 import com.jysusman.order.ffi.ResultadoConexionFfi
 import com.jysusman.order.ffi.ResumenArchivoFfi
 import com.jysusman.order.ffi.ResumenSyncFfi
+import com.jysusman.order.ffi.ResumenSyncP2pFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ffi.TareaFormFfi
 import com.jysusman.order.ffi.TextosConexionAgenteFfi
@@ -187,6 +191,16 @@ interface PuenteOrder {
 
     fun calendarioQuitar(rutaConfig: String, id: String)
     fun calendariosSincronizar(rutaDatos: String, rutaConfig: String): ResumenSyncFfi
+
+    fun syncIniciar(rutaDatos: String, rutaConfig: String)
+    fun syncDetener()
+    fun syncCodigoEmparejamiento(): CodigoEmparejamientoFfi
+    fun syncEmparejar(enlaceOPalabras: String): DispositivoSyncFfi
+    fun syncDispositivos(): List<DispositivoSyncFfi>
+    fun syncQuitar(id: String)
+    fun syncAhora(): ResumenSyncP2pFfi
+    fun syncEstado(): EstadoSyncFfi
+    fun syncNombre(nombre: String)
 }
 
 class PuenteOrderNativo : PuenteOrder {
@@ -457,4 +471,31 @@ class PuenteOrderNativo : PuenteOrder {
 
     override fun calendariosSincronizar(rutaDatos: String, rutaConfig: String): ResumenSyncFfi =
         com.jysusman.order.ffi.calendariosSincronizar(rutaDatos, rutaConfig)
+
+    override fun syncIniciar(rutaDatos: String, rutaConfig: String) =
+        com.jysusman.order.ffi.syncIniciar(rutaDatos, rutaConfig)
+
+    override fun syncDetener() =
+        com.jysusman.order.ffi.syncDetener()
+
+    override fun syncCodigoEmparejamiento(): CodigoEmparejamientoFfi =
+        com.jysusman.order.ffi.syncCodigoEmparejamiento()
+
+    override fun syncEmparejar(enlaceOPalabras: String): DispositivoSyncFfi =
+        com.jysusman.order.ffi.syncEmparejar(enlaceOPalabras)
+
+    override fun syncDispositivos(): List<DispositivoSyncFfi> =
+        com.jysusman.order.ffi.syncDispositivos()
+
+    override fun syncQuitar(id: String) =
+        com.jysusman.order.ffi.syncQuitar(id)
+
+    override fun syncAhora(): ResumenSyncP2pFfi =
+        com.jysusman.order.ffi.syncAhora()
+
+    override fun syncEstado(): EstadoSyncFfi =
+        com.jysusman.order.ffi.syncEstado()
+
+    override fun syncNombre(nombre: String) =
+        com.jysusman.order.ffi.syncNombre(nombre)
 }

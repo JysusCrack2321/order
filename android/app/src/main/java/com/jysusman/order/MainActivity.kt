@@ -130,6 +130,7 @@ class MainActivity : ComponentActivity() {
             rutaConfigAgente = RutasPrivadas.archivoAgenteConfig(applicationContext),
             rutaConfigMoodle = RutasPrivadas.archivoMoodleConfig(applicationContext),
             rutaConfigCalendarios = RutasPrivadas.archivoCalendariosConfig(applicationContext),
+            rutaConfigSync = RutasPrivadas.archivoSyncConfig(applicationContext),
             onDatosActualizados = { programador.reprogramar() },
             procesadorAdjuntos = ProcesadorAndroid(applicationContext),
         )
@@ -362,6 +363,7 @@ private fun OrderApp(
                 if (ahoraTienePermiso) {
                     scope.launch {
                         repositorio.revisarPortapapelesIcal(leerPortapapeles(context))
+                        repositorio.sincronizarP2p(silencioso = true)
                     }
                 }
             }
@@ -384,7 +386,16 @@ private fun OrderApp(
             mostrarResumenSiToca()
             repositorio.revisarPortapapelesIcal(leerPortapapeles(context))
             repositorio.sincronizarTodoSilencioso()
+            repositorio.iniciarSincronizacionP2p()
+            while (true) {
+                delay(2000)
+                repositorio.verificarCambiosRemotosP2p()
+            }
         }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { repositorio.detenerSincronizacionP2p() }
     }
 
     // Observa la carpeta de datos cuando hay permiso.
@@ -446,12 +457,24 @@ private fun OrderApp(
                             color = OrderTema.TextoTenue,
                         )
                     }
-                    IconButton(onClick = { formularioActivo = FormularioActivo.Ajustes }) {
-                        Icon(
-                            imageVector = Icons.Outlined.Settings,
-                            contentDescription = "Ajustes",
-                            tint = OrderTema.TextoSuave,
-                        )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(OrderTema.EspacioSm),
+                    ) {
+                        if (estado.p2pSincronizando) {
+                            Text(
+                                text = "↻ Sincronizando…",
+                                fontSize = OrderTema.TamanoHora,
+                                color = OrderTema.Acento,
+                            )
+                        }
+                        IconButton(onClick = { formularioActivo = FormularioActivo.Ajustes }) {
+                            Icon(
+                                imageVector = Icons.Outlined.Settings,
+                                contentDescription = "Ajustes",
+                                tint = OrderTema.TextoSuave,
+                            )
+                        }
                     }
                 }
                 HorizontalDivider(color = OrderTema.Borde, thickness = OrderTema.Linea)

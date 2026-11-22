@@ -10,12 +10,15 @@ import com.jysusman.order.ffi.AvisoProgramableFfi
 import com.jysusman.order.ffi.CalendarioMesFfi
 import com.jysusman.order.ffi.CalendarioVistaFfi
 import com.jysusman.order.ffi.ClaseFormFfi
+import com.jysusman.order.ffi.CodigoEmparejamientoFfi
 import com.jysusman.order.ffi.ConflictoFfi
 import com.jysusman.order.ffi.DiaFfi
 import com.jysusman.order.ffi.DiaVistaFfi
+import com.jysusman.order.ffi.DispositivoSyncFfi
 import com.jysusman.order.ffi.ErrorFfi
 import com.jysusman.order.ffi.EstadoConexionFfi
 import com.jysusman.order.ffi.EstadoMoodleFfi
+import com.jysusman.order.ffi.EstadoSyncFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
@@ -29,6 +32,7 @@ import com.jysusman.order.ffi.ResultadoAplicarTodasFfi
 import com.jysusman.order.ffi.ResultadoConexionFfi
 import com.jysusman.order.ffi.ResumenArchivoFfi
 import com.jysusman.order.ffi.ResumenSyncFfi
+import com.jysusman.order.ffi.ResumenSyncP2pFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ffi.TareaFfi
 import com.jysusman.order.ffi.TareaFormFfi
@@ -427,6 +431,61 @@ class RepositorioTest {
         repo.quitarCalendario(id)
         assertTrue(repo.estado.value.calendarios.isEmpty())
     }
+
+    @Test
+    fun sincronizacionP2pEmparejaSincronizaYReprogramaAvisos() = runTest {
+        val fake = FakePuenteOrder()
+        var reprogramaciones = 0
+        val repo = Repositorio(
+            puente = fake,
+            carpetaInicial = "/tmp/order-p2p",
+            dispatcherIo = UnconfinedTestDispatcher(testScheduler),
+            asegurarCarpeta = {},
+            rutaConfigSync = "/tmp/order-p2p-priv/sync.toml",
+            onDatosActualizados = { reprogramaciones++ },
+        )
+
+        repo.cargarInicial()
+        val baseReprog = reprogramaciones
+
+        repo.iniciarSincronizacionP2p()
+        assertTrue(repo.estado.value.p2pActivo)
+        assertEquals("Teléfono", repo.estado.value.p2pNombre)
+
+        repo.cambiarNombreDispositivoP2p("Motorola Edge")
+        assertEquals("Motorola Edge", repo.estado.value.p2pNombre)
+
+        repo.generarCodigoEmparejamientoP2p()
+        val codigo = repo.estado.value.p2pCodigo
+        assertNotNull(codigo)
+        assertEquals(8, codigo!!.palabras.split(" ").size)
+        repo.cerrarCodigoEmparejamientoP2p()
+        assertNull(repo.estado.value.p2pCodigo)
+
+        // Emparejar con otro nodo recarga y reprograma avisos.
+        val ok = repo.emparejarP2p("order://emparejar?n=nodo-pc&s=01020304&d=PC")
+        assertTrue(ok)
+        assertEquals(1, repo.estado.value.p2pDispositivos.size)
+        assertEquals("PC", repo.estado.value.p2pDispositivos.first().nombre)
+        assertEquals(baseReprog + 1, reprogramaciones)
+
+        // Sincronizar con cambios locales remotos recarga y reprograma avisos.
+        fake.resumenSyncP2pFake = ResumenSyncP2pFfi(1u, 1u, true, emptyList())
+        repo.sincronizarP2p(silencioso = false)
+        assertEquals(baseReprog + 2, reprogramaciones)
+        assertTrue(repo.estado.value.p2pAviso.contains("agenda actualizada"))
+
+        // Cambio entrante en segundo plano detectado por secuenciaCambio.
+        fake.secuenciaSyncFake = 2uL
+        repo.verificarCambiosRemotosP2p()
+        assertEquals(baseReprog + 3, reprogramaciones)
+
+        // Quitar dispositivo deja la lista vacía.
+        repo.quitarDispositivoP2p("nodo-pc")
+        assertTrue(repo.estado.value.p2pDispositivos.isEmpty())
+
+        repo.detenerSincronizacionP2p()
+    }
 }
 
 class FakePuenteOrder : PuenteOrder {
@@ -459,6 +518,12 @@ class FakePuenteOrder : PuenteOrder {
     var moodleEstadoFake: EstadoMoodleFfi = EstadoMoodleFfi(false, "micampus.unal.edu.co", "", "", false)
     val calendariosFake = mutableListOf<CalendarioVistaFfi>()
     var resumenIcalSync: ResumenSyncFfi = ResumenSyncFfi(0u, 0u, 0u)
+    var syncActivoFake: Boolean = false
+    var nombreSyncFake: String = "Teléfono"
+    var secuenciaSyncFake: ULong = 0uL
+    val dispositivosSyncFake = mutableListOf<DispositivoSyncFfi>()
+    var resumenSyncP2pFake: ResumenSyncP2pFfi = ResumenSyncP2pFfi(0u, 0u, false, emptyList())
+    var fallarEmparejarP2p: ErrorFfi? = null
 
     private val tareaEjemplo = TareaFfi(
         id = "t-1",
@@ -816,4 +881,55 @@ class FakePuenteOrder : PuenteOrder {
 
     override fun calendariosSincronizar(rutaDatos: String, rutaConfig: String): ResumenSyncFfi =
         resumenIcalSync
+
+    override fun syncIniciar(rutaDatos: String, rutaConfig: String) {
+        syncActivoFake = true
+    }
+
+    override fun syncDetener() {
+        syncActivoFake = false
+    }
+
+    override fun syncCodigoEmparejamiento(): CodigoEmparejamientoFfi =
+        CodigoEmparejamientoFfi(
+            enlace = "order://emparejar?n=nodo-cel&s=01020304&d=$nombreSyncFake",
+            palabras = "abril acero agua aire alba alce aldea alga",
+            qrSvg = "<svg></svg>",
+            qrTamano = 21u,
+            qrModulos = List(21 * 21) { it % 2 == 0 },
+        )
+
+    override fun syncEmparejar(enlaceOPalabras: String): DispositivoSyncFfi {
+        fallarEmparejarP2p?.let { throw it }
+        val disp = DispositivoSyncFfi(
+            id = "nodo-pc",
+            nombre = "PC",
+            textoEstado = "sincronizado justo ahora",
+            enLinea = true,
+        )
+        dispositivosSyncFake.add(disp)
+        return disp
+    }
+
+    override fun syncDispositivos(): List<DispositivoSyncFfi> = dispositivosSyncFake.toList()
+
+    override fun syncQuitar(id: String) {
+        dispositivosSyncFake.removeAll { it.id == id }
+    }
+
+    override fun syncAhora(): ResumenSyncP2pFfi = resumenSyncP2pFake
+
+    override fun syncEstado(): EstadoSyncFfi = EstadoSyncFfi(
+        activo = syncActivoFake,
+        nodoId = "nodo-cel",
+        nombre = nombreSyncFake,
+        sincronizando = false,
+        secuenciaCambio = secuenciaSyncFake,
+        totalEmparejados = dispositivosSyncFake.size.toUInt(),
+        textoEstado = if (dispositivosSyncFake.isEmpty()) "Sin dispositivos emparejados" else "1 emparejado(s)",
+    )
+
+    override fun syncNombre(nombre: String) {
+        nombreSyncFake = nombre.trim()
+    }
 }

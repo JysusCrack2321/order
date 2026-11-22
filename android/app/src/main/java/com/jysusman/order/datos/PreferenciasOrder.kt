@@ -52,6 +52,9 @@ object RutasPrivadas {
     fun archivoCalendariosConfig(context: Context): String =
         File(context.filesDir, "calendarios.toml").absolutePath
 
+    fun archivoSyncConfig(context: Context): String =
+        File(context.filesDir, "sync.toml").absolutePath
+
     fun registroAvisos(context: Context): String =
         File(context.filesDir, "enviados.txt").absolutePath
 }
