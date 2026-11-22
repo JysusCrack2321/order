@@ -17,6 +17,7 @@ use order_core::agente::config::{self, AgenteConfig, Proveedor};
 use order_core::agente::contexto;
 use order_core::agente::voz;
 use order_core::almacen::Almacen;
+use order_core::conflictos::{self, Conflicto};
 use order_core::filtros::{Filtro, TipoFecha};
 use order_core::modelo::{
     self, Ajustes, Clase, Datos, Dia, ErrorDatos, FORMATO_FECHA, Recordatorio, Tarea,
@@ -93,6 +94,7 @@ struct Estado {
     dia: NaiveDate,
     error: Option<String>,
     advertencias: Vec<String>,
+    conflictos: Vec<Conflicto>,
     edicion: Edicion,
     seleccion: Option<Seleccion>,
     /// Barra de filtros de Pendientes: se conserva mientras la app vive.
@@ -126,6 +128,7 @@ impl Estado {
             dia: Local::now().date_naive(),
             error: None,
             advertencias: Vec::new(),
+            conflictos: Vec::new(),
             edicion: Edicion::Ninguna,
             seleccion: None,
             filtro: Filtro::default(),
@@ -187,6 +190,7 @@ struct Vista {
     pie: String,
     error: SharedString,
     advertencias: Vec<SharedString>,
+    conflicto_texto: String,
     agente_respuesta: SharedString,
     agente_acciones: Vec<AccionUI>,
     agente_pensando: bool,
@@ -293,6 +297,12 @@ pub fn mostrar_advertencias(advertencias: &[ErrorDatos]) {
         lineas.push(format!("… y {} más", advertencias.len() - MAXIMO));
     }
     con_estado(|estado| estado.advertencias = lineas);
+    actualizar_si_existe();
+}
+
+/// Banner de conflictos de Syncthing: muestra el primero pendiente, si hay.
+pub fn mostrar_conflictos(lista: Vec<Conflicto>) {
+    con_estado(|estado| estado.conflictos = lista);
     actualizar_si_existe();
 }
 
@@ -601,6 +611,63 @@ fn conectar(ui: &AppWindow) {
         let Some(ui) = debil.upgrade() else { return };
         grabar_voz(&ui);
     });
+
+    let debil = ui.as_weak();
+    ui.on_conflicto_quedar_actual(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        resolver_conflicto(&ui, false);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_conflicto_usar_otra(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        resolver_conflicto(&ui, true);
+    });
+}
+
+fn resolver_conflicto(ui: &AppWindow, usar_otra: bool) {
+    let Some(conflicto) = con_estado(|estado| estado.conflictos.first().cloned()) else {
+        return;
+    };
+    let almacen = almacen();
+    let resultado = if usar_otra {
+        conflictos::usar_la_otra(&almacen.ruta, &conflicto)
+    } else {
+        conflictos::quedarme_con_actual(&almacen.ruta, &conflicto)
+    };
+
+    match resultado {
+        Ok(()) => {
+            let restantes = conflictos::detectar(&almacen.ruta);
+            match almacen.cargar() {
+                Ok(datos) => {
+                    crate::sistema::publicar(&datos);
+                    let adv = std::fs::read_to_string(&almacen.ruta)
+                        .map(|texto| modelo::advertencias(&texto))
+                        .unwrap_or_default();
+                    let lineas: Vec<String> = adv.iter().take(4).map(|a| a.to_string()).collect();
+                    con_estado(|estado| {
+                        estado.datos = Some(datos);
+                        estado.error = None;
+                        estado.advertencias = lineas;
+                        estado.conflictos = restantes;
+                    });
+                }
+                Err(error) => {
+                    con_estado(|estado| {
+                        estado.error = Some(format!("No se pudo leer order.toml — {error}"));
+                        estado.conflictos = restantes;
+                    });
+                }
+            }
+        }
+        Err(mensaje) => {
+            con_estado(|estado| {
+                estado.error = Some(format!("No se pudo resolver el conflicto — {mensaje}"));
+            });
+        }
+    }
+    actualizar(ui);
 }
 
 fn mover(debil: &Weak<AppWindow>, delta_dias: i64) {
@@ -1411,6 +1478,7 @@ fn actualizar(ui: &AppWindow) {
     ui.set_pie(vista.pie.into());
     ui.set_error(vista.error);
     ui.set_advertencias(ModelRc::new(VecModel::from(vista.advertencias)));
+    ui.set_conflicto_texto(vista.conflicto_texto.into());
     ui.set_agente_respuesta(vista.agente_respuesta);
     ui.set_agente_acciones(ModelRc::new(VecModel::from(vista.agente_acciones)));
     ui.set_agente_pensando(vista.agente_pensando);
@@ -1551,6 +1619,11 @@ fn construir_vista() -> Vista {
                 .cloned()
                 .map(SharedString::from)
                 .collect(),
+            conflicto_texto: estado
+                .conflictos
+                .first()
+                .map(conflictos::mensaje_banner)
+                .unwrap_or_default(),
             agente_respuesta: estado.respuesta.clone().into(),
             agente_acciones: estado
                 .acciones

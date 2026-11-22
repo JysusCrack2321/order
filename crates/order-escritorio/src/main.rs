@@ -5,7 +5,7 @@ mod puente;
 mod sistema;
 
 use order_core::almacen::Almacen;
-use order_core::modelo;
+use order_core::{conflictos, modelo};
 
 fn main() -> Result<(), slint::PlatformError> {
     // Instancia única: si ya corre ORDER, solo se le pide mostrar la ventana.
@@ -48,6 +48,7 @@ fn cargar(almacen: &Almacen) {
             puente::mostrar_error(Some(&error));
         }
     }
+    puente::mostrar_conflictos(conflictos::detectar(&almacen.ruta));
 }
 
 /// Las claves que el modelo no conoce; no bloquean la lectura (banner amarillo).

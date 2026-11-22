@@ -9,6 +9,7 @@
 use crate::puente;
 use order_core::almacen::Almacen;
 use order_core::avisos::{self, Registro};
+use order_core::conflictos;
 use order_core::modelo::{self, Datos};
 use chrono::{Local, TimeDelta};
 use ksni::blocking::TrayMethods;
@@ -377,11 +378,10 @@ pub fn vigilar_archivo(almacen: Almacen) {
         let mut ultimo = Instant::now();
         for resultado in receptor {
             let Ok(evento) = resultado else { continue };
-            if !evento
-                .paths
-                .iter()
-                .any(|ruta| ruta.file_name() == Some(nombre.as_os_str()))
-            {
+            if !evento.paths.iter().any(|ruta| {
+                ruta.file_name() == Some(nombre.as_os_str())
+                    || conflictos::es_archivo_conflicto(&almacen.ruta, ruta)
+            }) {
                 continue;
             }
             if ultimo.elapsed() < Duration::from_millis(150) {
@@ -407,6 +407,7 @@ fn leer_y_mostrar(almacen: &Almacen) {
         }
         Err(error) => puente::mostrar_error(Some(&error)),
     }
+    puente::mostrar_conflictos(conflictos::detectar(&almacen.ruta));
 }
 
 fn advertencias(almacen: &Almacen) -> Vec<modelo::ErrorDatos> {

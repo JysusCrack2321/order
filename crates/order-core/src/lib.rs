@@ -4,6 +4,7 @@
 pub mod agente;
 pub mod almacen;
 pub mod avisos;
+pub mod conflictos;
 pub mod filtros;
 pub mod modelo;
 pub mod ops;

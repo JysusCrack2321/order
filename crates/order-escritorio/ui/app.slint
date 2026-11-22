@@ -124,6 +124,63 @@ component Banner inherits Rectangle {
     }
 }
 
+component BannerConflicto inherits Rectangle {
+    in property <string> mensaje;
+    callback quedar-actual();
+    callback usar-otra();
+
+    background: Tema.fondo-aviso;
+    height: Tema.alto-boton + 2 * Tema.espacio-sm;
+    clip: true;
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: Tema.ancho-marca;
+        height: parent.height;
+        background: Tema.borde-aviso;
+    }
+
+    HorizontalLayout {
+        x: Tema.espacio-md;
+        y: 0;
+        width: parent.width - 2 * Tema.espacio-md;
+        height: parent.height;
+        spacing: Tema.espacio-sm;
+        alignment: start;
+
+        Text {
+            horizontal-stretch: 1;
+            height: parent.height;
+            vertical-alignment: center;
+            text: root.mensaje;
+            font-size: Tema.tamano-pequeno;
+            font-weight: 600;
+            color: Tema.texto-aviso;
+            overflow: elide;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Boton {
+                texto: "Quedarme con la actual";
+                principal: true;
+                width: Tema.ancho-boton-largo;
+                clicked => { root.quedar-actual(); }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Boton {
+                texto: "Usar la otra";
+                width: Tema.ancho-boton-form;
+                clicked => { root.usar-otra(); }
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "ORDER";
     // Icono de la ventana: el mismo reloj de arena de la bandeja y del .desktop.
@@ -141,6 +198,7 @@ export component AppWindow inherits Window {
     in-out property <int> pestana: 0;
     in property <string> error: "";
     in property <[string]> advertencias: [];
+    in property <string> conflicto-texto: "";
     in property <string> pie: "";
 
     in property <[DiaUI]> dias;
@@ -324,6 +382,8 @@ export component AppWindow inherits Window {
     callback alternar-clave();
     callback grabar-voz();
     callback alternar-clave-voz();
+    callback conflicto-quedar-actual();
+    callback conflicto-usar-otra();
 
     Rectangle {
         width: parent.width;
@@ -436,6 +496,12 @@ export component AppWindow inherits Window {
                 fondo-color: Tema.fondo-aviso;
                 filo: Tema.borde-aviso;
                 tinta: Tema.texto-aviso;
+            }
+
+            if root.conflicto-texto != "" : BannerConflicto {
+                mensaje: root.conflicto-texto;
+                quedar-actual => { root.conflicto-quedar-actual(); }
+                usar-otra => { root.conflicto-usar-otra(); }
             }
 
             // --- Contenido ------------------------------------------------
