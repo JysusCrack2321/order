@@ -4,23 +4,27 @@ import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CalendarViewWeek
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Today
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -41,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -51,6 +56,10 @@ import com.jysusman.order.datos.Repositorio
 import com.jysusman.order.ui.BannersEstado
 import com.jysusman.order.ui.PantallaPermisoArchivos
 import com.jysusman.order.ui.abrirAjustesPermisoArchivos
+import com.jysusman.order.ui.dia.DiaPantalla
+import com.jysusman.order.ui.inicio.InicioPantalla
+import com.jysusman.order.ui.pendientes.PendientesPantalla
+import com.jysusman.order.ui.semana.SemanaPantalla
 import com.jysusman.order.ui.theme.OrderTema
 import com.jysusman.order.ui.theme.OrderTheme
 import com.jysusman.order.ui.tienePermisoArchivos
@@ -162,7 +171,7 @@ private fun OrderApp(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = OrderTema.EspacioLg, vertical = OrderTema.EspacioMd),
+                        .padding(horizontal = OrderTema.EspacioLg, vertical = OrderTema.EspacioSm),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
@@ -182,6 +191,13 @@ private fun OrderApp(
                             color = OrderTema.TextoTenue,
                         )
                     }
+                    IconButton(onClick = { /* Tarea 5: abrir Ajustes */ }) {
+                        Icon(
+                            imageVector = Icons.Outlined.Settings,
+                            contentDescription = "Ajustes",
+                            tint = OrderTema.TextoSuave,
+                        )
+                    }
                 }
                 HorizontalDivider(color = OrderTema.Borde, thickness = OrderTema.Linea)
                 BannersEstado(
@@ -193,8 +209,48 @@ private fun OrderApp(
                 )
             }
         },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { /* Tarea 5: nueva tarea */ },
+                containerColor = OrderTema.AcentoTenue,
+                contentColor = OrderTema.Acento,
+                shape = RoundedCornerShape(OrderTema.RadioTarjeta),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = OrderTema.EspacioMd),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(OrderTema.EspacioXs),
+                ) {
+                    Icon(Icons.Outlined.Add, contentDescription = null)
+                    Text(
+                        text = "Tarea",
+                        fontFamily = OrderTema.FuenteTitulos,
+                        fontSize = OrderTema.TamanoPequeno,
+                        letterSpacing = OrderTema.LetraNormal,
+                    )
+                }
+            }
+        },
         bottomBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
+                val pie = estado.resumen?.pie ?: estado.inicio?.pie
+                if (!pie.isNullOrBlank()) {
+                    HorizontalDivider(color = OrderTema.Borde, thickness = OrderTema.Linea)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(OrderTema.FondoPanel)
+                            .padding(horizontal = OrderTema.EspacioMd, vertical = OrderTema.EspacioXs),
+                    ) {
+                        Text(
+                            text = pie,
+                            fontSize = OrderTema.TamanoPie,
+                            color = OrderTema.TextoSuave,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
                 HorizontalDivider(color = OrderTema.Borde, thickness = OrderTema.Linea)
                 NavigationBar(
                     containerColor = OrderTema.FondoPanel,
@@ -229,27 +285,56 @@ private fun OrderApp(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(OrderTema.EspacioLg),
-            contentAlignment = Alignment.Center,
         ) {
-            val actual = Pestana.entries[pestana]
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = actual.titulo.uppercase(),
-                    fontFamily = OrderTema.FuenteTitulos,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = OrderTema.TamanoSemana,
-                    letterSpacing = OrderTema.LetraSeccion,
-                    color = OrderTema.Acento,
+            when (Pestana.entries[pestana]) {
+                Pestana.Inicio -> InicioPantalla(
+                    vista = estado.inicio,
+                    onEditarClase = { },
+                    onEditarTarea = { },
+                    onEditarRecordatorio = { },
                 )
-                Spacer(modifier = Modifier.height(OrderTema.EspacioSm))
-                val textoEstado = estado.resumen?.let {
-                    "${it.numTareas} tareas (${it.numTareasPendientes} pendientes)"
-                } ?: if (estado.cargando) "Cargando…" else "Sin datos"
-                Text(
-                    text = textoEstado,
-                    fontSize = OrderTema.TamanoTexto,
-                    color = OrderTema.TextoSuave,
+
+                Pestana.Dia -> DiaPantalla(
+                    vista = estado.dia,
+                    onAnterior = { scope.launch { repositorio.moverDia(-1) } },
+                    onSiguiente = { scope.launch { repositorio.moverDia(1) } },
+                    onIrHoy = { scope.launch { repositorio.irDiaHoy() } },
+                    onNuevaClase = { },
+                    onEditarClase = { },
+                    onEditarTarea = { },
+                    onEditarRecordatorio = { },
+                )
+
+                Pestana.Semana -> SemanaPantalla(
+                    vista = estado.semana,
+                    onAnterior = { scope.launch { repositorio.moverSemana(-7) } },
+                    onSiguiente = { scope.launch { repositorio.moverSemana(7) } },
+                    onIrHoy = { scope.launch { repositorio.irSemanaHoy() } },
+                    onNuevaClase = { },
+                    onEditarClase = { },
+                )
+
+                Pestana.Pendientes -> PendientesPantalla(
+                    vista = estado.pendientes,
+                    filtro = estado.filtro,
+                    onEditarTarea = { },
+                    onMarcarHecha = { id, hecha -> scope.launch { repositorio.marcarTarea(id, hecha) } },
+                    onMostrarHechas = { mostrar ->
+                        scope.launch {
+                            repositorio.actualizarFiltro { it.copy(mostrarHechas = mostrar) }
+                        }
+                    },
+                    onFiltroFecha = { tipo ->
+                        scope.launch {
+                            repositorio.actualizarFiltro { it.copy(tipoFecha = tipo) }
+                        }
+                    },
+                    onElegirMateria = { },
+                    onElegirDesde = { },
+                    onElegirHasta = { },
+                    onElegirHoraDesde = { },
+                    onElegirHoraHasta = { },
+                    onQuitarFiltros = { scope.launch { repositorio.limpiarFiltros() } },
                 )
             }
         }
