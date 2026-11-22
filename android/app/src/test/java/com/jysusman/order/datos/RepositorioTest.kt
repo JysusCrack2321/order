@@ -40,6 +40,8 @@ import com.jysusman.order.ffi.TextosConexionAgenteFfi
 import com.jysusman.order.ffi.VozProveedorInfoFfi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -486,6 +488,48 @@ class RepositorioTest {
 
         repo.detenerSincronizacionP2p()
     }
+
+    @Test
+    fun borrarClaseYOtrosCambiosDisparanSyncAhoraUnaVezTrasRebote() = runTest {
+        val fake = FakePuenteOrder()
+        val repo = Repositorio(
+            puente = fake,
+            carpetaInicial = "/tmp/order-sync-rebote",
+            dispatcherIo = UnconfinedTestDispatcher(testScheduler),
+            asegurarCarpeta = {},
+            rutaConfigSync = "/tmp/order-sync-rebote-priv/sync.toml",
+            demoraSyncLocalMs = 2_000L,
+        )
+
+        repo.cargarInicial()
+        repo.iniciarSincronizacionP2p()
+        assertTrue(repo.emparejarP2p("order://emparejar?n=nodo-pc&s=01020304&d=PC"))
+        fake.llamadasSyncAhora = 0
+
+        // Borrar varias clases seguidas debe esperar ~2 s y sincronizar una sola vez.
+        assertTrue(repo.borrarClase("c-1"))
+        assertTrue(repo.borrarClase("c-2"))
+        assertTrue(repo.borrarClase("c-3"))
+        assertTrue(repo.borrarClase("c-4"))
+        assertTrue(repo.borrarClase("c-5"))
+        assertEquals(0, fake.llamadasSyncAhora)
+
+        advanceTimeBy(1_999)
+        runCurrent()
+        assertEquals(0, fake.llamadasSyncAhora)
+
+        advanceTimeBy(2)
+        runCurrent()
+        assertEquals(1, fake.llamadasSyncAhora)
+
+        // Aplicar acción del agente también dispara sincronización tras el rebote.
+        repo.aplicarAccionAgente("a-1")
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(2, fake.llamadasSyncAhora)
+
+        repo.detenerSincronizacionP2p()
+    }
 }
 
 class FakePuenteOrder : PuenteOrder {
@@ -524,6 +568,7 @@ class FakePuenteOrder : PuenteOrder {
     val dispositivosSyncFake = mutableListOf<DispositivoSyncFfi>()
     var resumenSyncP2pFake: ResumenSyncP2pFfi = ResumenSyncP2pFfi(0u, 0u, false, emptyList())
     var fallarEmparejarP2p: ErrorFfi? = null
+    var llamadasSyncAhora: Int = 0
 
     private val tareaEjemplo = TareaFfi(
         id = "t-1",
@@ -917,7 +962,10 @@ class FakePuenteOrder : PuenteOrder {
         dispositivosSyncFake.removeAll { it.id == id }
     }
 
-    override fun syncAhora(): ResumenSyncP2pFfi = resumenSyncP2pFake
+    override fun syncAhora(): ResumenSyncP2pFfi {
+        llamadasSyncAhora++
+        return resumenSyncP2pFake
+    }
 
     override fun syncEstado(): EstadoSyncFfi = EstadoSyncFfi(
         activo = syncActivoFake,

@@ -385,7 +385,7 @@ private fun OrderApp(
             repositorio.cargarInicial()
             mostrarResumenSiToca()
             repositorio.revisarPortapapelesIcal(leerPortapapeles(context))
-            repositorio.sincronizarTodoSilencioso()
+            launch { repositorio.sincronizarTodoSilencioso() }
             repositorio.iniciarSincronizacionP2p()
             while (true) {
                 delay(2000)

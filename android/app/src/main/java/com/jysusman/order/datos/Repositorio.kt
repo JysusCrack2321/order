@@ -36,7 +36,9 @@ import com.jysusman.order.ffi.VozProveedorInfoFfi
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -129,10 +131,13 @@ class Repositorio(
     private val rutaConfigSync: String = "",
     private val onDatosActualizados: () -> Unit = {},
     procesadorAdjuntos: ProcesadorPlataforma? = null,
+    private val demoraSyncLocalMs: Long = 2_000L,
 ) {
     private val mutex = Mutex()
     private val mutexP2p = Mutex()
     private val scopeP2p = CoroutineScope(SupervisorJob() + dispatcherIo)
+    private val lockSyncLocal = Any()
+    private var jobSyncLocal: Job? = null
     private var ultimaSecuenciaP2p: ULong = 0uL
     private var conteoAlGenerarCodigoP2p: Int = 0
     private val preparadorAdjuntos = procesadorAdjuntos?.let { PreparadorAdjuntos(puente, it) }
@@ -935,6 +940,7 @@ class Repositorio(
                     )
                 }
                 withContext(dispatcherIo) { onDatosActualizados() }
+                dispararSyncTrasCambioLocal()
             }.onFailure { err ->
                 _estado.update {
                     it.copy(agenteNota = "No se pudo aplicar — ${mensajeDeError(err)}")
@@ -1002,6 +1008,7 @@ class Repositorio(
                 }
                 if (lectura != null) {
                     withContext(dispatcherIo) { onDatosActualizados() }
+                    dispararSyncTrasCambioLocal()
                 }
             }.onFailure { err ->
                 _estado.update {
@@ -1180,6 +1187,7 @@ class Repositorio(
                             )
                         }
                         withContext(dispatcherIo) { onDatosActualizados() }
+                        dispararSyncTrasCambioLocal()
                     }
                 }
             }
@@ -1402,6 +1410,7 @@ class Repositorio(
                             )
                         }
                         withContext(dispatcherIo) { onDatosActualizados() }
+                        dispararSyncTrasCambioLocal()
                     }
                 }
             }
@@ -1464,6 +1473,10 @@ class Repositorio(
     }
 
     fun detenerSincronizacionP2p() {
+        synchronized(lockSyncLocal) {
+            jobSyncLocal?.cancel()
+            jobSyncLocal = null
+        }
         if (rutaConfigSync.isBlank()) return
         runCatching { puente.syncDetener() }
         _estado.update { it.copy(p2pActivo = false, p2pSincronizando = false) }
@@ -1702,11 +1715,17 @@ class Repositorio(
     }
 
     private fun dispararSyncTrasCambioLocal() {
-        if (rutaConfigSync.isBlank() || !_estado.value.p2pActivo || _estado.value.p2pDispositivos.isEmpty()) {
-            return
-        }
-        scopeP2p.launch {
-            sincronizarP2p(silencioso = true)
+        if (rutaConfigSync.isBlank()) return
+        synchronized(lockSyncLocal) {
+            jobSyncLocal?.cancel()
+            jobSyncLocal = scopeP2p.launch {
+                if (demoraSyncLocalMs > 0L) {
+                    delay(demoraSyncLocalMs)
+                }
+                if (_estado.value.p2pActivo && _estado.value.p2pDispositivos.isNotEmpty()) {
+                    sincronizarP2p(silencioso = true)
+                }
+            }
         }
     }
 
