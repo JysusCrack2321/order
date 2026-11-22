@@ -7,6 +7,64 @@
 use crate::agente::cliente::{self, ErrorAgente};
 use crate::agente::config::Voz;
 
+/// Frecuencia estándar que espera Whisper (16 kHz mono PCM16).
+pub const TASA_MONO_16K: u32 = 16_000;
+
+/// Empaqueta muestras PCM16 mono en un WAV mono a 16 kHz en memoria.
+/// Si `frecuencia` difiere de 16 kHz, remuestrea con interpolación lineal.
+/// Si `muestras` está vacía (o `frecuencia == 0`), devuelve un vector vacío.
+pub fn wav_de_pcm16(muestras: &[i16], frecuencia: u32) -> Vec<u8> {
+    if muestras.is_empty() || frecuencia == 0 {
+        return Vec::new();
+    }
+
+    let remuestreadas: Vec<i16> = if frecuencia == TASA_MONO_16K {
+        muestras.to_vec()
+    } else {
+        let paso = frecuencia as f64 / TASA_MONO_16K as f64;
+        let cuantas = (muestras.len() as f64 / paso).floor() as usize;
+        let mut salida = Vec::with_capacity(cuantas);
+        for i in 0..cuantas {
+            let pos = i as f64 * paso;
+            let base = pos.floor() as usize;
+            let resto = pos - base as f64;
+            let actual = muestras[base] as f64;
+            let siguiente = muestras.get(base + 1).copied().unwrap_or(muestras[base]) as f64;
+            let valor = (actual + (siguiente - actual) * resto)
+                .round()
+                .clamp(i16::MIN as f64, i16::MAX as f64);
+            salida.push(valor as i16);
+        }
+        salida
+    };
+
+    if remuestreadas.is_empty() {
+        return Vec::new();
+    }
+
+    let data_len = (remuestreadas.len() * 2) as u32;
+    let riff_len = 36u32.saturating_add(data_len);
+    let mut wav = Vec::with_capacity(44 + data_len as usize);
+
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&riff_len.to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes()); // Subchunk1Size (PCM)
+    wav.extend_from_slice(&1u16.to_le_bytes()); // AudioFormat (PCM = 1)
+    wav.extend_from_slice(&1u16.to_le_bytes()); // NumChannels (mono = 1)
+    wav.extend_from_slice(&TASA_MONO_16K.to_le_bytes()); // SampleRate
+    wav.extend_from_slice(&(TASA_MONO_16K * 2).to_le_bytes()); // ByteRate
+    wav.extend_from_slice(&2u16.to_le_bytes()); // BlockAlign
+    wav.extend_from_slice(&16u16.to_le_bytes()); // BitsPerSample
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    for muestra in remuestreadas {
+        wav.extend_from_slice(&muestra.to_le_bytes());
+    }
+    wav
+}
+
 // ---------------------------------------------------------------------------
 // Multipart y transcripción
 // ---------------------------------------------------------------------------
@@ -162,5 +220,26 @@ mod pruebas {
         };
         let error = transcribir(&voz, &[]).expect_err("sin audio");
         assert!(error.to_string().contains("no se grabó"), "{error}");
+    }
+
+    #[test]
+    fn wav_de_pcm16_genera_mono_16k() {
+        assert!(wav_de_pcm16(&[], 16_000).is_empty());
+        assert!(wav_de_pcm16(&[100, 200], 0).is_empty());
+
+        // 1 segundo a 16 kHz = 44 bytes de cabecera + 32000 bytes de datos.
+        let muestras = vec![1000i16; 16_000];
+        let wav = wav_de_pcm16(&muestras, 16_000);
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(u16::from_le_bytes([wav[22], wav[23]]), 1);
+        assert_eq!(u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]), 16_000);
+        assert_eq!(u16::from_le_bytes([wav[34], wav[35]]), 16);
+        assert_eq!(wav.len(), 44 + 32_000);
+
+        // Remuestreo 32 kHz -> 16 kHz reduce a la mitad.
+        let muestras_32k = vec![500i16; 32_000];
+        let wav_32k = wav_de_pcm16(&muestras_32k, 32_000);
+        assert_eq!(wav_32k.len(), 44 + 32_000);
     }
 }

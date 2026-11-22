@@ -6,7 +6,13 @@
 //! `Almacen`.
 
 use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Timelike};
+use order_core::agente::acciones::{self, Accion};
+use order_core::agente::cliente;
+use order_core::agente::config::{self, AgenteConfig, Proveedor, VozProveedor};
+use order_core::agente::contexto;
+use order_core::agente::voz;
 use order_core::almacen::Almacen;
+use order_core::avisos::{self, Registro};
 use order_core::conflictos;
 use order_core::filtros::{Filtro, TipoFecha};
 use order_core::modelo::{self, Ajustes, Datos, Dia, ErrorDatos, FORMATO_FECHA, Semestre, Tarea};
@@ -20,8 +26,11 @@ use order_core::presentacion::textos::{
 };
 use order_core::reloj::{self, a_12h, a_24h, etiqueta_hora, hora_texto};
 use order_core::semana;
+use std::collections::HashMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 uniffi::setup_scaffolding!();
 
@@ -375,6 +384,76 @@ pub struct Hora12Ffi {
     pub minuto: u32,
     pub tarde: bool,
     pub texto: String,
+}
+
+// ---------------------------------------------------------------------------
+// Registros para avisos, agente y voz
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AvisoFfi {
+    pub clave: String,
+    pub titulo: String,
+    pub cuerpo: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AvisoProgramableFfi {
+    pub clave: String,
+    pub momento_iso: String,
+    pub titulo: String,
+    pub cuerpo: String,
+    pub es_recordatorio: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ProveedorInfoFfi {
+    pub codigo: i32,
+    pub nombre: String,
+    pub url_base: String,
+    pub modelo: String,
+    pub url_clave: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct VozProveedorInfoFfi {
+    pub codigo: i32,
+    pub nombre: String,
+    pub url_base: String,
+    pub modelo: String,
+    pub url_clave: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AgenteConfigFfi {
+    pub proveedor: i32,
+    pub url_base: String,
+    pub modelo: String,
+    pub api_key: String,
+    pub voz_proveedor: i32,
+    pub voz_url_base: String,
+    pub voz_modelo: String,
+    pub voz_api_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AccionVistaFfi {
+    pub id: String,
+    pub descripcion: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct RespuestaAgenteFfi {
+    pub respuesta: String,
+    pub acciones: Vec<AccionVistaFfi>,
+    pub nota: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ResultadoAplicarTodasFfi {
+    pub aplicadas: u32,
+    pub resumen: Option<ResumenArchivoFfi>,
+    pub error: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1027,8 +1106,392 @@ pub fn dias_semana_etiquetas() -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Avisos programables, registro y resumen del día
+// ---------------------------------------------------------------------------
+
+const DIAS_PODA_REGISTRO: i64 = 7;
+const FORMATO_ISO_SEGUNDOS: &str = "%Y-%m-%dT%H:%M:%S";
+
+#[uniffi::export]
+pub fn proximos_avisos(
+    ruta: String,
+    desde_iso: String,
+    hasta_iso: String,
+    registro_ruta: String,
+) -> Result<Vec<AvisoProgramableFfi>, ErrorFfi> {
+    let desde = interpretar_fecha_hora(&desde_iso).ok_or_else(|| ErrorFfi::Operacion {
+        mensaje: format!("fecha inicial no válida: {desde_iso}"),
+    })?;
+    let hasta = interpretar_fecha_hora(&hasta_iso).ok_or_else(|| ErrorFfi::Operacion {
+        mensaje: format!("fecha final no válida: {hasta_iso}"),
+    })?;
+
+    let almacen = Almacen {
+        ruta: PathBuf::from(&ruta),
+    };
+    let datos = almacen.cargar()?;
+    let registro = Registro {
+        ruta: PathBuf::from(&registro_ruta),
+    };
+    registro.podar(desde.date() - TimeDelta::days(DIAS_PODA_REGISTRO));
+    let enviados = registro.leer();
+
+    Ok(avisos::proximos_avisos(&datos, desde, hasta, &enviados)
+        .into_iter()
+        .map(|item| AvisoProgramableFfi {
+            clave: item.aviso.clave,
+            momento_iso: item.momento.format(FORMATO_ISO_SEGUNDOS).to_string(),
+            titulo: item.aviso.titulo,
+            cuerpo: item.aviso.cuerpo,
+            es_recordatorio: item.es_recordatorio,
+        })
+        .collect())
+}
+
+#[uniffi::export]
+pub fn anotar_aviso(registro_ruta: String, clave: String) {
+    let registro = Registro {
+        ruta: PathBuf::from(&registro_ruta),
+    };
+    registro.anotar(&clave);
+}
+
+#[uniffi::export]
+pub fn resumen_del_dia(
+    ruta: String,
+    ahora_iso: String,
+    registro_ruta: String,
+) -> Result<Option<AvisoFfi>, ErrorFfi> {
+    let ahora = if ahora_iso.trim().is_empty() {
+        Local::now().naive_local()
+    } else {
+        interpretar_fecha_hora(&ahora_iso).ok_or_else(|| ErrorFfi::Operacion {
+            mensaje: format!("fecha/hora no válida: {ahora_iso}"),
+        })?
+    };
+
+    let almacen = Almacen {
+        ruta: PathBuf::from(&ruta),
+    };
+    let datos = almacen.cargar()?;
+    let registro = Registro {
+        ruta: PathBuf::from(&registro_ruta),
+    };
+    registro.podar(ahora.date() - TimeDelta::days(DIAS_PODA_REGISTRO));
+    let enviados = registro.leer();
+
+    let Some(resumen) = avisos::resumen_arranque(&datos, ahora) else {
+        return Ok(None);
+    };
+    if enviados.contains(&resumen.clave) {
+        return Ok(None);
+    }
+    registro.anotar(&resumen.clave);
+    Ok(Some(AvisoFfi {
+        clave: resumen.clave,
+        titulo: resumen.titulo,
+        cuerpo: resumen.cuerpo,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Agente y voz
+// ---------------------------------------------------------------------------
+
+static SIGUIENTE_ACCION_ID: AtomicU64 = AtomicU64::new(1);
+static ACCIONES_PENDIENTES: LazyLock<Mutex<HashMap<String, Accion>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[uniffi::export]
+pub fn proveedores_agente() -> Vec<ProveedorInfoFfi> {
+    Proveedor::TODOS
+        .iter()
+        .map(|p| {
+            let (url_base, modelo) = p.por_defecto();
+            ProveedorInfoFfi {
+                codigo: p.codigo(),
+                nombre: p.nombre().to_string(),
+                url_base: url_base.to_string(),
+                modelo: modelo.to_string(),
+                url_clave: p.url_clave().map(str::to_string),
+            }
+        })
+        .collect()
+}
+
+#[uniffi::export]
+pub fn proveedores_voz() -> Vec<VozProveedorInfoFfi> {
+    VozProveedor::TODOS
+        .iter()
+        .map(|p| {
+            let (url_base, modelo) = p.por_defecto();
+            VozProveedorInfoFfi {
+                codigo: p.codigo(),
+                nombre: p.nombre().to_string(),
+                url_base: url_base.to_string(),
+                modelo: modelo.to_string(),
+                url_clave: p.url_clave().to_string(),
+            }
+        })
+        .collect()
+}
+
+#[uniffi::export]
+pub fn leer_agente_config(ruta_config: String) -> AgenteConfigFfi {
+    let cfg = config::cargar_de(Path::new(&ruta_config));
+    agente_config_a_ffi(&cfg)
+}
+
+#[uniffi::export]
+pub fn validar_agente(
+    proveedor: i32,
+    url: String,
+    modelo: String,
+    api_key: String,
+    voz_proveedor: i32,
+    voz_url: String,
+    voz_modelo: String,
+    voz_key: String,
+) -> Result<(), ErrorFfi> {
+    formularios::validar_agente(
+        proveedor,
+        &url,
+        &modelo,
+        &api_key,
+        voz_proveedor,
+        &voz_url,
+        &voz_modelo,
+        &voz_key,
+    )?;
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn guardar_agente_config(
+    ruta_config: String,
+    proveedor: i32,
+    url: String,
+    modelo: String,
+    api_key: String,
+    voz_proveedor: i32,
+    voz_url: String,
+    voz_modelo: String,
+    voz_key: String,
+) -> Result<AgenteConfigFfi, ErrorFfi> {
+    let cfg = formularios::validar_agente(
+        proveedor,
+        &url,
+        &modelo,
+        &api_key,
+        voz_proveedor,
+        &voz_url,
+        &voz_modelo,
+        &voz_key,
+    )?;
+    config::guardar_en(Path::new(&ruta_config), &cfg)
+        .map_err(|mensaje| ErrorFfi::Operacion { mensaje })?;
+    Ok(agente_config_a_ffi(&cfg))
+}
+
+#[uniffi::export]
+pub fn enviar_al_agente(
+    ruta_datos: String,
+    ruta_config: String,
+    texto: String,
+) -> Result<RespuestaAgenteFfi, ErrorFfi> {
+    let pregunta = texto.trim();
+    if pregunta.is_empty() {
+        return Err(ErrorFfi::Operacion {
+            mensaje: "Escribe una petición para el agente.".to_string(),
+        });
+    }
+
+    let cfg = config::cargar_de(Path::new(&ruta_config));
+    if !cfg.lista() {
+        return Err(ErrorFfi::Operacion {
+            mensaje: "El agente no tiene clave. Ábrela en Ajustes → Agente y guárdala.".to_string(),
+        });
+    }
+
+    let almacen = Almacen {
+        ruta: PathBuf::from(&ruta_datos),
+    };
+    let datos = almacen.cargar()?;
+    let ahora = Local::now();
+    let resumen_ctx = contexto::resumen(
+        &datos,
+        ahora.naive_local(),
+        &format!("UTC{}", ahora.format("%:z")),
+    );
+
+    let salida = cliente::consultar(&cfg, &resumen_ctx, pregunta)
+        .map_err(|e| ErrorFfi::Operacion {
+            mensaje: e.to_string(),
+        })?;
+
+    Ok(construir_respuesta_agente(&datos, &salida))
+}
+
+#[uniffi::export]
+pub fn aplicar_accion(ruta_datos: String, accion_id: String) -> Result<ResumenArchivoFfi, ErrorFfi> {
+    let accion = {
+        let guard = ACCIONES_PENDIENTES
+            .lock()
+            .map_err(|_| ErrorFfi::Operacion {
+                mensaje: "No se pudo acceder a las acciones pendientes.".to_string(),
+            })?;
+        guard.get(&accion_id).cloned()
+    }
+    .ok_or_else(|| ErrorFfi::Operacion {
+        mensaje: "Esa acción ya no está pendiente.".to_string(),
+    })?;
+
+    let almacen = Almacen {
+        ruta: PathBuf::from(&ruta_datos),
+    };
+    let datos = acciones::aplicar(&almacen, &accion)?;
+    if let Ok(mut guard) = ACCIONES_PENDIENTES.lock() {
+        guard.remove(&accion_id);
+    }
+
+    let ahora = Local::now().naive_local();
+    Ok(construir_resumen(&almacen, &datos, ahora))
+}
+
+#[uniffi::export]
+pub fn descartar_accion(accion_id: String) {
+    if let Ok(mut guard) = ACCIONES_PENDIENTES.lock() {
+        guard.remove(&accion_id);
+    }
+}
+
+#[uniffi::export]
+pub fn aplicar_todas(
+    ruta_datos: String,
+    accion_ids: Vec<String>,
+) -> Result<ResultadoAplicarTodasFfi, ErrorFfi> {
+    let acciones_pares: Vec<(String, Accion)> = {
+        let guard = ACCIONES_PENDIENTES
+            .lock()
+            .map_err(|_| ErrorFfi::Operacion {
+                mensaje: "No se pudo acceder a las acciones pendientes.".to_string(),
+            })?;
+        accion_ids
+            .iter()
+            .filter_map(|id| guard.get(id).cloned().map(|a| (id.clone(), a)))
+            .collect()
+    };
+
+    if acciones_pares.is_empty() {
+        return Err(ErrorFfi::Operacion {
+            mensaje: "No hay acciones pendientes por aplicar.".to_string(),
+        });
+    }
+
+    let solo_acciones: Vec<Accion> = acciones_pares.iter().map(|(_, a)| a.clone()).collect();
+    let almacen = Almacen {
+        ruta: PathBuf::from(&ruta_datos),
+    };
+    let resultado = acciones::aplicar_todas(&almacen, &solo_acciones);
+
+    if let Ok(mut guard) = ACCIONES_PENDIENTES.lock() {
+        for (id, _) in acciones_pares.iter().take(resultado.aplicadas) {
+            guard.remove(id);
+        }
+    }
+
+    let ahora = Local::now().naive_local();
+    Ok(ResultadoAplicarTodasFfi {
+        aplicadas: resultado.aplicadas as u32,
+        resumen: resultado
+            .ultimos_datos
+            .as_ref()
+            .map(|d| construir_resumen(&almacen, d, ahora)),
+        error: resultado.error,
+    })
+}
+
+#[uniffi::export]
+pub fn wav_de_pcm16(muestras: Vec<i16>, frecuencia: u32) -> Vec<u8> {
+    voz::wav_de_pcm16(&muestras, frecuencia)
+}
+
+#[uniffi::export]
+pub fn transcribir(ruta_config: String, wav: Vec<u8>) -> Result<String, ErrorFfi> {
+    let cfg = config::cargar_de(Path::new(&ruta_config));
+    if !cfg.voz.lista() {
+        return Err(ErrorFfi::Operacion {
+            mensaje: "La voz no tiene clave: Ajustes → Agente → Voz.".to_string(),
+        });
+    }
+    voz::transcribir(&cfg.voz, &wav).map_err(|e| ErrorFfi::Operacion {
+        mensaje: e.to_string(),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Ayudantes internos
 // ---------------------------------------------------------------------------
+
+fn interpretar_fecha_hora(texto: &str) -> Option<NaiveDateTime> {
+    let limpio = texto.trim();
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+    ] {
+        if let Ok(dt) = NaiveDateTime::parse_from_str(limpio, fmt) {
+            return Some(dt);
+        }
+    }
+    None
+}
+
+fn agente_config_a_ffi(cfg: &AgenteConfig) -> AgenteConfigFfi {
+    AgenteConfigFfi {
+        proveedor: cfg.proveedor.codigo(),
+        url_base: cfg.url_base.clone(),
+        modelo: cfg.modelo.clone(),
+        api_key: cfg.api_key.clone(),
+        voz_proveedor: cfg.voz.proveedor.codigo(),
+        voz_url_base: cfg.voz.url_base.clone(),
+        voz_modelo: cfg.voz.modelo.clone(),
+        voz_api_key: cfg.voz.api_key.clone(),
+    }
+}
+
+fn construir_respuesta_agente(datos: &Datos, crudo: &str) -> RespuestaAgenteFfi {
+    match acciones::parsear(crudo) {
+        Ok(lectura) => {
+            let respuesta = if lectura.respuesta.is_empty() {
+                "(sin comentario)".to_string()
+            } else {
+                lectura.respuesta
+            };
+            let mut vistas = Vec::with_capacity(lectura.acciones.len());
+            if let Ok(mut guard) = ACCIONES_PENDIENTES.lock() {
+                for accion in lectura.acciones {
+                    let num = SIGUIENTE_ACCION_ID.fetch_add(1, Ordering::Relaxed);
+                    let id = format!("accion-{num}");
+                    let descripcion = accion.descripcion(datos);
+                    guard.insert(id.clone(), accion);
+                    vistas.push(AccionVistaFfi { id, descripcion });
+                }
+            }
+            RespuestaAgenteFfi {
+                respuesta,
+                acciones: vistas,
+                nota: None,
+            }
+        }
+        Err(mensaje) => RespuestaAgenteFfi {
+            respuesta: crudo.to_string(),
+            acciones: Vec::new(),
+            nota: Some(format!("No pude leer la propuesta: {mensaje}")),
+        },
+    }
+}
 
 fn construir_resumen(almacen: &Almacen, datos: &Datos, ahora: NaiveDateTime) -> ResumenArchivoFfi {
     let pendientes = semana::pendientes(datos);
@@ -1647,5 +2110,238 @@ mod pruebas {
         let parsed = parsear_hora_12("2:15 p. m.".into());
         assert_eq!((parsed.hora12, parsed.minuto, parsed.tarde), (2, 15, true));
         assert_eq!(dias_semana_etiquetas().len(), 7);
+    }
+
+    fn servidor_http_simulado(status: u16, cuerpo: String) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local");
+        let addr = listener.local_addr().expect("local_addr");
+        let url = format!("http://{addr}");
+
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf);
+                let razon = match status {
+                    200 => "OK",
+                    401 => "Unauthorized",
+                    429 => "Too Many Requests",
+                    _ => "Error",
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status} {razon}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{cuerpo}",
+                    cuerpo.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn avisos_proximos_anotar_y_resumen_del_dia() {
+        let dir = TempDir::new().expect("tempdir");
+        let ruta = ruta_temp(&dir);
+        let registro = dir.path().join("enviados.txt").to_string_lossy().into_owned();
+
+        // Archivo controlado con una tarea que vence el 2026-11-28T23:59 y un recordatorio el sábado.
+        fs::write(
+            &ruta,
+            r#"[ajustes]
+aviso_dia_antes = "20:00"
+aviso_horas_antes = 3
+
+[[tarea]]
+id = "t-uno"
+titulo = "Parcial"
+materia = "Control"
+vence = "2026-11-28T23:59"
+hecha = false
+
+[[recordatorio]]
+id = "r-uno"
+texto = "Repasar"
+dias = ["sab"]
+hora = "18:00"
+"#,
+        )
+        .expect("escribir");
+
+        let lista = proximos_avisos(
+            ruta.clone(),
+            "2026-11-27T08:00:00".into(),
+            "2026-11-29T08:00:00".into(),
+            registro.clone(),
+        )
+        .expect("proximos avisos");
+        assert_eq!(lista.len(), 3);
+        assert_eq!(lista[0].clave, "t:t-uno:dia:2026-11-28");
+        assert_eq!(lista[0].momento_iso, "2026-11-27T20:00:00");
+        assert!(!lista[0].es_recordatorio);
+        assert_eq!(lista[1].clave, "r:r-uno:2026-11-28");
+        assert!(lista[1].es_recordatorio);
+
+        // Anotar uno lo excluye de la siguiente consulta.
+        anotar_aviso(registro.clone(), lista[0].clave.clone());
+        let lista2 = proximos_avisos(
+            ruta.clone(),
+            "2026-11-27T08:00:00".into(),
+            "2026-11-29T08:00:00".into(),
+            registro.clone(),
+        )
+        .expect("sin repetidos");
+        assert_eq!(lista2.len(), 2);
+
+        // Resumen del día se entrega una sola vez para esa fecha.
+        let res1 = resumen_del_dia(
+            ruta.clone(),
+            "2026-11-28T09:00:00".into(),
+            registro.clone(),
+        )
+        .expect("resumen 1");
+        assert!(res1.is_some());
+        assert_eq!(res1.unwrap().clave, "resumen:2026-11-28");
+
+        let res2 = resumen_del_dia(ruta, "2026-11-28T14:00:00".into(), registro)
+            .expect("resumen 2");
+        assert!(res2.is_none(), "no se repite el resumen el mismo día");
+    }
+
+    #[test]
+    fn agente_config_proveedores_enviar_y_aplicar() {
+        let dir = TempDir::new().expect("tempdir");
+        let ruta_datos = ruta_temp(&dir);
+        let ruta_cfg = dir.path().join("agente.toml").to_string_lossy().into_owned();
+        let inicial = cargar(ruta_datos.clone()).expect("cargar");
+
+        let provs = proveedores_agente();
+        assert_eq!(provs.len(), 4);
+        assert_eq!(provs[0].nombre, "DeepSeek");
+        assert!(provs[0].url_clave.is_some());
+        assert!(provs[3].url_clave.is_none());
+
+        let voz_provs = proveedores_voz();
+        assert_eq!(voz_provs.len(), 2);
+        assert_eq!(voz_provs[0].nombre, "OpenAI");
+
+        // Config inexistente devuelve valores por defecto sin clave.
+        let cfg0 = leer_agente_config(ruta_cfg.clone());
+        assert!(cfg0.api_key.is_empty());
+
+        // Sin clave, enviar_al_agente falla de forma legible sin red.
+        let err_sin_clave =
+            enviar_al_agente(ruta_datos.clone(), ruta_cfg.clone(), "hola".into()).unwrap_err();
+        assert!(err_sin_clave.to_string().contains("clave"));
+
+        // Validación con error.
+        let err_val = validar_agente(
+            3,
+            "sin-esquema".into(),
+            "m".into(),
+            "sk-1".into(),
+            0,
+            "".into(),
+            "".into(),
+            "".into(),
+        )
+        .unwrap_err();
+        assert!(matches!(err_val, ErrorFfi::Validacion { campo: 1, .. }));
+
+        // Servidor local simulado para enviar_al_agente con acciones propuestas.
+        let respuesta_json = r#"{"choices":[{"message":{"role":"assistant","content":"{\"respuesta\":\"Listo, propongo dos tareas.\",\"acciones\":[{\"tipo\":\"crear_tarea\",\"titulo\":\"Tarea agente 1\",\"materia\":\"Control\",\"vence\":\"2026-12-05T20:00\"},{\"tipo\":\"crear_tarea\",\"titulo\":\"Tarea agente 2\",\"materia\":null,\"vence\":\"2026-12-06T20:00\"}]}"}}]}"#.to_string();
+        let (url, handle) = servidor_http_simulado(200, respuesta_json);
+
+        guardar_agente_config(
+            ruta_cfg.clone(),
+            3,
+            url,
+            "modelo-local".into(),
+            "sk-test".into(),
+            0,
+            "".into(),
+            "".into(),
+            "".into(),
+        )
+        .expect("guardar config");
+
+        let resp = enviar_al_agente(
+            ruta_datos.clone(),
+            ruta_cfg.clone(),
+            "agrega dos tareas".into(),
+        )
+        .expect("enviar al agente");
+        let _ = handle.join();
+        assert_eq!(resp.respuesta, "Listo, propongo dos tareas.");
+        assert_eq!(resp.acciones.len(), 2);
+        assert!(resp.nota.is_none());
+
+        // Aplicar una acción individual.
+        let res1 = aplicar_accion(ruta_datos.clone(), resp.acciones[0].id.clone())
+            .expect("aplicar primera");
+        assert_eq!(res1.num_tareas, inicial.num_tareas + 1);
+
+        // Aplicar todas (la segunda restante).
+        let res_todas =
+            aplicar_todas(ruta_datos.clone(), vec![resp.acciones[1].id.clone()])
+                .expect("aplicar todas");
+        assert_eq!(res_todas.aplicadas, 1);
+        assert!(res_todas.error.is_none());
+        assert_eq!(res_todas.resumen.unwrap().num_tareas, inicial.num_tareas + 2);
+
+        // Error 401 simulado.
+        let (url_401, h401) = servidor_http_simulado(401, "{}".into());
+        guardar_agente_config(
+            ruta_cfg.clone(),
+            3,
+            url_401,
+            "m".into(),
+            "sk-mal".into(),
+            0,
+            "".into(),
+            "".into(),
+            "".into(),
+        )
+        .expect("guardar 401");
+        let err_401 = enviar_al_agente(ruta_datos, ruta_cfg, "hola".into()).unwrap_err();
+        let _ = h401.join();
+        assert!(err_401.to_string().contains("401"));
+    }
+
+    #[test]
+    fn voz_wav_y_transcribir_simulado() {
+        let dir = TempDir::new().expect("tempdir");
+        let ruta_cfg = dir.path().join("agente.toml").to_string_lossy().into_owned();
+
+        let wav = wav_de_pcm16(vec![0i16; 1600], 16_000);
+        assert_eq!(wav.len(), 44 + 3200);
+
+        // Sin clave de voz no toca la red.
+        let err_sin_clave = transcribir(ruta_cfg.clone(), wav.clone()).unwrap_err();
+        assert!(err_sin_clave.to_string().contains("clave de voz") || err_sin_clave.to_string().contains("clave"));
+
+        // Con servidor local simulado.
+        let (url, handle) = servidor_http_simulado(
+            200,
+            r#"{"text":"taller de control para el viernes"}"#.into(),
+        );
+        guardar_agente_config(
+            ruta_cfg.clone(),
+            0,
+            "".into(),
+            "".into(),
+            "sk-agent".into(),
+            0,
+            url,
+            "whisper-1".into(),
+            "sk-voz".into(),
+        )
+        .expect("guardar config voz");
+
+        let texto = transcribir(ruta_cfg, wav).expect("transcribir");
+        let _ = handle.join();
+        assert_eq!(texto, "taller de control para el viernes");
     }
 }

@@ -254,7 +254,9 @@ pub fn cargar() -> AgenteConfig {
     cargar_de(&ruta())
 }
 
-fn cargar_de(ruta: &Path) -> AgenteConfig {
+/// Lee la configuración de una ruta concreta. Si el archivo no existe o está
+/// roto, devuelve los valores por defecto.
+pub fn cargar_de(ruta: &Path) -> AgenteConfig {
     std::fs::read_to_string(ruta)
         .ok()
         .and_then(|texto| toml::from_str::<AgenteConfig>(&texto).ok())
@@ -266,7 +268,8 @@ pub fn guardar(config: &AgenteConfig) -> Result<(), String> {
     guardar_en(&ruta(), config)
 }
 
-fn guardar_en(ruta: &Path, config: &AgenteConfig) -> Result<(), String> {
+/// Escribe la configuración en una ruta concreta con permisos `600`.
+pub fn guardar_en(ruta: &Path, config: &AgenteConfig) -> Result<(), String> {
     let dir = ruta
         .parent()
         .filter(|d| !d.as_os_str().is_empty())

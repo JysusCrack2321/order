@@ -37,6 +37,104 @@ pub struct Aviso {
     pub cuerpo: String,
 }
 
+/// Un aviso futuro calculado para programarse en una alarma del sistema.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvisoProgramado {
+    pub momento: NaiveDateTime,
+    pub aviso: Aviso,
+    pub es_recordatorio: bool,
+}
+
+/// Todos los avisos futuros dentro de `[desde, hasta]` (sin contar tareas
+/// hechas ni claves ya presentes en `enviados`), ordenados por `momento`.
+pub fn proximos_avisos(
+    datos: &Datos,
+    desde: NaiveDateTime,
+    hasta: NaiveDateTime,
+    enviados: &HashSet<String>,
+) -> Vec<AvisoProgramado> {
+    if hasta < desde {
+        return Vec::new();
+    }
+
+    let mut lista = Vec::new();
+
+    for t in &datos.tareas {
+        if t.hecha {
+            continue;
+        }
+        let vence = t.vence.date();
+        let fecha = vence.format(FORMATO_FECHA).to_string();
+
+        if let Some(momento) = vence
+            .checked_sub_days(Days::new(1))
+            .map(|dia| dia.and_time(datos.ajustes.aviso_dia_antes))
+        {
+            añadir_programado(
+                &mut lista,
+                enviados,
+                momento,
+                desde,
+                hasta,
+                format!("t:{}:dia:{}", t.id, fecha),
+                format!("Vence mañana: {}", t.titulo),
+                cuerpo_tarea(t),
+                false,
+            );
+        }
+
+        if let Some(momento) = t
+            .vence
+            .checked_sub_signed(Duration::hours(i64::from(datos.ajustes.aviso_horas_antes)))
+        {
+            añadir_programado(
+                &mut lista,
+                enviados,
+                momento,
+                desde,
+                hasta,
+                format!("t:{}:horas:{}", t.id, fecha),
+                format!("Vence pronto: {}", t.titulo),
+                cuerpo_tarea(t),
+                false,
+            );
+        }
+    }
+
+    let mut dia = desde.date();
+    let fin = hasta.date();
+    while dia <= fin {
+        let dia_sem = dia_de(dia);
+        for r in &datos.recordatorios {
+            if !r.dias.contains(&dia_sem) {
+                continue;
+            }
+            añadir_programado(
+                &mut lista,
+                enviados,
+                dia.and_time(r.hora),
+                desde,
+                hasta,
+                format!("r:{}:{}", r.id, dia.format(FORMATO_FECHA)),
+                r.texto.clone(),
+                format!("Recordatorio de las {}", reloj::hora_texto(r.hora)),
+                true,
+            );
+        }
+        let Some(siguiente) = dia.succ_opt() else {
+            break;
+        };
+        dia = siguiente;
+    }
+
+    lista.sort_by(|a, b| {
+        a.momento
+            .cmp(&b.momento)
+            .then_with(|| a.aviso.clave.cmp(&b.aviso.clave))
+    });
+    lista
+}
+
 /// Todo lo que toca avisar en este instante, sin contar lo que ya está en
 /// `enviados`.
 pub fn avisos_debidos(
@@ -226,6 +324,31 @@ fn añadir(
             clave,
             titulo,
             cuerpo,
+        });
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn añadir_programado(
+    lista: &mut Vec<AvisoProgramado>,
+    enviados: &HashSet<String>,
+    momento: NaiveDateTime,
+    desde: NaiveDateTime,
+    hasta: NaiveDateTime,
+    clave: String,
+    titulo: String,
+    cuerpo: String,
+    es_recordatorio: bool,
+) {
+    if momento >= desde && momento <= hasta && !enviados.contains(&clave) {
+        lista.push(AvisoProgramado {
+            momento,
+            aviso: Aviso {
+                clave,
+                titulo,
+                cuerpo,
+            },
+            es_recordatorio,
         });
     }
 }
@@ -436,5 +559,43 @@ mod pruebas {
             resumen_arranque(&d, momento(2026, 11, 29, 9, 0)).is_none(),
             "una tarea hecha no cuenta en el resumen"
         );
+    }
+
+    #[test]
+    fn proximos_avisos_ventana_futura_y_sin_repetir() {
+        let r = Recordatorio {
+            id: "r-uno".to_string(),
+            texto: "Revisar Moodle".to_string(),
+            dias: vec![Dia::Sab],
+            hora: chrono::NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
+        };
+        let mut t_hecha = tarea(true);
+        t_hecha.id = "t-hecha".to_string();
+        let d = datos(vec![tarea(false), t_hecha], vec![r]);
+
+        // Ventana de 48h desde el viernes 27 nov 2026 08:00 hasta domingo 29 nov 08:00.
+        let desde = momento(2026, 11, 27, 8, 0);
+        let hasta = momento(2026, 11, 29, 8, 0);
+        let mut enviados = HashSet::new();
+        let lista = proximos_avisos(&d, desde, hasta, &enviados);
+
+        assert_eq!(lista.len(), 3);
+        assert_eq!(lista[0].aviso.clave, "t:t-uno:dia:2026-11-28");
+        assert_eq!(lista[0].momento, momento(2026, 11, 27, 20, 0));
+        assert!(!lista[0].es_recordatorio);
+
+        assert_eq!(lista[1].aviso.clave, "r:r-uno:2026-11-28");
+        assert_eq!(lista[1].momento, momento(2026, 11, 28, 18, 0));
+        assert!(lista[1].es_recordatorio);
+
+        assert_eq!(lista[2].aviso.clave, "t:t-uno:horas:2026-11-28");
+        assert_eq!(lista[2].momento, momento(2026, 11, 28, 20, 59));
+        assert!(!lista[2].es_recordatorio);
+
+        // Si ya se envió uno, no vuelve a salir; y si desde es posterior al día antes, no sale pasado.
+        enviados.insert("r:r-uno:2026-11-28".to_string());
+        let lista2 = proximos_avisos(&d, momento(2026, 11, 28, 10, 0), hasta, &enviados);
+        assert_eq!(lista2.len(), 1);
+        assert_eq!(lista2[0].aviso.clave, "t:t-uno:horas:2026-11-28");
     }
 }
