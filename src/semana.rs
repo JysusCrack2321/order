@@ -46,7 +46,7 @@ pub fn semana(datos: &Datos, lunes: NaiveDate) -> Vec<DiaVista> {
         let del_dia: Vec<&Clase> = datos
             .clases
             .iter()
-            .filter(|c| c.dia == dia && dentro_del_semestre(datos, fecha))
+            .filter(|c| c.dias.contains(&dia) && dentro_del_semestre(datos, fecha))
             .collect();
 
         // El fin de semana solo ocupa columna si de verdad hay clase.
@@ -153,10 +153,17 @@ mod pruebas {
         Clase {
             id: String::new(),
             materia: materia.to_string(),
-            dia,
+            dias: vec![dia],
             inicio: hora(7, 0),
             fin: hora(9, 0),
             lugar: None,
+        }
+    }
+
+    fn clase_en(materia: &str, dias: &[Dia]) -> Clase {
+        Clase {
+            dias: dias.to_vec(),
+            ..clase(materia, Dia::Lun)
         }
     }
 
@@ -241,6 +248,31 @@ mod pruebas {
         assert_eq!(dias.len(), 6);
         assert_eq!(dias[5].fecha, fecha(2026, 12, 5));
         assert_eq!(dias[5].bloques[0].materia, "Taller");
+    }
+
+    /// Una clase con varios días ocupa una columna por cada día.
+    #[test]
+    fn clase_en_varios_dias() {
+        let d = datos(
+            vec![clase_en("Control", &[Dia::Lun, Dia::Mie, Dia::Vie])],
+            Vec::new(),
+            None,
+        );
+        let dias = semana(&d, fecha(2026, 11, 30));
+        let con_clase: Vec<NaiveDate> = dias
+            .iter()
+            .filter(|dia| !dia.bloques.is_empty())
+            .map(|dia| dia.fecha)
+            .collect();
+        assert_eq!(
+            con_clase,
+            vec![fecha(2026, 11, 30), fecha(2026, 12, 2), fecha(2026, 12, 4)],
+            "lunes, miércoles y viernes"
+        );
+        assert_eq!(
+            dias[2].bloques[0].clase_id, "",
+            "el bloque conserva la clase que lo originó"
+        );
     }
 
     #[test]

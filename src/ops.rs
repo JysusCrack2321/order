@@ -11,8 +11,7 @@
 
 use crate::almacen::nuevo_id;
 use crate::modelo::{
-    Ajustes, Clase, Datos, Dia, FORMATO_FECHA, FORMATO_FECHA_HORA, FORMATO_HORA, Recordatorio,
-    Semestre,
+    Ajustes, Clase, Datos, FORMATO_FECHA, FORMATO_FECHA_HORA, FORMATO_HORA, Recordatorio, Semestre,
 };
 use chrono::{NaiveDate, NaiveDateTime};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
@@ -216,7 +215,10 @@ pub fn borrar_recordatorio(doc: &mut DocumentMut, id: &str) -> Result<(), String
 
 fn campos_clase(tabla: &mut Table, c: &Clase) {
     poner(tabla, "materia", texto(&c.materia));
-    poner(tabla, "dia", texto(dia_texto(c.dia)));
+    let dias: Array = c.dias.iter().map(|dia| dia.texto()).collect();
+    poner(tabla, "dias", Value::Array(dias));
+    // El `dia` suelto de los archivos anteriores se convierte a `dias`.
+    tabla.remove("dia");
     poner(tabla, "inicio", texto(c.inicio.format(FORMATO_HORA)));
     poner(tabla, "fin", texto(c.fin.format(FORMATO_HORA)));
     poner_opcional(tabla, "lugar", c.lugar.as_deref().map(texto));
@@ -224,7 +226,7 @@ fn campos_clase(tabla: &mut Table, c: &Clase) {
 
 fn campos_recordatorio(tabla: &mut Table, r: &Recordatorio) {
     poner(tabla, "texto", texto(&r.texto));
-    let dias: Array = r.dias.iter().map(|d| dia_texto(*d)).collect();
+    let dias: Array = r.dias.iter().map(|d| d.texto()).collect();
     poner(tabla, "dias", Value::Array(dias));
     poner(tabla, "hora", texto(r.hora.format(FORMATO_HORA)));
 }
@@ -257,18 +259,6 @@ pub fn guardar_ajustes(doc: &mut DocumentMut, a: &Ajustes) -> Result<(), String>
         Value::from(a.aviso_horas_antes as i64),
     );
     Ok(())
-}
-
-fn dia_texto(dia: Dia) -> &'static str {
-    match dia {
-        Dia::Lun => "lun",
-        Dia::Mar => "mar",
-        Dia::Mie => "mie",
-        Dia::Jue => "jue",
-        Dia::Vie => "vie",
-        Dia::Sab => "sab",
-        Dia::Dom => "dom",
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -392,7 +382,7 @@ fn forma_inesperada(nombre: &str) -> String {
 #[cfg(test)]
 mod pruebas {
     use super::*;
-    use crate::modelo::{self, FORMATO_FECHA, FORMATO_FECHA_HORA, FORMATO_HORA};
+    use crate::modelo::{self, Dia, FORMATO_FECHA, FORMATO_FECHA_HORA, FORMATO_HORA};
     use chrono::NaiveTime;
 
     const BASE: &str = "\
@@ -547,7 +537,7 @@ hora = \"18:00\"
         let clase = Clase {
             id: String::new(),
             materia: "Robótica".to_string(),
-            dia: Dia::Mie,
+            dias: vec![Dia::Mie],
             inicio: hora("09:00"),
             fin: hora("11:00"),
             lugar: Some("Lab 3".to_string()),
@@ -576,7 +566,7 @@ hora = \"18:00\"
         // Reemplazar.
         let mut editada = nueva_clase.clone();
         editada.materia = "Robótica II".to_string();
-        editada.dia = Dia::Jue;
+        editada.dias = vec![Dia::Jue, Dia::Sab];
         editada.lugar = None;
         guardar_clase(&mut doc, &editada).expect("reemplazar la clase");
         let mut editado = nuevo_rec.clone();
@@ -597,7 +587,11 @@ hora = \"18:00\"
             .find(|c| c.id == nueva_clase.id)
             .expect("la clase conserva su id");
         assert_eq!(guardada.materia, "Robótica II");
-        assert_eq!(guardada.dia, Dia::Jue);
+        assert_eq!(
+            guardada.dias,
+            vec![Dia::Jue, Dia::Sab],
+            "la clase se guarda en varios días"
+        );
         assert_eq!(guardada.lugar, None);
         let guardado = datos
             .recordatorios
@@ -614,6 +608,39 @@ hora = \"18:00\"
         let datos = modelo::parsear(&doc.to_string()).expect("válido");
         assert_eq!(datos.clases.len(), clases);
         assert_eq!(datos.recordatorios.len(), recordatorios);
+    }
+
+    /// Una clase escrita con el `dia` antiguo se guarda como `dias` en cuanto
+    /// se toca desde el formulario, y el archivo queda con el formato nuevo.
+    #[test]
+    fn convierte_dia_antiguo_a_dias() {
+        let mut doc = doc(BASE);
+        assert!(doc.to_string().contains("dia = \"lun\""), "el ejemplo va en formato viejo");
+
+        let mut clase = modelo::parsear(&doc.to_string())
+            .expect("válido")
+            .clases
+            .into_iter()
+            .find(|clase| clase.id == "c-uno")
+            .expect("la clase del ejemplo");
+        assert_eq!(clase.dias, vec![Dia::Lun]);
+        clase.dias = vec![Dia::Lun, Dia::Mie];
+        guardar_clase(&mut doc, &clase).expect("guardar la clase");
+
+        let texto = doc.to_string();
+        assert!(
+            texto.contains("dias = [\"lun\", \"mie\"]"),
+            "se escribe la lista de días:\n{texto}"
+        );
+        assert!(
+            !texto.contains("dia = \"lun\""),
+            "el campo `dia` viejo desaparece:\n{texto}"
+        );
+        assert_eq!(
+            modelo::parsear(&texto).expect("válido").clases[0].dias,
+            vec![Dia::Lun, Dia::Mie]
+        );
+        assert!(texto.contains("lugar = \"453-201\""), "lo demás no se toca");
     }
 
     #[test]

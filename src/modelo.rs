@@ -119,6 +119,31 @@ pub enum Dia {
     Dom,
 }
 
+impl Dia {
+    /// Los siete días en el orden en que se escriben y se muestran (lun → dom).
+    pub const TODOS: [Dia; 7] = [
+        Dia::Lun,
+        Dia::Mar,
+        Dia::Mie,
+        Dia::Jue,
+        Dia::Vie,
+        Dia::Sab,
+        Dia::Dom,
+    ];
+
+    /// Cómo se escribe en el archivo: `"lun"` … `"dom"`.
+    pub fn texto(self) -> &'static str {
+        match self {
+            Dia::Lun => "lun",
+            Dia::Mar => "mar",
+            Dia::Mie => "mie",
+            Dia::Jue => "jue",
+            Dia::Vie => "vie",
+            Dia::Sab => "sab",
+            Dia::Dom => "dom",
+        }
+    }
+}
 /// Cuándo avisar de una tarea por vencer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Ajustes {
@@ -154,17 +179,62 @@ pub struct Semestre {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "ClaseCruda")]
 pub struct Clase {
-    #[serde(default)]
     pub id: String,
     pub materia: String,
-    pub dia: Dia,
+    /// Días en los que se repite la clase, sin repetir y en orden lun → dom.
+    pub dias: Vec<Dia>,
     #[serde(with = "hora")]
     pub inicio: NaiveTime,
     #[serde(with = "hora")]
     pub fin: NaiveTime,
-    #[serde(default)]
     pub lugar: Option<String>,
+}
+
+/// Una clase tal como viene del archivo: acepta `dias = ["lun", "mie"]` y
+/// también el `dia = "lun"` de los archivos anteriores.
+#[derive(Deserialize)]
+struct ClaseCruda {
+    #[serde(default)]
+    id: String,
+    materia: String,
+    #[serde(default)]
+    dia: Option<Dia>,
+    #[serde(default)]
+    dias: Option<Vec<Dia>>,
+    #[serde(with = "hora")]
+    inicio: NaiveTime,
+    #[serde(with = "hora")]
+    fin: NaiveTime,
+    #[serde(default)]
+    lugar: Option<String>,
+}
+
+impl From<ClaseCruda> for Clase {
+    fn from(cruda: ClaseCruda) -> Clase {
+        Clase {
+            id: cruda.id,
+            materia: cruda.materia,
+            dias: unir_dias(cruda.dia, cruda.dias),
+            inicio: cruda.inicio,
+            fin: cruda.fin,
+            lugar: cruda.lugar,
+        }
+    }
+}
+
+/// Junta el `dia` antiguo con `dias`, sin repetir y en orden lun → dom.
+fn unir_dias(dia: Option<Dia>, dias: Option<Vec<Dia>>) -> Vec<Dia> {
+    let mut lista = dias.unwrap_or_default();
+    if let Some(dia) = dia {
+        lista.push(dia);
+    }
+    Dia::TODOS
+        .iter()
+        .copied()
+        .filter(|dia| lista.contains(dia))
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -280,7 +350,7 @@ fn mensaje_corto(e: &toml::de::Error) -> String {
 const CLAVES_RAIZ: &[&str] = &["ajustes", "semestre", "clase", "tarea", "recordatorio"];
 const CLAVES_AJUSTES: &[&str] = &["aviso_dia_antes", "aviso_horas_antes"];
 const CLAVES_SEMESTRE: &[&str] = &["inicio", "fin"];
-const CLAVES_CLASE: &[&str] = &["id", "materia", "dia", "inicio", "fin", "lugar"];
+const CLAVES_CLASE: &[&str] = &["id", "materia", "dia", "dias", "inicio", "fin", "lugar"];
 const CLAVES_TAREA: &[&str] = &["id", "titulo", "materia", "vence", "hecha", "hecha_en"];
 const CLAVES_RECORDATORIO: &[&str] = &["id", "texto", "dias", "hora"];
 
@@ -489,13 +559,71 @@ mod pruebas {
             NaiveDate::from_ymd_opt(2026, 8, 3).unwrap()
         );
         assert_eq!(semestre.fin, NaiveDate::from_ymd_opt(2026, 12, 5).unwrap());
-        assert_eq!(datos.clases[0].dia, Dia::Lun);
+        assert_eq!(datos.clases[0].dias, vec![Dia::Lun, Dia::Mie]);
+        assert_eq!(datos.clases[1].dias, vec![Dia::Mar, Dia::Jue]);
         assert_eq!(datos.clases[0].lugar.as_deref(), Some("453-201"));
         assert_eq!(
             datos.tareas[0].vence,
             NaiveDateTime::parse_from_str("2026-11-28T23:59", FORMATO_FECHA_HORA).unwrap()
         );
         assert_eq!(datos.recordatorios[0].dias.len(), 5);
+    }
+
+    /// Los archivos anteriores traen `dia = "lun"`; se sigue aceptando, y
+    /// `dia` + `dias` juntos se juntan sin repetir y en orden.
+    #[test]
+    fn acepta_dia_antiguo_y_dias() {
+        let texto = "\
+[[clase]]
+materia = \"Control\"
+dia = \"lun\"
+inicio = \"07:00\"
+fin = \"09:00\"
+
+[[clase]]
+materia = \"Robótica\"
+dias = [\"jue\", \"mar\", \"jue\"]
+inicio = \"09:00\"
+fin = \"11:00\"
+
+[[clase]]
+materia = \"Cálculo\"
+dia = \"vie\"
+dias = [\"lun\", \"vie\"]
+inicio = \"11:00\"
+fin = \"13:00\"
+";
+        let datos = parsear(texto).expect("válido");
+        assert_eq!(datos.clases[0].dias, vec![Dia::Lun]);
+        assert_eq!(
+            datos.clases[1].dias,
+            vec![Dia::Mar, Dia::Jue],
+            "sin repetir y en orden lun → dom"
+        );
+        assert_eq!(
+            datos.clases[2].dias,
+            vec![Dia::Lun, Dia::Vie],
+            "el `dia` antiguo se suma a `dias`"
+        );
+    }
+
+    /// Al escribir una clase sale `dias = [...]` y nunca el `dia` antiguo.
+    #[test]
+    fn escribe_dias_y_no_dia() {
+        let clase = Clase {
+            id: "c-uno".to_string(),
+            materia: "Control".to_string(),
+            dias: vec![Dia::Lun, Dia::Vie],
+            inicio: NaiveTime::from_hms_opt(7, 0, 0).unwrap(),
+            fin: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+            lugar: None,
+        };
+        let texto = toml::to_string(&clase).expect("la clase se serializa");
+        assert!(texto.contains("dias = [\"lun\", \"vie\"]"), "{texto}");
+        assert!(!texto.contains("\ndia = "), "{texto}");
+
+        let vuelta: Clase = toml::from_str(&texto).expect("y se vuelve a leer");
+        assert_eq!(vuelta, clase);
     }
 
     /// Un valor inválido debe reportar la línea donde está.

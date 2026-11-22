@@ -172,8 +172,16 @@ export component AppWindow inherits Window {
     in-out property <string> f-hora: "";
     in-out property <string> f-fin: "";
     in-out property <string> f-lugar: "";
-    in-out property <int> f-dia: 0;
     in-out property <bool> f-hecha: false;
+
+    // Días de la clase: se eligen varios (al menos uno).
+    in-out property <bool> f-lun: false;
+    in-out property <bool> f-mar: false;
+    in-out property <bool> f-mie: false;
+    in-out property <bool> f-jue: false;
+    in-out property <bool> f-vie: false;
+    in-out property <bool> f-sab: false;
+    in-out property <bool> f-dom: false;
 
     // Campos de recordatorio.
     in-out property <string> r-texto: "";
@@ -520,19 +528,20 @@ export component AppWindow inherits Window {
                         spacing: Tema.espacio-xs;
 
                         Etiqueta {
-                            text: "Día";
+                            text: "Días (uno o varios)";
+                            mal: root.campo-mal == 4;
                         }
 
                         HorizontalLayout {
                             spacing: Tema.espacio-xs;
 
-                            Chip { texto: "Lun"; activo: root.f-dia == 0; clicked => { root.f-dia = 0; } }
-                            Chip { texto: "Mar"; activo: root.f-dia == 1; clicked => { root.f-dia = 1; } }
-                            Chip { texto: "Mié"; activo: root.f-dia == 2; clicked => { root.f-dia = 2; } }
-                            Chip { texto: "Jue"; activo: root.f-dia == 3; clicked => { root.f-dia = 3; } }
-                            Chip { texto: "Vie"; activo: root.f-dia == 4; clicked => { root.f-dia = 4; } }
-                            Chip { texto: "Sáb"; activo: root.f-dia == 5; clicked => { root.f-dia = 5; } }
-                            Chip { texto: "Dom"; activo: root.f-dia == 6; clicked => { root.f-dia = 6; } }
+                            Chip { texto: "Lun"; activo: root.f-lun; clicked => { root.f-lun = !root.f-lun; } }
+                            Chip { texto: "Mar"; activo: root.f-mar; clicked => { root.f-mar = !root.f-mar; } }
+                            Chip { texto: "Mié"; activo: root.f-mie; clicked => { root.f-mie = !root.f-mie; } }
+                            Chip { texto: "Jue"; activo: root.f-jue; clicked => { root.f-jue = !root.f-jue; } }
+                            Chip { texto: "Vie"; activo: root.f-vie; clicked => { root.f-vie = !root.f-vie; } }
+                            Chip { texto: "Sáb"; activo: root.f-sab; clicked => { root.f-sab = !root.f-sab; } }
+                            Chip { texto: "Dom"; activo: root.f-dom; clicked => { root.f-dom = !root.f-dom; } }
                         }
                     }
 

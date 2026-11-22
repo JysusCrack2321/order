@@ -457,11 +457,11 @@ fn abrir_tarea(ui: &AppWindow, tarea: Option<&Tarea>) {
 }
 
 fn abrir_clase(ui: &AppWindow, clase: Option<&Clase>) {
-    let (id, materia, dia, inicio, fin, lugar) = match clase {
+    let (id, materia, dias, inicio, fin, lugar) = match clase {
         Some(c) => (
             c.id.clone(),
             c.materia.clone(),
-            c.dia,
+            c.dias.clone(),
             c.inicio,
             c.fin,
             c.lugar.clone().unwrap_or_default(),
@@ -469,7 +469,7 @@ fn abrir_clase(ui: &AppWindow, clase: Option<&Clase>) {
         None => (
             String::new(),
             String::new(),
-            Dia::Lun,
+            vec![Dia::Lun],
             hora(7, 0),
             hora(9, 0),
             String::new(),
@@ -487,7 +487,7 @@ fn abrir_clase(ui: &AppWindow, clase: Option<&Clase>) {
     );
     ui.set_form_edita(clase.is_some());
     ui.set_f_materia(materia.into());
-    ui.set_f_dia(indice_dia(dia));
+    poner_dias_clase(ui, &dias);
     ui.set_f_hora(inicio.format(FORMATO_HORA).to_string().into());
     ui.set_f_fin(fin.format(FORMATO_HORA).to_string().into());
     ui.set_f_lugar(lugar.into());
@@ -538,7 +538,7 @@ fn abrir_recordatorio(ui: &AppWindow, recordatorio: Option<&Recordatorio>) {
     ui.set_form_edita(recordatorio.is_some());
     ui.set_r_texto(texto.into());
     ui.set_r_hora(hora.format(FORMATO_HORA).to_string().into());
-    poner_dias(ui, &dias);
+    poner_dias_recordatorio(ui, &dias);
     abrir_panel(ui, 4);
 }
 
@@ -634,6 +634,11 @@ fn guardar_clase(ui: &AppWindow) {
         falta(ui, 1, "La materia no puede quedar vacía.");
         return;
     }
+    let dias = dias_de_clase(ui);
+    if dias.is_empty() {
+        falta(ui, 4, "Marca al menos un día para la clase.");
+        return;
+    }
     let Some(inicio) = interpretar_hora(&ui.get_f_hora()) else {
         falta(ui, 2, "Elige la hora de inicio.");
         return;
@@ -655,7 +660,7 @@ fn guardar_clase(ui: &AppWindow) {
     let clase = Clase {
         id,
         materia,
-        dia: DIAS_SEMANA[(ui.get_f_dia().clamp(0, 6)) as usize],
+        dias,
         inicio,
         fin,
         lugar: opcional(&ui.get_f_lugar()),
@@ -675,7 +680,7 @@ fn guardar_recordatorio(ui: &AppWindow) {
         falta(ui, 2, "Elige la hora del recordatorio.");
         return;
     };
-    let dias = dias_elegidos(ui);
+    let dias = dias_del_recordatorio(ui);
     if dias.is_empty() {
         falta(ui, 4, "Marca al menos un día para el recordatorio.");
         return;
@@ -1498,20 +1503,8 @@ fn dia_de(dia: Weekday) -> Dia {
     }
 }
 
-fn indice_dia(dia: Dia) -> i32 {
-    match dia {
-        Dia::Lun => 0,
-        Dia::Mar => 1,
-        Dia::Mie => 2,
-        Dia::Jue => 3,
-        Dia::Vie => 4,
-        Dia::Sab => 5,
-        Dia::Dom => 6,
-    }
-}
-
 /// Los siete días marcados en el formulario de recordatorio.
-fn dias_elegidos(ui: &AppWindow) -> Vec<Dia> {
+fn dias_del_recordatorio(ui: &AppWindow) -> Vec<Dia> {
     let marcas = [
         ui.get_r_lun(),
         ui.get_r_mar(),
@@ -1529,7 +1522,7 @@ fn dias_elegidos(ui: &AppWindow) -> Vec<Dia> {
         .collect()
 }
 
-fn poner_dias(ui: &AppWindow, dias: &[Dia]) {
+fn poner_dias_recordatorio(ui: &AppWindow, dias: &[Dia]) {
     ui.set_r_lun(dias.contains(&Dia::Lun));
     ui.set_r_mar(dias.contains(&Dia::Mar));
     ui.set_r_mie(dias.contains(&Dia::Mie));
@@ -1537,6 +1530,35 @@ fn poner_dias(ui: &AppWindow, dias: &[Dia]) {
     ui.set_r_vie(dias.contains(&Dia::Vie));
     ui.set_r_sab(dias.contains(&Dia::Sab));
     ui.set_r_dom(dias.contains(&Dia::Dom));
+}
+
+/// Los días marcados en el formulario de clase (puede haber varios).
+fn dias_de_clase(ui: &AppWindow) -> Vec<Dia> {
+    let marcas = [
+        ui.get_f_lun(),
+        ui.get_f_mar(),
+        ui.get_f_mie(),
+        ui.get_f_jue(),
+        ui.get_f_vie(),
+        ui.get_f_sab(),
+        ui.get_f_dom(),
+    ];
+    DIAS_SEMANA
+        .iter()
+        .zip(marcas)
+        .filter(|(_, marcado)| *marcado)
+        .map(|(dia, _)| *dia)
+        .collect()
+}
+
+fn poner_dias_clase(ui: &AppWindow, dias: &[Dia]) {
+    ui.set_f_lun(dias.contains(&Dia::Lun));
+    ui.set_f_mar(dias.contains(&Dia::Mar));
+    ui.set_f_mie(dias.contains(&Dia::Mie));
+    ui.set_f_jue(dias.contains(&Dia::Jue));
+    ui.set_f_vie(dias.contains(&Dia::Vie));
+    ui.set_f_sab(dias.contains(&Dia::Sab));
+    ui.set_f_dom(dias.contains(&Dia::Dom));
 }
 
 /// Texto del campo, o `None` si quedó vacío (para los campos opcionales).
@@ -1687,8 +1709,8 @@ mod pruebas {
     #[test]
     fn dias_del_recordatorio_en_orden() {
         assert_eq!(dias_texto(&[Dia::Lun, Dia::Mie, Dia::Dom]), "Lun, Mié, Dom");
-        assert_eq!(indice_dia(Dia::Lun), 0);
-        assert_eq!(indice_dia(Dia::Dom), 6);
+        assert_eq!(DIAS_SEMANA[0], Dia::Lun, "el formulario empieza en lunes");
+        assert_eq!(DIAS_SEMANA[6], Dia::Dom);
     }
 
     /// El calendario pone el día 1 en su columna y marca el elegido.
@@ -1727,7 +1749,7 @@ mod pruebas {
         d.clases.push(Clase {
             id: "c-uno".into(),
             materia: "Robótica".into(),
-            dia: Dia::Lun,
+            dias: vec![Dia::Lun],
             inicio: hora(7, 0),
             fin: hora(9, 0),
             lugar: None,
@@ -1735,7 +1757,7 @@ mod pruebas {
         d.clases.push(Clase {
             id: "c-dos".into(),
             materia: "CONTROL".into(),
-            dia: Dia::Mar,
+            dias: vec![Dia::Mar],
             inicio: hora(7, 0),
             fin: hora(9, 0),
             lugar: None,
