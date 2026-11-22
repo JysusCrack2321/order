@@ -158,6 +158,28 @@ export global Tema {
     out property <length> alto-punto: 9px;
     out property <length> ancho-conteo: 34px;
 
+    // --- Inicio: franja de cabecera y tarjetas ---------------------------
+    // La franja se desvanece desde un tono del tema hacia el fondo; las
+    // tarjetas son un poco más claras que el fondo, con esquinas redondeadas,
+    // sombra suave y un acento propio por sección.
+    out property <brush> degradado-inicio: @linear-gradient(180deg, #20202b 0%, #101014 100%);
+    out property <color> tarjeta: #17171f;
+    out property <color> tarjeta-borde: #262631;
+    out property <color> sombra-tarjeta: #00000099;
+    out property <length> sombra-desenfoque: 16px;
+    out property <length> sombra-bajada: 4px;
+    out property <length> radio-tarjeta: 10px;
+    out property <length> alto-franja: 92px;
+    out property <length> relleno-tarjeta: 14px;
+
+    // Acento de cada sección del Inicio (filo superior y título).
+    out property <color> acento-hoy: #c2a878;            // oro
+    out property <color> acento-hoy-tareas: #9fb48a;     // salvia
+    out property <color> acento-vencidas: #c6756b;       // terracota
+    out property <color> acento-proximas: #8fa6c0;       // azul polvo
+    out property <color> acento-recordatorios: #a89ec4;  // lavanda
+    out property <color> acento-materias: #7fae9f;       // verde azulado
+
     // --- Formularios -----------------------------------------------------
     out property <length> ancho-formulario: 440px;
     out property <length> ancho-formulario-ancho: 560px;

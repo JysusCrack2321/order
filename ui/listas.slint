@@ -69,6 +69,68 @@ export component Vacio inherits Text {
     overflow: elide;
 }
 
+/// Tarjeta de una sección del Inicio: fondo un poco más claro que el fondo de
+/// la ventana, esquinas redondeadas, sombra suave y un acento propio (filo
+/// superior y título del mismo tono). El contenido se escribe dentro y la
+/// tarjeta crece con él.
+export component Tarjeta inherits Rectangle {
+    in property <string> titulo;
+    in property <string> detalle: "";
+    in property <color> tono: Tema.acento;
+    in property <length> relleno: Tema.relleno-tarjeta;
+
+    background: Tema.tarjeta;
+    border-radius: Tema.radio-tarjeta;
+    border-width: Tema.linea;
+    border-color: Tema.tarjeta-borde;
+    drop-shadow-color: Tema.sombra-tarjeta;
+    drop-shadow-blur: Tema.sombra-desenfoque;
+    drop-shadow-offset-y: Tema.sombra-bajada;
+    clip: true;
+
+    height: contenido.preferred-height + 2 * root.relleno;
+
+    // Filo superior en el acento de la sección.
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: Tema.trazo;
+        background: root.tono;
+    }
+
+    contenido := VerticalLayout {
+        x: root.relleno;
+        y: root.relleno;
+        width: parent.width - 2 * root.relleno;
+        height: self.preferred-height;
+        spacing: Tema.espacio-sm;
+
+        HorizontalLayout {
+            spacing: Tema.espacio-sm;
+            cross-axis-alignment: end;
+
+            Text {
+                text: root.titulo;
+                font-family: Tema.fuente-titulos;
+                font-size: Tema.tamano-seccion;
+                font-weight: 700;
+                letter-spacing: Tema.letra-seccion;
+                color: root.tono;
+            }
+
+            if root.detalle != "" : Text {
+                text: root.detalle;
+                font-size: Tema.tamano-hora;
+                color: Tema.texto-tenue;
+                vertical-alignment: center;
+            }
+        }
+
+        @children
+    }
+}
+
 /// Una clase: hora a la izquierda y materia con su lugar. El filo y el nombre
 /// van en el color de la materia.
 export component FilaClase inherits Rectangle {
