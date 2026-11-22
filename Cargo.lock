@@ -5054,6 +5054,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "order-core",
+ "order-p2p",
  "tempfile",
  "uniffi",
 ]

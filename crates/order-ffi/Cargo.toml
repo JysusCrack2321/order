@@ -16,6 +16,7 @@ cli = ["uniffi/cli"]
 
 [dependencies]
 order-core = { path = "../order-core" }
+order-p2p = { path = "../order-p2p" }
 chrono = "0.4"
 uniffi = "0.32.2"
 

@@ -237,19 +237,26 @@ fn nombre_limpio_o_defecto(nombre: Option<&str>) -> String {
             return t.to_string();
         }
     }
-    if let Ok(host) = std::fs::read_to_string("/etc/hostname") {
-        let t = host.trim();
-        if !t.is_empty() {
-            return t.to_string();
-        }
+    #[cfg(target_os = "android")]
+    {
+        return "Teléfono".to_string();
     }
-    if let Ok(h) = std::env::var("HOSTNAME") {
-        let t = h.trim();
-        if !t.is_empty() {
-            return t.to_string();
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Ok(host) = std::fs::read_to_string("/etc/hostname") {
+            let t = host.trim();
+            if !t.is_empty() {
+                return t.to_string();
+            }
         }
+        if let Ok(h) = std::env::var("HOSTNAME") {
+            let t = h.trim();
+            if !t.is_empty() {
+                return t.to_string();
+            }
+        }
+        "Computador".to_string()
     }
-    "Este dispositivo".to_string()
 }
 
 fn a_hex(bytes: &[u8; 32]) -> String {

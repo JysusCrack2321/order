@@ -30,11 +30,12 @@ use order_core::presentacion::textos::{
 };
 use order_core::reloj::{self, a_12h, a_24h, etiqueta_hora, hora_texto};
 use order_core::semana;
+use order_p2p::{OpcionesRed, ServicioSync, TTL_EMPAREJAMIENTO};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 uniffi::setup_scaffolding!();
 
@@ -548,6 +549,42 @@ pub struct ResumenSyncFfi {
     pub creadas: u32,
     pub actualizadas: u32,
     pub hechas: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CodigoEmparejamientoFfi {
+    pub enlace: String,
+    pub palabras: String,
+    pub qr_svg: String,
+    pub qr_tamano: u32,
+    pub qr_modulos: Vec<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DispositivoSyncFfi {
+    pub id: String,
+    pub nombre: String,
+    pub texto_estado: String,
+    pub en_linea: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ResumenSyncP2pFfi {
+    pub intentados: u32,
+    pub exitosos: u32,
+    pub cambios_locales: bool,
+    pub errores: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct EstadoSyncFfi {
+    pub activo: bool,
+    pub nodo_id: String,
+    pub nombre: String,
+    pub sincronizando: bool,
+    pub secuencia_cambio: u64,
+    pub total_emparejados: u32,
+    pub texto_estado: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -1912,6 +1949,173 @@ pub fn calendarios_sincronizar(
         actualizadas: resumen.actualizadas,
         hechas: resumen.hechas,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Sincronización P2P (iroh)
+// ---------------------------------------------------------------------------
+
+struct EstadoGlobalSync {
+    ruta_datos: PathBuf,
+    ruta_config: PathBuf,
+    servicio: Arc<ServicioSync>,
+}
+
+static SYNC_GLOBAL: Mutex<Option<EstadoGlobalSync>> = Mutex::new(None);
+
+fn servicio_sync_actual() -> Result<Arc<ServicioSync>, ErrorFfi> {
+    SYNC_GLOBAL
+        .lock()
+        .map_err(|_| ErrorFfi::Operacion {
+            mensaje: "No se pudo acceder al servicio de sincronización.".to_string(),
+        })?
+        .as_ref()
+        .map(|s| Arc::clone(&s.servicio))
+        .ok_or_else(|| ErrorFfi::Operacion {
+            mensaje: "La sincronización P2P no está iniciada.".to_string(),
+        })
+}
+
+fn sync_iniciar_con_opciones(
+    ruta_datos: String,
+    ruta_config: String,
+    opciones: OpcionesRed,
+) -> Result<(), ErrorFfi> {
+    let p_datos = PathBuf::from(&ruta_datos);
+    let p_config = PathBuf::from(&ruta_config);
+
+    let mut guard = SYNC_GLOBAL.lock().map_err(|_| ErrorFfi::Operacion {
+        mensaje: "No se pudo iniciar la sincronización.".to_string(),
+    })?;
+    if let Some(actual) = guard.as_ref() {
+        if actual.ruta_datos == p_datos && actual.ruta_config == p_config {
+            return Ok(());
+        }
+    }
+    *guard = None;
+    let servicio = ServicioSync::iniciar_con_opciones(
+        p_datos.clone(),
+        p_config.clone(),
+        None,
+        None,
+        opciones,
+        TTL_EMPAREJAMIENTO,
+    )
+    .map_err(|mensaje| ErrorFfi::Operacion { mensaje })?;
+    *guard = Some(EstadoGlobalSync {
+        ruta_datos: p_datos,
+        ruta_config: p_config,
+        servicio: Arc::new(servicio),
+    });
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn sync_iniciar(ruta_datos: String, ruta_config: String) -> Result<(), ErrorFfi> {
+    sync_iniciar_con_opciones(ruta_datos, ruta_config, OpcionesRed::Publica)
+}
+
+#[uniffi::export]
+pub fn sync_detener() {
+    if let Ok(mut guard) = SYNC_GLOBAL.lock() {
+        *guard = None;
+    }
+}
+
+#[uniffi::export]
+pub fn sync_codigo_emparejamiento() -> Result<CodigoEmparejamientoFfi, ErrorFfi> {
+    let srv = servicio_sync_actual()?;
+    let cod = srv
+        .codigo_emparejamiento()
+        .map_err(|mensaje| ErrorFfi::Operacion { mensaje })?;
+    Ok(CodigoEmparejamientoFfi {
+        enlace: cod.enlace,
+        palabras: cod.palabras,
+        qr_svg: cod.qr_svg,
+        qr_tamano: cod.qr_tamano,
+        qr_modulos: cod.qr_modulos,
+    })
+}
+
+#[uniffi::export]
+pub fn sync_emparejar(enlace_o_palabras: String) -> Result<DispositivoSyncFfi, ErrorFfi> {
+    let srv = servicio_sync_actual()?;
+    let emp = srv
+        .emparejar(&enlace_o_palabras)
+        .map_err(|mensaje| ErrorFfi::Operacion { mensaje })?;
+    Ok(DispositivoSyncFfi {
+        id: emp.id,
+        nombre: emp.nombre,
+        texto_estado: "sincronizando…".to_string(),
+        en_linea: true,
+    })
+}
+
+#[uniffi::export]
+pub fn sync_dispositivos() -> Vec<DispositivoSyncFfi> {
+    let Ok(srv) = servicio_sync_actual() else {
+        return Vec::new();
+    };
+    srv.dispositivos()
+        .into_iter()
+        .map(|d| DispositivoSyncFfi {
+            id: d.id,
+            nombre: d.nombre,
+            texto_estado: d.texto_estado,
+            en_linea: d.en_linea,
+        })
+        .collect()
+}
+
+#[uniffi::export]
+pub fn sync_quitar(id: String) -> Result<(), ErrorFfi> {
+    let srv = servicio_sync_actual()?;
+    srv.quitar(&id)
+        .map_err(|mensaje| ErrorFfi::Operacion { mensaje })
+}
+
+#[uniffi::export]
+pub fn sync_ahora() -> Result<ResumenSyncP2pFfi, ErrorFfi> {
+    let srv = servicio_sync_actual()?;
+    let res = srv.sincronizar_ahora();
+    Ok(ResumenSyncP2pFfi {
+        intentados: res.intentados,
+        exitosos: res.exitosos,
+        cambios_locales: res.cambios_locales,
+        errores: res.errores,
+    })
+}
+
+#[uniffi::export]
+pub fn sync_estado() -> EstadoSyncFfi {
+    let Ok(srv) = servicio_sync_actual() else {
+        return EstadoSyncFfi {
+            activo: false,
+            nodo_id: String::new(),
+            nombre: String::new(),
+            sincronizando: false,
+            secuencia_cambio: 0,
+            total_emparejados: 0,
+            texto_estado: "Sincronización inactiva".to_string(),
+        };
+    };
+    let est = srv.estado();
+    EstadoSyncFfi {
+        activo: true,
+        nodo_id: est.nodo_id,
+        nombre: est.nombre,
+        sincronizando: est.sincronizando,
+        secuencia_cambio: est.secuencia_cambio,
+        total_emparejados: est.total_emparejados as u32,
+        texto_estado: est.texto_estado,
+    }
+}
+
+#[uniffi::export]
+pub fn sync_nombre(nombre: String) -> Result<(), ErrorFfi> {
+    let srv = servicio_sync_actual()?;
+    srv.cambiar_nombre(&nombre)
+        .map_err(|mensaje| ErrorFfi::Operacion { mensaje })
 }
 
 // ---------------------------------------------------------------------------
@@ -3586,5 +3790,38 @@ hora = "18:00"
 
         parar.store(true, AtomicOrdering::Relaxed);
         let _ = handle.join();
+    }
+
+    #[test]
+    fn sync_p2p_ffi_ciclo_local() {
+        let dir = TempDir::new().unwrap();
+        let ruta_datos = ruta_temp(&dir);
+        let ruta_cfg = dir.path().join("sync.toml").to_string_lossy().into_owned();
+        cargar(ruta_datos.clone()).unwrap();
+
+        sync_detener();
+        assert!(!sync_estado().activo);
+
+        sync_iniciar_con_opciones(ruta_datos, ruta_cfg, OpcionesRed::SoloLocal).unwrap();
+        let est = sync_estado();
+        assert!(est.activo);
+        assert!(!est.nodo_id.is_empty());
+        assert_eq!(est.total_emparejados, 0);
+
+        sync_nombre("Motorola Edge".into()).unwrap();
+        assert_eq!(sync_estado().nombre, "Motorola Edge");
+
+        let codigo = sync_codigo_emparejamiento().unwrap();
+        assert!(codigo.enlace.starts_with("order://emparejar?n="));
+        assert!(codigo.qr_svg.contains("<svg"));
+        assert_eq!(codigo.palabras.split_whitespace().count(), 8);
+        assert!(codigo.qr_tamano >= 21);
+
+        assert!(sync_dispositivos().is_empty());
+        let res = sync_ahora().unwrap();
+        assert_eq!(res.intentados, 0);
+
+        sync_detener();
+        assert!(!sync_estado().activo);
     }
 }
