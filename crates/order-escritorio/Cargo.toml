@@ -12,6 +12,7 @@ slint-build = "1.19"
 
 [dependencies]
 order-core = { path = "../order-core" }
+order-p2p = { path = "../order-p2p" }
 chrono = { version = "0.4", features = ["serde"] }
 slint = "1.19"
 ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }

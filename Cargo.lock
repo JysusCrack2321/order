@@ -5041,6 +5041,7 @@ dependencies = [
  "notify",
  "notify-rust",
  "order-core",
+ "order-p2p",
  "png",
  "rfd",
  "slint",

@@ -41,6 +41,7 @@ use order_core::presentacion::textos::{
 };
 use order_core::reloj::{self, a_12h, a_24h, etiqueta_hora, hora_texto};
 use order_core::semana;
+use order_p2p::InfoDispositivo;
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Timelike};
 use slint::{ModelRc, SharedString, VecModel, Weak};
 use std::cell::RefCell;
@@ -72,6 +73,7 @@ enum Edicion {
     Agente,
     Moodle,
     Calendarios,
+    Dispositivos,
 }
 
 /// Qué selector está abierto y qué campo del formulario llena.
@@ -150,6 +152,17 @@ struct Estado {
     ical_aviso: String,
     ical_oferta: String,
     ical_descartadas: std::collections::HashSet<String>,
+    // --- Dispositivos P2P -----------------------------------------------
+    p2p_sincronizando: bool,
+    p2p_ocupado: bool,
+    p2p_aviso: String,
+    p2p_dispositivos: Vec<InfoDispositivo>,
+    p2p_mostrando_qr: bool,
+    p2p_qr_imagen: slint::Image,
+    p2p_palabras: String,
+    p2p_enlace: String,
+    p2p_espera_timer: Option<slint::Timer>,
+    p2p_conteo_previo: usize,
 }
 
 fn ruta_conversacion() -> std::path::PathBuf {
@@ -195,6 +208,16 @@ impl Estado {
             ical_aviso: String::new(),
             ical_oferta: String::new(),
             ical_descartadas: std::collections::HashSet::new(),
+            p2p_sincronizando: false,
+            p2p_ocupado: false,
+            p2p_aviso: String::new(),
+            p2p_dispositivos: Vec::new(),
+            p2p_mostrando_qr: false,
+            p2p_qr_imagen: slint::Image::default(),
+            p2p_palabras: String::new(),
+            p2p_enlace: String::new(),
+            p2p_espera_timer: None,
+            p2p_conteo_previo: 0,
         }
     }
 }
@@ -270,6 +293,14 @@ struct Vista {
     ical_ocupado: bool,
     ical_aviso: SharedString,
     ical_oferta: SharedString,
+    p2p_sincronizando: bool,
+    p2p_ocupado: bool,
+    p2p_aviso: SharedString,
+    p2p_dispositivos: Vec<DispositivoUI>,
+    p2p_mostrando_qr: bool,
+    p2p_qr_imagen: slint::Image,
+    p2p_palabras: SharedString,
+    p2p_enlace: SharedString,
 }
 
 // ---------------------------------------------------------------------------
@@ -389,6 +420,21 @@ pub fn refrescar_moodle() {
 pub fn refrescar_calendarios() {
     let calendarios = ical::config::listar_de(&ical::config::ruta());
     con_estado(|estado| estado.calendarios = calendarios);
+    actualizar_si_existe();
+}
+
+/// Actualiza el indicador de sincronización P2P en el encabezado.
+pub fn marcar_p2p_sincronizando(activo: bool) {
+    con_estado(|estado| estado.p2p_sincronizando = activo);
+    actualizar_si_existe();
+}
+
+/// Relee la lista de dispositivos emparejados desde `order-p2p`.
+pub fn refrescar_dispositivos() {
+    let lista = crate::sistema::p2p_servicio()
+        .map(|s| s.dispositivos())
+        .unwrap_or_default();
+    con_estado(|estado| estado.p2p_dispositivos = lista);
     actualizar_si_existe();
 }
 
@@ -782,6 +828,54 @@ fn conectar(ui: &AppWindow) {
     });
 
     let debil = ui.as_weak();
+    ui.on_abrir_dispositivos(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        abrir_dispositivos(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_p2p_guardar_nombre(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        guardar_nombre_p2p(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_p2p_generar_codigo(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        generar_codigo_p2p(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_p2p_cerrar_codigo(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        cerrar_codigo_p2p(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_p2p_copiar_enlace(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        copiar_enlace_p2p(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_p2p_emparejar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        emparejar_p2p(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_p2p_quitar(move |id: SharedString| {
+        let Some(ui) = debil.upgrade() else { return };
+        quitar_p2p(&ui, &id);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_p2p_sincronizar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        sincronizar_p2p(&ui);
+    });
+
+    let debil = ui.as_weak();
     ui.on_abrir_enlace_tarea(move || {
         let Some(ui) = debil.upgrade() else { return };
         let enlace = ui.get_f_enlace().to_string();
@@ -1128,10 +1222,18 @@ fn abrir_panel(ui: &AppWindow, cual: i32) {
 
 fn cancelar(ui: &AppWindow) {
     let volver_ajustes = con_estado(|estado| {
+        if let Some(timer) = estado.p2p_espera_timer.take() {
+            timer.stop();
+        }
+        estado.p2p_mostrando_qr = false;
         estado.volver_ajustes
             && matches!(
                 estado.edicion,
-                Edicion::Recordatorio(_) | Edicion::Agente | Edicion::Moodle | Edicion::Calendarios
+                Edicion::Recordatorio(_)
+                    | Edicion::Agente
+                    | Edicion::Moodle
+                    | Edicion::Calendarios
+                    | Edicion::Dispositivos
             )
     });
     ui.set_form_confirma(false);
@@ -1159,7 +1261,7 @@ fn guardar(ui: &AppWindow) {
         Edicion::Recordatorio(_) => guardar_recordatorio(ui),
         Edicion::Ajustes => guardar_ajustes(ui),
         Edicion::Agente => guardar_agente(ui),
-        Edicion::Moodle | Edicion::Calendarios | Edicion::Ninguna => {}
+        Edicion::Moodle | Edicion::Calendarios | Edicion::Dispositivos | Edicion::Ninguna => {}
     }
 }
 
@@ -1861,6 +1963,295 @@ fn aceptar_oferta_ical(ui: &AppWindow) {
     agregar_ical(ui);
 }
 
+// ---------------------------------------------------------------------------
+// Dispositivos P2P
+// ---------------------------------------------------------------------------
+
+fn abrir_dispositivos(ui: &AppWindow) {
+    let (nombre, lista, aviso_inicial) = match crate::sistema::p2p_servicio() {
+        Some(srv) => (srv.nombre(), srv.dispositivos(), String::new()),
+        None => (
+            String::new(),
+            Vec::new(),
+            "Iniciando servicio P2P…".to_string(),
+        ),
+    };
+    con_estado(|estado| {
+        if let Some(timer) = estado.p2p_espera_timer.take() {
+            timer.stop();
+        }
+        estado.p2p_mostrando_qr = false;
+        estado.p2p_dispositivos = lista;
+        estado.p2p_aviso = aviso_inicial;
+        estado.edicion = Edicion::Dispositivos;
+        estado.volver_ajustes = true;
+    });
+    ui.set_p2p_nombre(nombre.into());
+    ui.set_p2p_codigo_entrada("".into());
+    ui.set_form_encabezado("Dispositivos".into());
+    ui.set_form_edita(false);
+    abrir_panel(ui, 8);
+}
+
+fn guardar_nombre_p2p(ui: &AppWindow) {
+    let Some(srv) = crate::sistema::p2p_servicio() else {
+        ui.set_form_error("El servicio P2P aún está iniciando.".into());
+        return;
+    };
+    let nombre = ui.get_p2p_nombre().to_string();
+    match srv.cambiar_nombre(&nombre) {
+        Ok(()) => {
+            ui.set_form_error("".into());
+            con_estado(|estado| estado.p2p_aviso = "Nombre actualizado.".to_string());
+            actualizar(ui);
+        }
+        Err(err) => ui.set_form_error(err.into()),
+    }
+}
+
+fn generar_codigo_p2p(ui: &AppWindow) {
+    let Some(srv) = crate::sistema::p2p_servicio() else {
+        ui.set_form_error("El servicio P2P aún está iniciando.".into());
+        return;
+    };
+    match srv.codigo_emparejamiento() {
+        Ok(cod) => {
+            let img = qr_a_imagen_slint(cod.qr_tamano, &cod.qr_modulos);
+            let conteo_inicial = srv.dispositivos().len();
+            let debil = ui.as_weak();
+            let timer = slint::Timer::default();
+            timer.start(
+                slint::TimerMode::Repeated,
+                Duration::from_millis(1200),
+                move || {
+                    let Some(ui) = debil.upgrade() else { return };
+                    let Some(srv) = crate::sistema::p2p_servicio() else { return };
+                    let lista = srv.dispositivos();
+                    let emparejo = lista.len() > conteo_inicial;
+                    if emparejo {
+                        con_estado(|estado| {
+                            if let Some(t) = estado.p2p_espera_timer.take() {
+                                t.stop();
+                            }
+                            estado.p2p_mostrando_qr = false;
+                            estado.p2p_dispositivos = lista;
+                            estado.p2p_aviso = "Dispositivo emparejado y listo.".to_string();
+                        });
+                        actualizar(&ui);
+                    }
+                },
+            );
+
+            ui.set_form_error("".into());
+            con_estado(|estado| {
+                if let Some(t) = estado.p2p_espera_timer.take() {
+                    t.stop();
+                }
+                estado.p2p_conteo_previo = conteo_inicial;
+                estado.p2p_espera_timer = Some(timer);
+                estado.p2p_qr_imagen = img;
+                estado.p2p_palabras = cod.palabras;
+                estado.p2p_enlace = cod.enlace;
+                estado.p2p_mostrando_qr = true;
+                estado.p2p_aviso.clear();
+            });
+            actualizar(ui);
+        }
+        Err(err) => ui.set_form_error(err.into()),
+    }
+}
+
+fn cerrar_codigo_p2p(ui: &AppWindow) {
+    let lista = crate::sistema::p2p_servicio()
+        .map(|s| s.dispositivos())
+        .unwrap_or_default();
+    con_estado(|estado| {
+        if let Some(t) = estado.p2p_espera_timer.take() {
+            t.stop();
+        }
+        estado.p2p_mostrando_qr = false;
+        estado.p2p_dispositivos = lista;
+    });
+    actualizar(ui);
+}
+
+fn copiar_enlace_p2p(ui: &AppWindow) {
+    let enlace = con_estado(|estado| estado.p2p_enlace.clone());
+    if enlace.is_empty() {
+        return;
+    }
+    let msg = if crate::sistema::copiar_al_portapapeles(&enlace) {
+        "Enlace copiado al portapapeles.".to_string()
+    } else {
+        "No se pudo copiar al portapapeles; usa el QR o el código de 8 palabras.".to_string()
+    };
+    con_estado(|estado| estado.p2p_aviso = msg);
+    actualizar(ui);
+}
+
+fn emparejar_p2p(ui: &AppWindow) {
+    if con_estado(|estado| estado.p2p_ocupado) {
+        return;
+    }
+    let Some(srv) = crate::sistema::p2p_servicio() else {
+        ui.set_form_error("El servicio P2P aún está iniciando.".into());
+        return;
+    };
+    let entrada = ui.get_p2p_codigo_entrada().to_string();
+    if entrada.trim().is_empty() {
+        ui.set_form_error("Escribe el código de 8 palabras o pega el enlace.".into());
+        return;
+    }
+    ui.set_form_error("".into());
+    con_estado(|estado| {
+        estado.p2p_ocupado = true;
+        estado.p2p_aviso = "Conectando con el dispositivo…".to_string();
+    });
+    actualizar(ui);
+
+    let debil = ui.as_weak();
+    let ruta_datos = almacen().ruta;
+    std::thread::spawn(move || {
+        let res = srv.emparejar(&entrada);
+        let lista = srv.dispositivos();
+        let datos = if res.is_ok() {
+            Almacen { ruta: ruta_datos }.cargar().ok()
+        } else {
+            None
+        };
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = debil.upgrade() else { return };
+            if let Some(ref d) = datos {
+                crate::sistema::publicar(d);
+            }
+            con_estado(|estado| {
+                estado.p2p_ocupado = false;
+                estado.p2p_dispositivos = lista;
+                if let Some(d) = datos {
+                    estado.datos = Some(d);
+                }
+                match res {
+                    Ok(disp) => {
+                        ui.set_p2p_codigo_entrada("".into());
+                        ui.set_form_error("".into());
+                        estado.p2p_aviso = format!("Emparejado con {}.", disp.nombre);
+                    }
+                    Err(err) => {
+                        estado.p2p_aviso.clear();
+                        ui.set_form_error(err.into());
+                    }
+                }
+            });
+            actualizar(&ui);
+        });
+    });
+}
+
+fn quitar_p2p(ui: &AppWindow, id: &str) {
+    let Some(srv) = crate::sistema::p2p_servicio() else {
+        return;
+    };
+    if let Err(err) = srv.quitar(id) {
+        ui.set_form_error(err.into());
+        return;
+    }
+    let lista = srv.dispositivos();
+    con_estado(|estado| {
+        estado.p2p_dispositivos = lista;
+        estado.p2p_aviso = "Dispositivo quitado.".to_string();
+    });
+    actualizar(ui);
+}
+
+fn sincronizar_p2p(ui: &AppWindow) {
+    if con_estado(|estado| estado.p2p_ocupado) {
+        return;
+    }
+    let Some(srv) = crate::sistema::p2p_servicio() else {
+        ui.set_form_error("El servicio P2P aún está iniciando.".into());
+        return;
+    };
+    ui.set_form_error("".into());
+    con_estado(|estado| {
+        estado.p2p_ocupado = true;
+        estado.p2p_sincronizando = true;
+        estado.p2p_aviso = "Sincronizando con dispositivos…".to_string();
+    });
+    actualizar(ui);
+
+    let debil = ui.as_weak();
+    let ruta_datos = almacen().ruta;
+    std::thread::spawn(move || {
+        let resumen = srv.sincronizar_ahora();
+        let lista = srv.dispositivos();
+        let datos = if resumen.cambios_locales {
+            Almacen { ruta: ruta_datos }.cargar().ok()
+        } else {
+            None
+        };
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = debil.upgrade() else { return };
+            if let Some(ref d) = datos {
+                crate::sistema::publicar(d);
+            }
+            con_estado(|estado| {
+                estado.p2p_ocupado = false;
+                estado.p2p_sincronizando = false;
+                estado.p2p_dispositivos = lista;
+                if let Some(d) = datos {
+                    estado.datos = Some(d);
+                }
+                estado.p2p_aviso = if resumen.intentados == 0 {
+                    "No hay dispositivos emparejados.".to_string()
+                } else if resumen.exitosos == 0 {
+                    "Sin conexión con los otros dispositivos.".to_string()
+                } else if resumen.cambios_locales {
+                    format!(
+                        "Sincronizado con {} dispositivo(s) · agenda actualizada.",
+                        resumen.exitosos
+                    )
+                } else {
+                    format!("Sincronizado con {} dispositivo(s).", resumen.exitosos)
+                };
+            });
+            actualizar(&ui);
+        });
+    });
+}
+
+fn qr_a_imagen_slint(tamano: u32, modulos: &[bool]) -> slint::Image {
+    if tamano == 0 || modulos.len() != (tamano * tamano) as usize {
+        return slint::Image::default();
+    }
+    let margen = 2u32;
+    let escala = 5u32;
+    let total_mod = tamano + 2 * margen;
+    let px = total_mod * escala;
+    let mut buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(px, px);
+    let slice = buf.make_mut_slice();
+    // Colores del tema: fondo oscuro #101014, módulos claros #e9e4d8 (o viceversa con borde claro).
+    // Usamos fondo claro (#e9e4d8) y módulos oscuros (#101014) para máxima compatibilidad con lectores QR.
+    let oscuro = slint::Rgba8Pixel::new(0x10, 0x10, 0x14, 0xff);
+    let claro = slint::Rgba8Pixel::new(0xe9, 0xe4, 0xd8, 0xff);
+    slice.fill(claro);
+
+    for my in 0..tamano {
+        for mx in 0..tamano {
+            if modulos[(my * tamano + mx) as usize] {
+                let x0 = (mx + margen) * escala;
+                let y0 = (my + margen) * escala;
+                for dy in 0..escala {
+                    let fila = ((y0 + dy) * px) as usize;
+                    for dx in 0..escala {
+                        slice[fila + (x0 + dx) as usize] = oscuro;
+                    }
+                }
+            }
+        }
+    }
+    slint::Image::from_rgba8(buf)
+}
+
 /// Abre el selector del sistema y prepara los adjuntos en un hilo.
 fn adjuntar_archivos(ui: &AppWindow) {
     let ocupado = con_estado(|estado| estado.pensando || estado.leyendo_archivo);
@@ -2554,6 +2945,14 @@ fn actualizar(ui: &AppWindow) {
     ui.set_ical_ocupado(vista.ical_ocupado);
     ui.set_ical_aviso(vista.ical_aviso);
     ui.set_ical_oferta(vista.ical_oferta);
+    ui.set_p2p_sincronizando(vista.p2p_sincronizando);
+    ui.set_p2p_ocupado(vista.p2p_ocupado);
+    ui.set_p2p_aviso(vista.p2p_aviso);
+    ui.set_p2p_dispositivos(ModelRc::new(VecModel::from(vista.p2p_dispositivos)));
+    ui.set_p2p_mostrando_qr(vista.p2p_mostrando_qr);
+    ui.set_p2p_qr_imagen(vista.p2p_qr_imagen);
+    ui.set_p2p_palabras(vista.p2p_palabras);
+    ui.set_p2p_enlace(vista.p2p_enlace);
 }
 
 fn construir_vista() -> Vista {
@@ -2752,6 +3151,23 @@ fn construir_vista() -> Vista {
             ical_ocupado: estado.ical_ocupado,
             ical_aviso: estado.ical_aviso.clone().into(),
             ical_oferta: estado.ical_oferta.clone().into(),
+            p2p_sincronizando: estado.p2p_sincronizando,
+            p2p_ocupado: estado.p2p_ocupado,
+            p2p_aviso: estado.p2p_aviso.clone().into(),
+            p2p_dispositivos: estado
+                .p2p_dispositivos
+                .iter()
+                .map(|d| DispositivoUI {
+                    id: d.id.clone().into(),
+                    nombre: d.nombre.clone().into(),
+                    estado: d.texto_estado.clone().into(),
+                    en_linea: d.en_linea,
+                })
+                .collect(),
+            p2p_mostrando_qr: estado.p2p_mostrando_qr,
+            p2p_qr_imagen: estado.p2p_qr_imagen.clone(),
+            p2p_palabras: estado.p2p_palabras.clone().into(),
+            p2p_enlace: estado.p2p_enlace.clone().into(),
         }
     })
 }
@@ -3358,5 +3774,14 @@ mod pruebas {
             recordatorio_ui(&recordatorio(fecha(2026, 11, 30)), hoy).cuando,
             "lun 30 nov · 6:00 p. m."
         );
+    }
+
+    #[test]
+    fn qr_se_convierte_en_imagen_slint() {
+        let (tam, modulos) =
+            order_p2p::generar_qr_matriz("order://emparejar?n=abc&s=01020304&d=PC").unwrap();
+        let img = qr_a_imagen_slint(tam, &modulos);
+        assert_eq!(img.size().width, (tam + 4) * 5);
+        assert_eq!(img.size().height, (tam + 4) * 5);
     }
 }

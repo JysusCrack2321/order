@@ -11,6 +11,7 @@ use order_core::almacen::Almacen;
 use order_core::avisos::{self, Registro};
 use order_core::conflictos;
 use order_core::modelo::{self, Datos};
+use order_p2p::ServicioSync;
 use chrono::{Local, TimeDelta};
 use ksni::blocking::TrayMethods;
 use notify::{RecursiveMode, Watcher};
@@ -19,7 +20,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -86,6 +87,35 @@ pub fn leer_portapapeles() -> Option<String> {
         }
     }
     None
+}
+
+/// Copia texto plano al portapapeles del sistema (Wayland con `wl-copy`, con
+/// respaldo para X11 vía `xclip` o `xsel`).
+pub fn copiar_al_portapapeles(texto: &str) -> bool {
+    for (programa, args) in [
+        ("wl-copy", &[][..]),
+        ("xclip", &["-selection", "clipboard"][..]),
+        ("xsel", &["-ib"][..]),
+    ] {
+        let Ok(mut child) = std::process::Command::new(programa)
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        else {
+            continue;
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(texto.as_bytes());
+        }
+        if let Ok(status) = child.wait() {
+            if status.success() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn datos_actuales() -> Option<Datos> {
@@ -430,6 +460,7 @@ pub fn vigilar_archivo(almacen: Almacen) {
 
             let almacen = almacen.clone();
             let _ = slint::invoke_from_event_loop(move || leer_y_mostrar(&almacen));
+            avisar_cambio_local_p2p();
         }
     });
 }
@@ -572,5 +603,112 @@ pub fn arrancar_sincronizacion(almacen: Almacen) {
         }
 
         thread::sleep(INTERVALO_SYNC);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Sincronización P2P entre dispositivos (iroh)
+// ---------------------------------------------------------------------------
+
+const INTERVALO_P2P: Duration = Duration::from_secs(5 * 60);
+const ESPERA_CAMBIO_LOCAL_P2P: Duration = Duration::from_secs(2);
+
+static SERVICIO_P2P: OnceLock<Arc<ServicioSync>> = OnceLock::new();
+static CANAL_P2P: OnceLock<std::sync::mpsc::Sender<()>> = OnceLock::new();
+
+/// Devuelve la instancia P2P compartida cuando terminó de arrancar.
+pub fn p2p_servicio() -> Option<Arc<ServicioSync>> {
+    SERVICIO_P2P.get().cloned()
+}
+
+/// Despierta al hilo P2P tras un cambio local en `order.toml`.
+pub fn avisar_cambio_local_p2p() {
+    if let Some(tx) = CANAL_P2P.get() {
+        let _ = tx.send(());
+    }
+}
+
+/// Arranca el nodo P2P en hilo aparte (sin bloquear la UI), escucha siempre y
+/// sincroniza al arrancar, cada 5 min y 2 s después de cada cambio local.
+pub fn arrancar_p2p(almacen: Almacen) {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let _ = CANAL_P2P.set(tx);
+
+    thread::spawn(move || {
+        let ruta_cfg = order_p2p::ruta_por_defecto();
+        let almacen_cb = almacen.clone();
+        let al_cambiar: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let clon = almacen_cb.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                leer_y_mostrar(&clon);
+                puente::refrescar_dispositivos();
+            });
+        });
+
+        let srv = match ServicioSync::iniciar(
+            almacen.ruta.clone(),
+            ruta_cfg,
+            None,
+            Some(al_cambiar),
+        ) {
+            Ok(s) => Arc::new(s),
+            Err(err) => {
+                eprintln!("ORDER: no se pudo iniciar sincronización P2P: {err}");
+                return;
+            }
+        };
+        let _ = SERVICIO_P2P.set(Arc::clone(&srv));
+        let _ = slint::invoke_from_event_loop(puente::refrescar_dispositivos);
+
+        // Primera ronda al arrancar.
+        if !srv.dispositivos().is_empty() {
+            let _ = slint::invoke_from_event_loop(|| puente::marcar_p2p_sincronizando(true));
+            let _ = srv.sincronizar_ahora();
+            let _ = slint::invoke_from_event_loop(|| {
+                puente::marcar_p2p_sincronizando(false);
+                puente::refrescar_dispositivos();
+            });
+        }
+
+        loop {
+            match rx.recv_timeout(INTERVALO_P2P) {
+                Ok(()) => {
+                    // Esperamos 2 s tras el último cambio local antes de enviar.
+                    loop {
+                        match rx.recv_timeout(ESPERA_CAMBIO_LOCAL_P2P) {
+                            Ok(()) => continue,
+                            Err(_) => break,
+                        }
+                    }
+                    if srv.dispositivos().is_empty() {
+                        continue;
+                    }
+                    if srv.capturar_cambios_locales().unwrap_or(false) {
+                        let _ = slint::invoke_from_event_loop(|| {
+                            puente::marcar_p2p_sincronizando(true);
+                        });
+                        let _ = srv.sincronizar_ahora();
+                        let _ = slint::invoke_from_event_loop(|| {
+                            puente::marcar_p2p_sincronizando(false);
+                            puente::refrescar_dispositivos();
+                        });
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if srv.dispositivos().is_empty() {
+                        continue;
+                    }
+                    let _ = slint::invoke_from_event_loop(|| {
+                        puente::marcar_p2p_sincronizando(true);
+                    });
+                    let _ = srv.sincronizar_ahora();
+                    let _ = slint::invoke_from_event_loop(|| {
+                        puente::marcar_p2p_sincronizando(false);
+                        puente::refrescar_dispositivos();
+                    });
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
     });
 }

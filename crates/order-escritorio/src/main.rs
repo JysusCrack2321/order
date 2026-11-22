@@ -19,11 +19,12 @@ fn main() -> Result<(), slint::PlatformError> {
     let almacen = Almacen::por_defecto();
     cargar(&almacen);
 
-    // Hilos de escritorio: bandeja, observador del archivo, reloj de avisos y Moodle.
+    // Hilos de escritorio: bandeja, observador del archivo, reloj de avisos, Moodle y P2P.
     sistema::arrancar_bandeja();
     sistema::vigilar_archivo(almacen.clone());
     sistema::arrancar_reloj();
-    sistema::arrancar_sincronizacion(almacen);
+    sistema::arrancar_sincronizacion(almacen.clone());
+    sistema::arrancar_p2p(almacen);
 
     // Arranque oculto: sin ventana, solo el icono. El bucle se queda vivo
     // hasta que se pida "Salir" (continuar aunque no haya ventana visible).

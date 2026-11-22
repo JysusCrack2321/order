@@ -23,6 +23,14 @@ export struct CalendarioUI {
     ultima: string,
 }
 
+/// Un dispositivo emparejado en Ajustes → Dispositivos.
+export struct DispositivoUI {
+    id: string,
+    nombre: string,
+    estado: string,
+    en-linea: bool,
+}
+
 /// Título de una tarea. Si está hecha se dibuja una línea encima, del ancho
 /// justo del texto: Slint no trae tachado, así que se pinta.
 export component TituloTachado inherits Rectangle {

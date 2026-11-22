@@ -7,7 +7,7 @@ import { PendientesVista, TareaUI } from "pendientes.slint";
 import { InicioVista } from "inicio.slint";
 import { DiaVista } from "dia.slint";
 import { ClaseInicioUI, ConteoMateriaUI, RecordatorioInicioUI } from "listas.slint";
-import { Marco, Campo, CampoBoton, CampoClave, Chip, Casilla, Boton, Etiqueta, RecordatorioUI, CalendarioUI } from "formularios.slint";
+import { Marco, Campo, CampoBoton, CampoClave, Chip, Casilla, Boton, Etiqueta, RecordatorioUI, CalendarioUI, DispositivoUI } from "formularios.slint";
 import { Selector, CeldaDia, MateriaUI } from "selectores.slint";
 import { AccionUI, AdjuntoUI, BarraAgente, PanelAgente, TarjetaConexionAgente } from "agente.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -368,6 +368,18 @@ export component AppWindow inherits Window {
     in-out property <string> c-url: "";
     in-out property <string> c-nombre: "";
     in-out property <string> c-materia: "";
+
+    // --- Ajustes → Dispositivos (P2P) -------------------------------------
+    in property <bool> p2p-sincronizando: false;
+    in property <bool> p2p-ocupado: false;
+    in property <string> p2p-aviso: "";
+    in-out property <string> p2p-nombre: "";
+    in property <[DispositivoUI]> p2p-dispositivos: [];
+    in property <bool> p2p-mostrando-qr: false;
+    in property <image> p2p-qr-imagen;
+    in property <string> p2p-palabras: "";
+    in property <string> p2p-enlace: "";
+    in-out property <string> p2p-codigo-entrada: "";
     // 0 = ninguno · 1 = fecha · 2 = hora · 3 = materia. `sel-campo` dice qué
     // campo del formulario se está llenando; el significado lo pone puente.rs.
     in-out property <int> selector-tipo: 0;
@@ -446,6 +458,14 @@ export component AppWindow inherits Window {
     callback ical-sincronizar();
     callback ical-oferta-aceptar();
     callback ical-oferta-rechazar();
+    callback abrir-dispositivos();
+    callback p2p-guardar-nombre();
+    callback p2p-generar-codigo();
+    callback p2p-cerrar-codigo();
+    callback p2p-copiar-enlace();
+    callback p2p-emparejar();
+    callback p2p-quitar(string);
+    callback p2p-sincronizar();
     callback abrir-enlace-tarea();
     callback elegir-proveedor(int);
     callback elegir-voz-proveedor(int);
@@ -533,6 +553,13 @@ export component AppWindow inherits Window {
                     }
 
                     Rectangle { horizontal-stretch: 1; }
+
+                    if root.p2p-sincronizando : Text {
+                        text: "↻ Sincronizando…";
+                        font-size: Tema.tamano-hora;
+                        color: Tema.acento;
+                        vertical-alignment: center;
+                    }
 
                     BotonCabecera {
                         texto: "Ajustes";
@@ -1091,6 +1118,10 @@ export component AppWindow inherits Window {
                             width: Tema.ancho-boton-largo;
                             clicked => { root.nuevo-recordatorio(); }
                         }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Tema.espacio-sm;
 
                         Boton {
                             texto: "Agente…";
@@ -1108,6 +1139,12 @@ export component AppWindow inherits Window {
                             texto: "Calendarios…";
                             width: Tema.ancho-boton-tarea;
                             clicked => { root.abrir-calendarios(); }
+                        }
+
+                        Boton {
+                            texto: "Dispositivos…";
+                            width: Tema.ancho-boton-dispositivos;
+                            clicked => { root.abrir-dispositivos(); }
                         }
                     }
                 }
@@ -1598,6 +1635,212 @@ export component AppWindow inherits Window {
                             font-size: Tema.tamano-hora;
                             color: Tema.texto-suave;
                             overflow: elide;
+                        }
+                    }
+                }
+            }
+
+            // --- Dispositivos (sincronización P2P) ------------------------
+            if root.formulario == 8 : Marco {
+                encabezado: "Dispositivos";
+                sub: "Sincroniza tu agenda entre PC y celular sin cuentas ni servidores.";
+                alto-panel: Tema.alto-panel-dispositivos;
+                ancho-panel: Tema.ancho-formulario-ancho;
+                error: root.form-error;
+                confirma: false;
+                puede-borrar: false;
+                texto-cancelar: "Volver";
+                texto-guardar: root.p2p-ocupado ? "Sincronizando…" : "Sincronizar ahora";
+                mostrar-guardar: !root.p2p-ocupado && !root.p2p-mostrando-qr;
+
+                guardar => { root.p2p-sincronizar(); }
+                cancelar => { root.cancelar-formulario(); }
+                pedir-borrar => { }
+                confirmar-borrado => { }
+                no-borrar => { }
+
+                ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        spacing: Tema.espacio-md;
+
+                        HorizontalLayout {
+                            spacing: Tema.espacio-sm;
+                            cross-axis-alignment: end;
+
+                            Campo {
+                                horizontal-stretch: 1;
+                                etiqueta: "Este dispositivo";
+                                texto <=> root.p2p-nombre;
+                                pista: "Computador";
+                            }
+
+                            Boton {
+                                texto: "Guardar";
+                                width: Tema.ancho-boton-form;
+                                clicked => { root.p2p-guardar-nombre(); }
+                            }
+                        }
+
+                        if !root.p2p-mostrando-qr : VerticalLayout {
+                            spacing: Tema.espacio-md;
+
+                            Etiqueta {
+                                text: "EMPAREJADOS";
+                            }
+
+                            ScrollView {
+                                height: Tema.alto-lista-dispositivos;
+
+                                VerticalLayout {
+                                    spacing: 0;
+
+                                    for disp in root.p2p-dispositivos : Rectangle {
+                                        height: Tema.alto-fila-compacta;
+
+                                        HorizontalLayout {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            padding-left: Tema.espacio-xs;
+                                            padding-right: Tema.espacio-xs;
+                                            spacing: Tema.espacio-sm;
+                                            cross-axis-alignment: center;
+
+                                            Text {
+                                                horizontal-stretch: 1;
+                                                text: disp.nombre;
+                                                font-size: Tema.tamano-pequeno;
+                                                color: Tema.texto;
+                                                overflow: elide;
+                                            }
+
+                                            Text {
+                                                text: disp.estado;
+                                                font-size: Tema.tamano-hora;
+                                                color: disp.en-linea ? Tema.texto-suave : Tema.vencida-texto;
+                                                overflow: elide;
+                                            }
+
+                                            Boton {
+                                                texto: "Quitar";
+                                                peligro: true;
+                                                width: Tema.ancho-boton-cerrar;
+                                                clicked => { root.p2p-quitar(disp.id); }
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            y: parent.height - Tema.linea;
+                                            width: parent.width;
+                                            height: Tema.linea;
+                                            background: Tema.borde-suave;
+                                        }
+                                    }
+
+                                    if root.p2p-dispositivos.length == 0 : Text {
+                                        height: Tema.alto-fila-compacta;
+                                        vertical-alignment: center;
+                                        text: "Sin dispositivos emparejados.";
+                                        font-size: Tema.tamano-pequeno;
+                                        color: Tema.texto-tenue;
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: Tema.espacio-sm;
+
+                                Boton {
+                                    texto: "Agregar dispositivo";
+                                    principal: true;
+                                    width: Tema.ancho-boton-largo;
+                                    clicked => { root.p2p-generar-codigo(); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: Tema.espacio-sm;
+                                cross-axis-alignment: end;
+
+                                Campo {
+                                    horizontal-stretch: 1;
+                                    etiqueta: "O escribe un código de 8 palabras / enlace";
+                                    texto <=> root.p2p-codigo-entrada;
+                                    pista: "order://emparejar?… o 8 palabras";
+                                    apagado: root.p2p-ocupado;
+                                }
+
+                                Boton {
+                                    texto: "Emparejar";
+                                    width: Tema.ancho-boton-form;
+                                    clicked => {
+                                        if !root.p2p-ocupado {
+                                            root.p2p-emparejar();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.p2p-mostrando-qr : VerticalLayout {
+                            spacing: Tema.espacio-sm;
+
+                            Text {
+                                text: "Escanea este código desde ORDER en tu celular:";
+                                font-size: Tema.tamano-pequeno;
+                                color: Tema.texto-suave;
+                                wrap: word-wrap;
+                            }
+
+                            HorizontalLayout {
+                                alignment: center;
+                                Image {
+                                    source: root.p2p-qr-imagen;
+                                    width: Tema.tamano-qr;
+                                    height: Tema.tamano-qr;
+                                    image-rendering: pixelated;
+                                }
+                            }
+
+                            Text {
+                                text: "Código (en la misma Wi-Fi): " + root.p2p-palabras;
+                                font-size: Tema.tamano-pequeno;
+                                color: Tema.acento;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+
+                            Text {
+                                text: "Esperando conexión… (válido 10 min)";
+                                font-size: Tema.tamano-hora;
+                                color: Tema.texto-tenue;
+                                horizontal-alignment: center;
+                            }
+
+                            HorizontalLayout {
+                                alignment: center;
+                                spacing: Tema.espacio-sm;
+
+                                Boton {
+                                    texto: "Copiar enlace";
+                                    width: Tema.ancho-boton-largo;
+                                    clicked => { root.p2p-copiar-enlace(); }
+                                }
+
+                                Boton {
+                                    texto: "Listo";
+                                    width: Tema.ancho-boton-form;
+                                    clicked => { root.p2p-cerrar-codigo(); }
+                                }
+                            }
+                        }
+
+                        if root.p2p-aviso != "" : Text {
+                            text: root.p2p-aviso;
+                            wrap: word-wrap;
+                            font-size: Tema.tamano-pequeno;
+                            color: Tema.texto-suave;
                         }
                     }
                 }
