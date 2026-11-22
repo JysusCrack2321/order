@@ -129,6 +129,8 @@ tener el menú Abrir/Salir. En niri con DMS funciona sin nada extra.
 
 ## Agente y adjuntos
 
+Cada petición al agente se arma en memoria con la agenda actual, un resumen de la conversación mantenido por el propio modelo, los últimos 3 intercambios (sin reenviar adjuntos), qué se aplicó o descartó de sus propuestas y la petición nueva («Nueva conversación» borra este contexto).
+
 Desde la barra inferior del agente se pueden adjuntar hasta **5 archivos** por mensaje (PDF o imágenes; máximo **20 páginas** por PDF, imágenes reducidas a **1568 px** en el lado largo en JPEG 85 respetando EXIF, total **≤ 20 MB**; los adjuntos no se guardan en disco). Lo que se envía a cada proveedor depende de sus capacidades:
 
 | Proveedor | PDF | Imagen / foto |
