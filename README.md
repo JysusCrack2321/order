@@ -17,6 +17,8 @@ Todo vive en un único archivo TOML, legible y editable a mano o con Hermes:
 |---|---|
 | `~/.config/order/order.toml` | ajustes, semestre, clases, tareas y recordatorios |
 | `~/.config/order/historial.toml` | tareas hechas con más de 30 días (las mueve la app) |
+| `~/.config/order/moodle.toml` | conexión con Moodle (solo token, permisos `600`, nunca se sincroniza) |
+| `~/.config/order/calendarios.toml` | suscripciones iCal (permisos `600`, nunca se sincroniza) |
 | `~/.local/state/order/enviados.txt` | claves de los avisos ya enviados (no repetir) |
 
 Si `order.toml` no existe, la app lo crea a partir de `ejemplo.toml` (incluido
@@ -158,6 +160,16 @@ Desde la barra inferior del agente se pueden adjuntar hasta **5 archivos** por m
 | **Otro** | texto/OCR por defecto, o imágenes si se activa *El modelo ve imágenes* en **Avanzado** | ídem |
 
 En escritorio, el renderizado de páginas usa `pdftoppm -jpeg -r 110` (Poppler) y el OCR usa `tesseract - - -l spa`; si alguno falta, la app muestra un aviso claro.
+
+## Moodle y calendarios iCal
+
+Desde **Ajustes → Moodle** puedes conectar tu cuenta (por ejemplo `micampus.unal.edu.co`) para traer automáticamente tus entregas como tareas de ORDER, y desde **Ajustes → Calendarios** puedes suscribirte a direcciones iCal (`.ics` o `webcal://`, con atajo automático desde el portapapeles).
+
+- **Qué se trae de Moodle**: nombre visible y usuario (`core_webservice_get_site_info`), eventos de actividades desde hace 14 días (`core_calendar_get_action_events_by_timesort`: título, curso, fecha de entrega y enlace) y estado de entrega/compleción (`mod_assign_get_submission_status` y `core_completion_get_activities_completion_status`). Las tareas creadas a mano nunca se tocan ni se borran tareas previas.
+- **Qué se guarda**:
+  - **`moodle.toml`** (junto a `agente.toml`: `~/.config/order/` en escritorio o `filesDir` en Android, con permisos `600`): `sitio`, `token`, nombre visible, `userid` y fecha de última sincronización. **La contraseña nunca se guarda** en disco ni en logs.
+  - **`calendarios.toml`** (misma ubicación privada con permisos `600`): nombre, dirección iCal, materia opcional y última actualización. Ninguno de los dos archivos se guarda dentro de `order.toml`.
+- **Cada cuánto se sincroniza**: al abrir la aplicación, cada **3 horas** mientras la app de escritorio está abierta, de forma periódica en `TrabajoRespaldo` en Android, y en cualquier momento con **Sincronizar ahora**.
 
 ## Hermes
 
