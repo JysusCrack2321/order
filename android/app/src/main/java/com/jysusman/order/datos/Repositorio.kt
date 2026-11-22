@@ -1,5 +1,7 @@
 package com.jysusman.order.datos
 
+import com.jysusman.order.ffi.AccionVistaFfi
+import com.jysusman.order.ffi.AgenteConfigFfi
 import com.jysusman.order.ffi.AjustesFormFfi
 import com.jysusman.order.ffi.AnioMesFfi
 import com.jysusman.order.ffi.AvisoFfi
@@ -14,11 +16,13 @@ import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
 import com.jysusman.order.ffi.MateriaConTonoFfi
 import com.jysusman.order.ffi.PendientesVistaFfi
+import com.jysusman.order.ffi.ProveedorInfoFfi
 import com.jysusman.order.ffi.RecordatorioFormFfi
 import com.jysusman.order.ffi.ResumenArchivoFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ffi.TareaFormFfi
 import com.jysusman.order.ffi.TipoFechaFfi
+import com.jysusman.order.ffi.VozProveedorInfoFfi
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,6 +58,13 @@ data class EstadoOrder(
         mostrarHechas = true,
     ),
     val materias: List<MateriaConTonoFfi> = emptyList(),
+    val agenteTexto: String = "",
+    val agentePensando: Boolean = false,
+    val agenteAviso: String = "",
+    val agentePanelAbierto: Boolean = false,
+    val agenteRespuesta: String = "",
+    val agenteNota: String = "",
+    val agenteAcciones: List<AccionVistaFfi> = emptyList(),
 )
 
 /**
@@ -67,6 +78,7 @@ class Repositorio(
     private val dispatcherIo: CoroutineDispatcher = Dispatchers.IO,
     private val asegurarCarpeta: (File) -> Unit = { dir -> dir.mkdirs() },
     private val rutaRegistroAvisos: String = "",
+    private val rutaConfigAgente: String = "",
     private val onDatosActualizados: () -> Unit = {},
 ) {
     private val mutex = Mutex()
@@ -396,6 +408,224 @@ class Repositorio(
         return withContext(dispatcherIo) {
             runCatching { puente.resumenDelDia(rutaDatos, "", rutaRegistroAvisos) }.getOrNull()
         }
+    }
+
+    // --- Agente ------------------------------------------------------------
+
+    fun actualizarTextoAgente(texto: String) {
+        _estado.update { it.copy(agenteTexto = texto, agenteAviso = "") }
+    }
+
+    fun cerrarPanelAgente() {
+        _estado.update {
+            it.copy(
+                agentePanelAbierto = false,
+                agenteRespuesta = "",
+                agenteNota = "",
+                agenteAcciones = emptyList(),
+            )
+        }
+    }
+
+    suspend fun enviarAlAgente() {
+        val actual = _estado.value
+        val pregunta = actual.agenteTexto.trim()
+        if (pregunta.isEmpty() || actual.agentePensando) return
+        if (rutaConfigAgente.isBlank() || actual.rutaArchivo.isBlank()) return
+
+        _estado.update {
+            it.copy(
+                agentePensando = true,
+                agentePanelAbierto = false,
+                agenteRespuesta = "",
+                agenteNota = "",
+                agenteAcciones = emptyList(),
+                agenteAviso = "",
+            )
+        }
+
+        val res = withContext(dispatcherIo) {
+            runCatching { puente.enviarAlAgente(actual.rutaArchivo, rutaConfigAgente, pregunta) }
+        }
+
+        res.onSuccess { resp ->
+            _estado.update {
+                it.copy(
+                    agentePensando = false,
+                    agentePanelAbierto = true,
+                    agenteRespuesta = resp.respuesta,
+                    agenteAcciones = resp.acciones,
+                    agenteNota = resp.nota.orEmpty(),
+                    agenteTexto = if (resp.nota == null) "" else it.agenteTexto,
+                )
+            }
+        }.onFailure { err ->
+            _estado.update {
+                it.copy(
+                    agentePensando = false,
+                    agentePanelAbierto = true,
+                    agenteRespuesta = mensajeDeError(err),
+                    agenteAcciones = emptyList(),
+                    agenteNota = "",
+                )
+            }
+        }
+    }
+
+    suspend fun aplicarAccionAgente(accionId: String) {
+        mutex.withLock {
+            val actual = _estado.value
+            val res = withContext(dispatcherIo) {
+                runCatching {
+                    val resumen = puente.aplicarAccion(actual.rutaArchivo, accionId)
+                    leerVistas(
+                        actual.rutaArchivo,
+                        actual.diaIso,
+                        actual.lunesIso,
+                        actual.filtro,
+                        resumen,
+                    )
+                }
+            }
+            res.onSuccess { lectura ->
+                _estado.update { estado ->
+                    val restantes = estado.agenteAcciones.filterNot { it.id == accionId }
+                    estado.copy(
+                        resumen = lectura.resumen,
+                        error = null,
+                        advertencias = lectura.resumen.advertencias,
+                        conflictos = lectura.resumen.conflictos,
+                        inicio = lectura.inicio,
+                        dia = lectura.dia,
+                        semana = lectura.semana,
+                        pendientes = lectura.pendientes,
+                        materias = lectura.materias,
+                        agenteAcciones = restantes,
+                        agentePanelAbierto = restantes.isNotEmpty(),
+                        agenteRespuesta = if (restantes.isEmpty()) "" else estado.agenteRespuesta,
+                        agenteNota = "",
+                    )
+                }
+                withContext(dispatcherIo) { onDatosActualizados() }
+            }.onFailure { err ->
+                _estado.update {
+                    it.copy(agenteNota = "No se pudo aplicar — ${mensajeDeError(err)}")
+                }
+            }
+        }
+    }
+
+    suspend fun descartarAccionAgente(accionId: String) {
+        withContext(dispatcherIo) {
+            runCatching { puente.descartarAccion(accionId) }
+        }
+        _estado.update { estado ->
+            val restantes = estado.agenteAcciones.filterNot { it.id == accionId }
+            estado.copy(
+                agenteAcciones = restantes,
+                agentePanelAbierto = restantes.isNotEmpty(),
+                agenteRespuesta = if (restantes.isEmpty()) "" else estado.agenteRespuesta,
+            )
+        }
+    }
+
+    suspend fun aplicarTodasAgente() {
+        val ids = _estado.value.agenteAcciones.map { it.id }
+        if (ids.isEmpty()) return
+
+        mutex.withLock {
+            val actual = _estado.value
+            val res = withContext(dispatcherIo) {
+                runCatching {
+                    val resultado = puente.aplicarTodas(actual.rutaArchivo, ids)
+                    val lectura = resultado.resumen?.let { resumen ->
+                        leerVistas(
+                            actual.rutaArchivo,
+                            actual.diaIso,
+                            actual.lunesIso,
+                            actual.filtro,
+                            resumen,
+                        )
+                    }
+                    resultado to lectura
+                }
+            }
+
+            res.onSuccess { (resultado, lectura) ->
+                _estado.update { estado ->
+                    val aplicadas = resultado.aplicadas.toInt().coerceIn(0, estado.agenteAcciones.size)
+                    val restantes = estado.agenteAcciones.drop(aplicadas)
+                    val cerrar = resultado.error == null
+                    estado.copy(
+                        resumen = lectura?.resumen ?: estado.resumen,
+                        error = null,
+                        advertencias = lectura?.resumen?.advertencias ?: estado.advertencias,
+                        conflictos = lectura?.resumen?.conflictos ?: estado.conflictos,
+                        inicio = lectura?.inicio ?: estado.inicio,
+                        dia = lectura?.dia ?: estado.dia,
+                        semana = lectura?.semana ?: estado.semana,
+                        pendientes = lectura?.pendientes ?: estado.pendientes,
+                        materias = lectura?.materias ?: estado.materias,
+                        agenteAcciones = if (cerrar) emptyList() else restantes,
+                        agentePanelAbierto = !cerrar,
+                        agenteRespuesta = if (cerrar) "" else estado.agenteRespuesta,
+                        agenteNota = resultado.error.orEmpty(),
+                    )
+                }
+                if (lectura != null) {
+                    withContext(dispatcherIo) { onDatosActualizados() }
+                }
+            }.onFailure { err ->
+                _estado.update {
+                    it.copy(agenteNota = "No se pudo aplicar — ${mensajeDeError(err)}")
+                }
+            }
+        }
+    }
+
+    suspend fun proveedoresAgente(): List<ProveedorInfoFfi> =
+        withContext(dispatcherIo) { puente.proveedoresAgente() }
+
+    suspend fun proveedoresVoz(): List<VozProveedorInfoFfi> =
+        withContext(dispatcherIo) { puente.proveedoresVoz() }
+
+    suspend fun leerAgenteConfig(): Result<AgenteConfigFfi> =
+        withContext(dispatcherIo) {
+            runCatching { puente.leerAgenteConfig(rutaConfigAgente) }
+        }
+
+    suspend fun guardarAgenteConfig(
+        proveedor: Int,
+        url: String,
+        modelo: String,
+        apiKey: String,
+        vozProveedor: Int,
+        vozUrl: String,
+        vozModelo: String,
+        vozKey: String,
+    ): ErrorFfi.Validacion? {
+        val res = withContext(dispatcherIo) {
+            runCatching {
+                puente.guardarAgenteConfig(
+                    rutaConfigAgente,
+                    proveedor,
+                    url,
+                    modelo,
+                    apiKey,
+                    vozProveedor,
+                    vozUrl,
+                    vozModelo,
+                    vozKey,
+                )
+            }
+        }
+        return res.fold(
+            onSuccess = { null },
+            onFailure = { err ->
+                if (err is ErrorFfi.Validacion) err
+                else ErrorFfi.Validacion(0, mensajeDeError(err))
+            },
+        )
     }
 
     // --- Ayudantes internos ------------------------------------------------

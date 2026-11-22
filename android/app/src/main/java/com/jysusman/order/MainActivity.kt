@@ -66,6 +66,8 @@ import com.jysusman.order.ui.PantallaPermisoArchivos
 import com.jysusman.order.ui.abrirAjustesAlarmaExacta
 import com.jysusman.order.ui.abrirAjustesNotificaciones
 import com.jysusman.order.ui.abrirAjustesPermisoArchivos
+import com.jysusman.order.ui.agente.BarraAgente
+import com.jysusman.order.ui.agente.PanelRespuesta
 import com.jysusman.order.ui.dia.DiaPantalla
 import com.jysusman.order.ui.formularios.ContenedorFormularioSheet
 import com.jysusman.order.ui.formularios.FormularioActivo
@@ -113,6 +115,7 @@ class MainActivity : ComponentActivity() {
             puente = puente,
             carpetaInicial = carpetaInicial,
             rutaRegistroAvisos = RutasPrivadas.registroAvisos(applicationContext),
+            rutaConfigAgente = RutasPrivadas.archivoAgenteConfig(applicationContext),
             onDatosActualizados = { programador.reprogramar() },
         )
 
@@ -309,6 +312,24 @@ private fun OrderApp(
         },
         bottomBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
+                if (estado.agentePanelAbierto) {
+                    PanelRespuesta(
+                        respuesta = estado.agenteRespuesta,
+                        nota = estado.agenteNota,
+                        acciones = estado.agenteAcciones,
+                        alAplicar = { id -> scope.launch { repositorio.aplicarAccionAgente(id) } },
+                        alDescartar = { id -> scope.launch { repositorio.descartarAccionAgente(id) } },
+                        alAplicarTodas = { scope.launch { repositorio.aplicarTodasAgente() } },
+                        alCerrar = { repositorio.cerrarPanelAgente() },
+                    )
+                }
+                BarraAgente(
+                    texto = estado.agenteTexto,
+                    pensando = estado.agentePensando,
+                    aviso = estado.agenteAviso,
+                    alCambiarTexto = { repositorio.actualizarTextoAgente(it) },
+                    alEnviar = { scope.launch { repositorio.enviarAlAgente() } },
+                )
                 val pie = estado.resumen?.pie ?: estado.inicio?.pie
                 if (!pie.isNullOrBlank()) {
                     HorizontalDivider(color = OrderTema.Borde, thickness = OrderTema.Linea)

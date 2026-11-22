@@ -52,6 +52,7 @@ import com.jysusman.order.datos.Repositorio
 import com.jysusman.order.ffi.DiaFfi
 import com.jysusman.order.ffi.MateriaConTonoFfi
 import com.jysusman.order.ffi.RecordatorioListaFfi
+import com.jysusman.order.ui.agente.HojaAjustesAgente
 import com.jysusman.order.ui.comun.CasillaOrder
 import com.jysusman.order.ui.comun.ChipOrder
 import com.jysusman.order.ui.selectores.SelectorFechaDialog
@@ -65,6 +66,7 @@ sealed interface FormularioActivo {
     data class Clase(val id: String?) : FormularioActivo
     data class Recordatorio(val id: String?, val volverAjustes: Boolean = false) : FormularioActivo
     data object Ajustes : FormularioActivo
+    data object Agente : FormularioActivo
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -117,6 +119,7 @@ fun ContenedorFormularioSheet(
                 alCambiarCarpeta = alCambiarCarpeta,
                 avisosActivos = avisosActivos,
                 alCambiarAvisosActivos = alCambiarAvisosActivos,
+                alAbrirAgente = { alAbrirFormulario(FormularioActivo.Agente) },
                 alNuevoRecordatorio = {
                     alAbrirFormulario(FormularioActivo.Recordatorio(id = null, volverAjustes = true))
                 },
@@ -124,6 +127,11 @@ fun ContenedorFormularioSheet(
                     alAbrirFormulario(FormularioActivo.Recordatorio(id = recId, volverAjustes = true))
                 },
                 alCerrar = alCerrar,
+            )
+
+            FormularioActivo.Agente -> HojaAjustesAgente(
+                repositorio = repositorio,
+                alVolver = { alAbrirFormulario(FormularioActivo.Ajustes) },
             )
         }
     }
@@ -592,6 +600,7 @@ private fun HojaAjustes(
     alCambiarCarpeta: (String) -> Unit,
     avisosActivos: Boolean,
     alCambiarAvisosActivos: (Boolean) -> Unit,
+    alAbrirAgente: () -> Unit,
     alNuevoRecordatorio: () -> Unit,
     alEditarRecordatorio: (String) -> Unit,
     alCerrar: () -> Unit,
@@ -827,6 +836,21 @@ private fun HojaAjustes(
                 text = "Agregar recordatorio",
                 fontSize = OrderTema.TamanoPequeno,
                 color = OrderTema.Acento,
+            )
+        }
+
+        HorizontalDivider(color = OrderTema.BordeSuave, thickness = OrderTema.Linea)
+
+        OutlinedButton(
+            onClick = alAbrirAgente,
+            shape = RoundedCornerShape(OrderTema.Radio),
+            border = BorderStroke(OrderTema.Linea, OrderTema.Borde),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = "Agente y voz (API keys)…",
+                fontSize = OrderTema.TamanoPequeno,
+                color = OrderTema.Texto,
             )
         }
     }

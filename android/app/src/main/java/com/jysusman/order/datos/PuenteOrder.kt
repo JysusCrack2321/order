@@ -1,5 +1,7 @@
 package com.jysusman.order.datos
 
+import com.jysusman.order.ffi.AccionVistaFfi
+import com.jysusman.order.ffi.AgenteConfigFfi
 import com.jysusman.order.ffi.AjustesFormFfi
 import com.jysusman.order.ffi.AnioMesFfi
 import com.jysusman.order.ffi.AvisoFfi
@@ -14,10 +16,14 @@ import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
 import com.jysusman.order.ffi.MateriaConTonoFfi
 import com.jysusman.order.ffi.PendientesVistaFfi
+import com.jysusman.order.ffi.ProveedorInfoFfi
 import com.jysusman.order.ffi.RecordatorioFormFfi
+import com.jysusman.order.ffi.RespuestaAgenteFfi
+import com.jysusman.order.ffi.ResultadoAplicarTodasFfi
 import com.jysusman.order.ffi.ResumenArchivoFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ffi.TareaFormFfi
+import com.jysusman.order.ffi.VozProveedorInfoFfi
 
 /**
  * Abstracción del puente FFI hacia `order-core` para poder probar `Repositorio`
@@ -108,6 +114,26 @@ interface PuenteOrder {
 
     fun anotarAviso(registroRuta: String, clave: String)
     fun resumenDelDia(ruta: String, ahoraIso: String, registroRuta: String): AvisoFfi?
+
+    fun proveedoresAgente(): List<ProveedorInfoFfi>
+    fun proveedoresVoz(): List<VozProveedorInfoFfi>
+    fun leerAgenteConfig(rutaConfig: String): AgenteConfigFfi
+    fun guardarAgenteConfig(
+        rutaConfig: String,
+        proveedor: Int,
+        url: String,
+        modelo: String,
+        apiKey: String,
+        vozProveedor: Int,
+        vozUrl: String,
+        vozModelo: String,
+        vozKey: String,
+    ): AgenteConfigFfi
+
+    fun enviarAlAgente(rutaDatos: String, rutaConfig: String, texto: String): RespuestaAgenteFfi
+    fun aplicarAccion(rutaDatos: String, accionId: String): ResumenArchivoFfi
+    fun descartarAccion(accionId: String)
+    fun aplicarTodas(rutaDatos: String, accionIds: List<String>): ResultadoAplicarTodasFfi
 }
 
 class PuenteOrderNativo : PuenteOrder {
@@ -249,4 +275,52 @@ class PuenteOrderNativo : PuenteOrder {
 
     override fun resumenDelDia(ruta: String, ahoraIso: String, registroRuta: String): AvisoFfi? =
         com.jysusman.order.ffi.resumenDelDia(ruta, ahoraIso, registroRuta)
+
+    override fun proveedoresAgente(): List<ProveedorInfoFfi> =
+        com.jysusman.order.ffi.proveedoresAgente()
+
+    override fun proveedoresVoz(): List<VozProveedorInfoFfi> =
+        com.jysusman.order.ffi.proveedoresVoz()
+
+    override fun leerAgenteConfig(rutaConfig: String): AgenteConfigFfi =
+        com.jysusman.order.ffi.leerAgenteConfig(rutaConfig)
+
+    override fun guardarAgenteConfig(
+        rutaConfig: String,
+        proveedor: Int,
+        url: String,
+        modelo: String,
+        apiKey: String,
+        vozProveedor: Int,
+        vozUrl: String,
+        vozModelo: String,
+        vozKey: String,
+    ): AgenteConfigFfi = com.jysusman.order.ffi.guardarAgenteConfig(
+        rutaConfig,
+        proveedor,
+        url,
+        modelo,
+        apiKey,
+        vozProveedor,
+        vozUrl,
+        vozModelo,
+        vozKey,
+    )
+
+    override fun enviarAlAgente(
+        rutaDatos: String,
+        rutaConfig: String,
+        texto: String,
+    ): RespuestaAgenteFfi = com.jysusman.order.ffi.enviarAlAgente(rutaDatos, rutaConfig, texto)
+
+    override fun aplicarAccion(rutaDatos: String, accionId: String): ResumenArchivoFfi =
+        com.jysusman.order.ffi.aplicarAccion(rutaDatos, accionId)
+
+    override fun descartarAccion(accionId: String) =
+        com.jysusman.order.ffi.descartarAccion(accionId)
+
+    override fun aplicarTodas(
+        rutaDatos: String,
+        accionIds: List<String>,
+    ): ResultadoAplicarTodasFfi = com.jysusman.order.ffi.aplicarTodas(rutaDatos, accionIds)
 }

@@ -1,5 +1,7 @@
 package com.jysusman.order.datos
 
+import com.jysusman.order.ffi.AccionVistaFfi
+import com.jysusman.order.ffi.AgenteConfigFfi
 import com.jysusman.order.ffi.AjustesFormFfi
 import com.jysusman.order.ffi.AnioMesFfi
 import com.jysusman.order.ffi.AvisoFfi
@@ -15,11 +17,15 @@ import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
 import com.jysusman.order.ffi.MateriaConTonoFfi
 import com.jysusman.order.ffi.PendientesVistaFfi
+import com.jysusman.order.ffi.ProveedorInfoFfi
 import com.jysusman.order.ffi.RecordatorioFormFfi
+import com.jysusman.order.ffi.RespuestaAgenteFfi
+import com.jysusman.order.ffi.ResultadoAplicarTodasFfi
 import com.jysusman.order.ffi.ResumenArchivoFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ffi.TareaFfi
 import com.jysusman.order.ffi.TareaFormFfi
+import com.jysusman.order.ffi.VozProveedorInfoFfi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -90,10 +96,63 @@ class RepositorioTest {
         assertEquals("/tmp/dos/order.toml", repo.estado.value.rutaArchivo)
         assertEquals("/tmp/dos/order.toml", fake.ultimaRutaCargada)
     }
+
+    @Test
+    fun agenteEnviarAplicarDescartarYErrorLegible() = runTest {
+        val fake = FakePuenteOrder()
+        var reprogramaciones = 0
+        val repo = Repositorio(
+            puente = fake,
+            carpetaInicial = "/tmp/order-agente",
+            dispatcherIo = UnconfinedTestDispatcher(testScheduler),
+            asegurarCarpeta = {},
+            rutaConfigAgente = "/tmp/agente.toml",
+            onDatosActualizados = { reprogramaciones++ },
+        )
+
+        repo.cargarInicial()
+        val reprogramacionesBase = reprogramaciones
+
+        // Error de red/clave se muestra en el panel del agente.
+        fake.fallarAgente = ErrorFfi.Operacion("la clave del agente no es válida (401).")
+        repo.actualizarTextoAgente("agrega un taller")
+        repo.enviarAlAgente()
+        assertTrue(repo.estado.value.agentePanelAbierto)
+        assertTrue(repo.estado.value.agenteRespuesta.contains("401"))
+        assertTrue(repo.estado.value.agenteAcciones.isEmpty())
+
+        // Respuesta con dos acciones.
+        fake.fallarAgente = null
+        fake.respuestaAgente = RespuestaAgenteFfi(
+            respuesta = "Propongo dos cambios.",
+            acciones = listOf(
+                AccionVistaFfi("a-1", "Crear tarea 1"),
+                AccionVistaFfi("a-2", "Crear tarea 2"),
+            ),
+            nota = null,
+        )
+        repo.actualizarTextoAgente("agrega dos talleres")
+        repo.enviarAlAgente()
+        assertTrue(repo.estado.value.agentePanelAbierto)
+        assertEquals("", repo.estado.value.agenteTexto)
+        assertEquals(2, repo.estado.value.agenteAcciones.size)
+
+        // Aplicar una acción recarga y reprograma avisos.
+        repo.aplicarAccionAgente("a-1")
+        assertEquals(1, repo.estado.value.agenteAcciones.size)
+        assertEquals(reprogramacionesBase + 1, reprogramaciones)
+
+        // Descartar la última cierra el panel.
+        repo.descartarAccionAgente("a-2")
+        assertTrue(repo.estado.value.agenteAcciones.isEmpty())
+        assertTrue(!repo.estado.value.agentePanelAbierto)
+    }
 }
 
 private class FakePuenteOrder : PuenteOrder {
     var fallarAlCargar: ErrorFfi? = null
+    var fallarAgente: ErrorFfi? = null
+    var respuestaAgente: RespuestaAgenteFfi = RespuestaAgenteFfi("Listo.", emptyList(), null)
     var conflictos: List<ConflictoFfi> = emptyList()
     var advertencias: List<String> = emptyList()
     var ultimaRutaCargada: String = ""
@@ -272,4 +331,41 @@ private class FakePuenteOrder : PuenteOrder {
 
     override fun resumenDelDia(ruta: String, ahoraIso: String, registroRuta: String): AvisoFfi? =
         null
+
+    override fun proveedoresAgente(): List<ProveedorInfoFfi> = emptyList()
+    override fun proveedoresVoz(): List<VozProveedorInfoFfi> = emptyList()
+    override fun leerAgenteConfig(rutaConfig: String): AgenteConfigFfi =
+        AgenteConfigFfi(0, "https://api.deepseek.com", "deepseek-v4-flash", "", 0, "https://api.openai.com/v1", "whisper-1", "")
+
+    override fun guardarAgenteConfig(
+        rutaConfig: String,
+        proveedor: Int,
+        url: String,
+        modelo: String,
+        apiKey: String,
+        vozProveedor: Int,
+        vozUrl: String,
+        vozModelo: String,
+        vozKey: String,
+    ): AgenteConfigFfi = leerAgenteConfig(rutaConfig)
+
+    override fun enviarAlAgente(
+        rutaDatos: String,
+        rutaConfig: String,
+        texto: String,
+    ): RespuestaAgenteFfi {
+        fallarAgente?.let { throw it }
+        return respuestaAgente
+    }
+
+    override fun aplicarAccion(rutaDatos: String, accionId: String): ResumenArchivoFfi =
+        cargar(rutaDatos)
+
+    override fun descartarAccion(accionId: String) {}
+
+    override fun aplicarTodas(
+        rutaDatos: String,
+        accionIds: List<String>,
+    ): ResultadoAplicarTodasFfi =
+        ResultadoAplicarTodasFfi(accionIds.size.toUInt(), cargar(rutaDatos), null)
 }

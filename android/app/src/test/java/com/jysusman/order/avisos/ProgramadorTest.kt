@@ -1,6 +1,7 @@
 package com.jysusman.order.avisos
 
 import com.jysusman.order.datos.PuenteOrder
+import com.jysusman.order.ffi.AgenteConfigFfi
 import com.jysusman.order.ffi.AjustesFormFfi
 import com.jysusman.order.ffi.AnioMesFfi
 import com.jysusman.order.ffi.AvisoFfi
@@ -15,10 +16,14 @@ import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
 import com.jysusman.order.ffi.MateriaConTonoFfi
 import com.jysusman.order.ffi.PendientesVistaFfi
+import com.jysusman.order.ffi.ProveedorInfoFfi
 import com.jysusman.order.ffi.RecordatorioFormFfi
+import com.jysusman.order.ffi.RespuestaAgenteFfi
+import com.jysusman.order.ffi.ResultadoAplicarTodasFfi
 import com.jysusman.order.ffi.ResumenArchivoFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ffi.TareaFormFfi
+import com.jysusman.order.ffi.VozProveedorInfoFfi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -194,4 +199,12 @@ private class FakePuenteAvisos(
     override fun formatearHora12(hora12: Int, minuto: Int, tarde: Boolean): String = ""
     override fun parsearHora12(texto: String): Hora12Ffi = throw UnsupportedOperationException()
     override fun diasSemanaEtiquetas(): List<String> = emptyList()
+    override fun proveedoresAgente(): List<ProveedorInfoFfi> = emptyList()
+    override fun proveedoresVoz(): List<VozProveedorInfoFfi> = emptyList()
+    override fun leerAgenteConfig(rutaConfig: String): AgenteConfigFfi = throw UnsupportedOperationException()
+    override fun guardarAgenteConfig(rutaConfig: String, proveedor: Int, url: String, modelo: String, apiKey: String, vozProveedor: Int, vozUrl: String, vozModelo: String, vozKey: String): AgenteConfigFfi = throw UnsupportedOperationException()
+    override fun enviarAlAgente(rutaDatos: String, rutaConfig: String, texto: String): RespuestaAgenteFfi = throw UnsupportedOperationException()
+    override fun aplicarAccion(rutaDatos: String, accionId: String): ResumenArchivoFfi = throw UnsupportedOperationException()
+    override fun descartarAccion(accionId: String) {}
+    override fun aplicarTodas(rutaDatos: String, accionIds: List<String>): ResultadoAplicarTodasFfi = throw UnsupportedOperationException()
 }
