@@ -13,10 +13,18 @@
 - Versión en el nombre: `ORDER-<versión de Cargo.toml>-x86_64.AppImage`, y copia `dist/ORDER-x86_64.AppImage`.
 
 ## Tarea 1: Script de empaquetado
-- [ ] `empaquetar/appimage.sh` (se corre allá: `./remoto.sh ./empaquetar/appimage.sh`): construye/reutiliza la imagen del contenedor, compila, arma el AppDir, descarga `appimagetool` y el runtime estático (fijar versión/URL), produce el AppImage en `dist/`. Idempotente. Commit `build: AppImage portable`.
+- [x] `empaquetar/appimage.sh` (se corre allá: `./remoto.sh ./empaquetar/appimage.sh`): construye/reutiliza la imagen del contenedor, compila, arma el AppDir, descarga `appimagetool` y el runtime estático (fijar versión/URL), produce el AppImage en `dist/`. Idempotente. Commit `build: AppImage portable`.
 
 ## Tarea 2: Comprobación de compatibilidad
-- [ ] Con podman en el PC de escritorio, ejecutar el AppImage con `--appimage-extract-and-run --version` (o una bandera `--version` del binario; añadirla si no existe, sin abrir ventana) dentro de contenedores `ubuntu:22.04`, `ubuntu:24.04`, `debian:12` y `fedora:latest` con solo las bibliotecas de escritorio mínimas (fontconfig, alsa, libxkbcommon, wayland-client). Debe arrancar sin errores de glibc ni de bibliotecas faltantes (`ldd` del binario extraído sin "not found"). Anotar resultados. Commit `test: compatibilidad del AppImage`.
+- [x] Con podman en el PC de escritorio, ejecutar el AppImage con `--appimage-extract-and-run --version` (o una bandera `--version` del binario; añadirla si no existe, sin abrir ventana) dentro de contenedores `ubuntu:22.04`, `ubuntu:24.04`, `debian:12` y `fedora:latest` con solo las bibliotecas de escritorio mínimas (fontconfig, alsa, libxkbcommon, wayland-client). Debe arrancar sin errores de glibc ni de bibliotecas faltantes (`ldd` del binario extraído sin "not found"). Anotar resultados. Commit `test: compatibilidad del AppImage`.
+
+### Resultados de compatibilidad (`ORDER-0.1.0-x86_64.AppImage` / `ORDER-x86_64.AppImage`, 21 121 528 bytes / 20,1 MiB)
+Ejecutado con `empaquetar/probar-appimage.sh` en contenedores limpios con `fontconfig`, `alsa`, `libxkbcommon` y `libwayland-client`:
+- `ubuntu:22.04` (Ubuntu 22.04.5 LTS, glibc 2.35): `order 0.1.0`, `ldd` sin `not found`, `AppRun --version` correcto.
+- `ubuntu:24.04` (Ubuntu 24.04.5 LTS, glibc 2.39): `order 0.1.0`, `ldd` sin `not found`, `AppRun --version` correcto.
+- `debian:12` (Debian GNU/Linux 12 (bookworm), glibc 2.36): `order 0.1.0`, `ldd` sin `not found`, `AppRun --version` correcto.
+- `fedora:latest` (Fedora Linux 45, glibc 2.44): `order 0.1.0`, `ldd` sin `not found`, `AppRun --version` correcto.
+- Host CachyOS/Arch (ejecución directa FUSE y `--appimage-extract-and-run --version`): `order 0.1.0`.
 
 ## Tarea 3: Cierre
 - [ ] `./remoto.sh --traer` (ampliar `--traer` para traer también `dist/*.AppImage`). README: cómo descargar y abrir el AppImage (chmod +x o Propiedades → Permitir ejecutar). Commit `docs: AppImage`.
