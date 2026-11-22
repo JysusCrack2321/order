@@ -25,6 +25,7 @@ export struct AdjuntoUI {
 export component BarraAgente inherits Rectangle {
     in-out property <string> texto;
     in property <bool> pensando: false;
+    in property <string> pensando-texto: "pensando…";
     in property <string> aviso: "";
     // Grabación de voz en curso y su tiempo ("0:07").
     in property <bool> grabando: false;
@@ -223,7 +224,7 @@ export component BarraAgente inherits Rectangle {
             }
 
             if root.pensando : Text {
-                text: "pensando…";
+                text: root.pensando-texto;
                 font-size: Tema.tamano-hora;
                 color: Tema.texto-tenue;
             }

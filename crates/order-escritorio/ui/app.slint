@@ -299,6 +299,7 @@ export component AppWindow inherits Window {
     // Barra de abajo y panel de propuestas.
     in-out property <string> agente-texto: "";
     in property <bool> agente-pensando: false;
+    in property <string> agente-pensando-texto: "pensando…";
     in property <string> agente-respuesta: "";
     in property <[AccionUI]> agente-acciones: [];
     in property <bool> agente-panel: false;
@@ -316,6 +317,7 @@ export component AppWindow inherits Window {
     in-out property <string> a-key: "";
     in-out property <bool> a-ver-key: false;
     in-out property <bool> a-ve-imagenes: false;
+    in-out property <string> a-limite-contexto: "";
     // Ajustes → Agente → Voz (fichas 0–1: OpenAI y Groq).
     in-out property <int> a-voz-proveedor: 0;
     in-out property <string> v-url: "";
@@ -619,6 +621,7 @@ export component AppWindow inherits Window {
             BarraAgente {
                 texto <=> root.agente-texto;
                 pensando: root.agente-pensando;
+                pensando-texto: root.agente-pensando-texto;
                 aviso: root.agente-aviso;
                 grabando: root.agente-grabando;
                 tiempo: root.agente-tiempo;
@@ -1236,6 +1239,13 @@ export component AppWindow inherits Window {
                                 texto <=> root.v-modelo;
                                 pista: "modelo";
                                 mal: root.campo-mal == 4;
+                            }
+
+                            Campo {
+                                etiqueta: "Límite de contexto (tokens)";
+                                texto <=> root.a-limite-contexto;
+                                pista: "60000";
+                                mal: root.campo-mal == 6;
                             }
 
                             if root.a-proveedor == 3 : HorizontalLayout {

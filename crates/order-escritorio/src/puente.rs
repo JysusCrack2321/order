@@ -13,7 +13,7 @@
 use crate::adjuntos;
 use crate::grabacion::{self, Grabacion};
 use order_core::agente::acciones::{self, Accion};
-use order_core::agente::adjuntos::{Adjunto, MAX_ADJUNTOS};
+use order_core::agente::adjuntos::{self as core_adjuntos, Adjunto, MAX_ADJUNTOS};
 use order_core::agente::cliente::{self, ErrorAgente};
 use order_core::agente::config::{self, AgenteConfig, Proveedor, VozProveedor};
 use order_core::agente::contexto;
@@ -114,6 +114,7 @@ struct Estado {
     /// Nota junto a la respuesta (p. ej. no se pudo leer una propuesta).
     nota: String,
     pensando: bool,
+    pensando_texto: String,
     panel: bool,
     /// Aviso de la barra (clave ausente, por ejemplo).
     aviso: String,
@@ -125,8 +126,12 @@ struct Estado {
     adjuntos: Vec<(i32, Adjunto, bool)>,
     siguiente_adjunto_id: i32,
     leyendo_archivo: bool,
-    /// Memoria corta de la conversación con el agente.
+    /// Memoria completa de la conversación con el agente.
     conversacion: Conversacion,
+}
+
+fn ruta_conversacion() -> std::path::PathBuf {
+    Conversacion::ruta_junto_a(&config::ruta())
 }
 
 impl Estado {
@@ -147,6 +152,7 @@ impl Estado {
             respuesta: String::new(),
             nota: String::new(),
             pensando: false,
+            pensando_texto: "pensando…".to_string(),
             panel: false,
             aviso: String::new(),
             grabacion: None,
@@ -154,7 +160,7 @@ impl Estado {
             adjuntos: Vec::new(),
             siguiente_adjunto_id: 1,
             leyendo_archivo: false,
-            conversacion: Conversacion::nueva(),
+            conversacion: Conversacion::cargar_de(&ruta_conversacion()),
         }
     }
 }
@@ -207,6 +213,7 @@ struct Vista {
     agente_respuesta: SharedString,
     agente_acciones: Vec<AccionUI>,
     agente_pensando: bool,
+    agente_pensando_texto: SharedString,
     agente_panel: bool,
     agente_aviso: SharedString,
     agente_nota: SharedString,
@@ -622,6 +629,7 @@ fn conectar(ui: &AppWindow) {
             estado.nota.clear();
             estado.aviso.clear();
         });
+        Conversacion::borrar_de(&ruta_conversacion());
         actualizar(&ui);
     });
 
@@ -1184,6 +1192,7 @@ fn abrir_agente(ui: &AppWindow) {
     ui.set_a_key(agente.api_key.into());
     ui.set_a_ver_key(false);
     ui.set_a_ve_imagenes(agente.ve_imagenes);
+    ui.set_a_limite_contexto(agente.limite_contexto_tokens.to_string().into());
     ui.set_a_voz_proveedor(agente.voz.proveedor.codigo());
     ui.set_v_url(agente.voz.url_base.into());
     ui.set_v_modelo(agente.voz.modelo.into());
@@ -1218,7 +1227,16 @@ fn guardar_agente(ui: &AppWindow) {
             return;
         }
     };
+    let limite_contexto = match formularios::validar_limite_contexto(&ui.get_a_limite_contexto()) {
+        Ok(limite) => limite,
+        Err(err) => {
+            ui.set_a_avanzado(true);
+            falta(ui, err.campo, &err.mensaje);
+            return;
+        }
+    };
     agente.ve_imagenes = ui.get_a_ve_imagenes();
+    agente.limite_contexto_tokens = limite_contexto;
 
     match config::guardar(&agente) {
         Ok(()) => {
@@ -1372,9 +1390,15 @@ fn enviar_agente(ui: &AppWindow) {
         .iter()
         .map(|adj| adj.nombre.clone())
         .collect();
-    let conv_snapshot = con_estado(|estado| estado.conversacion.clone());
+    let mut conv_snapshot = con_estado(|estado| estado.conversacion.clone());
+    let necesita_compactar = conv_snapshot.necesita_compactar(agente.limite_contexto_tokens);
     con_estado(|estado| {
         estado.pensando = true;
+        estado.pensando_texto = if necesita_compactar {
+            "Compactando conversación…".to_string()
+        } else {
+            "pensando…".to_string()
+        };
         estado.panel = false;
         estado.respuesta.clear();
         estado.acciones.clear();
@@ -1386,17 +1410,89 @@ fn enviar_agente(ui: &AppWindow) {
 
     let debil = ui.as_weak();
     std::thread::spawn(move || {
-        let salida = cliente::consultar(
+        if necesita_compactar {
+            if let Ok(resumen) = cliente::compactar(&agente, &conv_snapshot) {
+                conv_snapshot.aplicar_compactacion(&resumen);
+                let debil_comp = debil.clone();
+                let resumen_clon = resumen.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = debil_comp.upgrade() {
+                        con_estado(|estado| {
+                            estado.conversacion.aplicar_compactacion(&resumen_clon);
+                            let _ = estado.conversacion.guardar_en(&ruta_conversacion());
+                            estado.pensando_texto = "pensando…".to_string();
+                        });
+                        actualizar(&ui);
+                    }
+                });
+            } else {
+                let debil_comp = debil.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = debil_comp.upgrade() {
+                        con_estado(|estado| {
+                            estado.pensando_texto = "pensando…".to_string();
+                        });
+                        actualizar(&ui);
+                    }
+                });
+            }
+        }
+
+        let salida = match cliente::consultar(
             &agente,
             &contexto,
             &pregunta,
             &adjuntos_enviar,
             &conv_snapshot,
-        );
+        ) {
+            Ok(texto) => Ok(texto),
+            Err(err)
+                if cliente::es_error_contexto_largo(&err)
+                    && conv_snapshot.texto_para_compactar().is_some() =>
+            {
+                let debil_comp = debil.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = debil_comp.upgrade() {
+                        con_estado(|estado| {
+                            estado.pensando_texto = "Compactando conversación…".to_string();
+                        });
+                        actualizar(&ui);
+                    }
+                });
+                if let Ok(resumen) = cliente::compactar(&agente, &conv_snapshot) {
+                    conv_snapshot.aplicar_compactacion(&resumen);
+                    let debil_comp = debil.clone();
+                    let resumen_clon = resumen.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = debil_comp.upgrade() {
+                            con_estado(|estado| {
+                                estado.conversacion.aplicar_compactacion(&resumen_clon);
+                                let _ = estado.conversacion.guardar_en(&ruta_conversacion());
+                                estado.pensando_texto = "pensando…".to_string();
+                            });
+                            actualizar(&ui);
+                        }
+                    });
+                }
+                cliente::consultar(
+                    &agente,
+                    &contexto,
+                    &pregunta,
+                    &adjuntos_enviar,
+                    &conv_snapshot,
+                )
+            }
+            Err(err) => Err(err),
+        };
+        let docs = if salida.is_ok() {
+            core_adjuntos::documentos_de_adjuntos(&adjuntos_enviar)
+        } else {
+            Vec::new()
+        };
         // Nadie más toca el estado de la ventana: se vuelve al hilo principal.
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = debil.upgrade() {
-                recibir_agente(&ui, &pregunta, &nombres_adjuntos, salida);
+                recibir_agente(&ui, &pregunta, &nombres_adjuntos, docs, salida);
             }
         });
     });
@@ -1407,9 +1503,13 @@ fn recibir_agente(
     ui: &AppWindow,
     pregunta: &str,
     nombres_adjuntos: &[String],
+    documentos: Vec<(String, String)>,
     salida: Result<String, ErrorAgente>,
 ) {
-    con_estado(|estado| estado.pensando = false);
+    con_estado(|estado| {
+        estado.pensando = false;
+        estado.pensando_texto = "pensando…".to_string();
+    });
     match salida {
         Err(error) => {
             con_estado(|estado| {
@@ -1426,17 +1526,29 @@ fn recibir_agente(
                 } else {
                     lectura.respuesta
                 };
+                let mut retirados = Vec::new();
                 con_estado(|estado| {
                     estado.conversacion.tomar_resultados();
+                    for (nombre, texto_doc) in documentos {
+                        retirados.extend(estado.conversacion.agregar_documento(&nombre, &texto_doc));
+                    }
                     estado.conversacion.registrar_turno(
                         pregunta,
                         nombres_adjuntos,
                         &respuesta,
                     );
+                    let _ = estado.conversacion.guardar_en(&ruta_conversacion());
                     estado.panel = true;
                     estado.respuesta = respuesta;
                     estado.acciones = lectura.acciones;
-                    estado.nota.clear();
+                    estado.nota = if retirados.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "Se retiró de la memoria el documento antiguo {} por superar el límite de 200 000 caracteres.",
+                            retirados.join(", ")
+                        )
+                    };
                     estado.adjuntos.clear();
                 });
                 // El texto ya se envió: el campo queda libre para la siguiente.
@@ -1445,6 +1557,7 @@ fn recibir_agente(
             Err(mensaje) => {
                 con_estado(|estado| {
                     estado.conversacion.tomar_resultados();
+                    let _ = estado.conversacion.guardar_en(&ruta_conversacion());
                     estado.panel = true;
                     estado.respuesta = texto;
                     estado.acciones.clear();
@@ -1474,6 +1587,7 @@ fn aplicar_accion(ui: &AppWindow, indice: i32) {
                 estado.datos = Some(datos);
                 estado.error = None;
                 estado.conversacion.anotar_resultado(&descripcion, true);
+                let _ = estado.conversacion.guardar_en(&ruta_conversacion());
                 let idx = indice.max(0) as usize;
                 if idx < estado.acciones.len() {
                     estado.acciones.remove(idx);
@@ -1498,6 +1612,7 @@ fn descartar_accion(ui: &AppWindow, indice: i32) {
             let datos = estado.datos.as_ref().unwrap_or(&vacio);
             let descripcion = accion.descripcion(datos);
             estado.conversacion.anotar_resultado(&descripcion, false);
+            let _ = estado.conversacion.guardar_en(&ruta_conversacion());
         }
         if estado.acciones.is_empty() {
             estado.panel = false;
@@ -1529,6 +1644,7 @@ fn aplicar_todas(ui: &AppWindow) {
             for desc in descripciones.iter().take(quitar) {
                 estado.conversacion.anotar_resultado(desc, true);
             }
+            let _ = estado.conversacion.guardar_en(&ruta_conversacion());
             estado.acciones.drain(..quitar);
         });
     }
@@ -1721,6 +1837,7 @@ fn actualizar(ui: &AppWindow) {
     ui.set_agente_respuesta(vista.agente_respuesta);
     ui.set_agente_acciones(ModelRc::new(VecModel::from(vista.agente_acciones)));
     ui.set_agente_pensando(vista.agente_pensando);
+    ui.set_agente_pensando_texto(vista.agente_pensando_texto);
     ui.set_agente_panel(vista.agente_panel);
     ui.set_agente_aviso(vista.agente_aviso);
     ui.set_agente_nota(vista.agente_nota);
@@ -1877,6 +1994,7 @@ fn construir_vista() -> Vista {
                 })
                 .collect(),
             agente_pensando: estado.pensando,
+            agente_pensando_texto: estado.pensando_texto.clone().into(),
             agente_panel: estado.panel,
             agente_aviso: estado.aviso.clone().into(),
             agente_nota: estado.nota.clone().into(),
