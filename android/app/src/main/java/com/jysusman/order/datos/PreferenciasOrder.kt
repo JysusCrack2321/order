@@ -7,6 +7,7 @@ private const val PREFS_ORDER = "order_prefs"
 private const val CLAVE_CARPETA = "carpeta_datos"
 private const val CLAVE_AVISOS_ACTIVOS = "avisos_activos"
 private const val CLAVE_AVISOS_PROGRAMADOS = "avisos_programados"
+private const val CLAVE_VOZ_ANDROID = "voz_android"
 
 object PreferenciasOrder {
     fun carpetaDatos(context: Context): String? =
@@ -28,6 +29,13 @@ object PreferenciasOrder {
 
     fun guardarClavesProgramadas(context: Context, claves: Set<String>) {
         prefs(context).edit().putStringSet(CLAVE_AVISOS_PROGRAMADOS, claves.toSet()).apply()
+    }
+
+    fun usarVozAndroid(context: Context): Boolean =
+        prefs(context).getBoolean(CLAVE_VOZ_ANDROID, true)
+
+    fun guardarUsarVozAndroid(context: Context, usar: Boolean) {
+        prefs(context).edit().putBoolean(CLAVE_VOZ_ANDROID, usar).apply()
     }
 
     private fun prefs(context: Context) =

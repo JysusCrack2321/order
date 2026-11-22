@@ -44,6 +44,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import com.jysusman.order.datos.PreferenciasOrder
 import com.jysusman.order.datos.Repositorio
 import com.jysusman.order.ffi.ProveedorInfoFfi
 import com.jysusman.order.ffi.VozProveedorInfoFfi
@@ -77,6 +78,7 @@ fun HojaAjustesAgente(
     var vozModelo by remember { mutableStateOf("") }
     var vozApiKey by remember { mutableStateOf("") }
     var verVozKey by remember { mutableStateOf(false) }
+    var usarVozAndroid by remember { mutableStateOf(PreferenciasOrder.usarVozAndroid(context)) }
 
     var avanzado by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf("") }
@@ -204,7 +206,7 @@ fun HojaAjustesAgente(
 
         Column(verticalArrangement = Arrangement.spacedBy(OrderTema.EspacioXs)) {
             Text(
-                text = "Voz (Whisper por API)",
+                text = "Voz",
                 fontSize = OrderTema.TamanoPequeno,
                 letterSpacing = OrderTema.LetraNormal,
                 color = OrderTema.TextoSuave,
@@ -213,11 +215,17 @@ fun HojaAjustesAgente(
                 horizontalArrangement = Arrangement.spacedBy(OrderTema.EspacioXs),
                 verticalArrangement = Arrangement.spacedBy(OrderTema.EspacioXs),
             ) {
+                ChipOrder(
+                    texto = "Android (gratis)",
+                    activo = usarVozAndroid,
+                    onClick = { usarVozAndroid = true },
+                )
                 proveedoresVoz.forEach { info ->
                     ChipOrder(
                         texto = info.nombre,
-                        activo = vozProveedor == info.codigo,
+                        activo = !usarVozAndroid && vozProveedor == info.codigo,
                         onClick = {
+                            usarVozAndroid = false
                             vozProveedor = info.codigo
                             vozUrlBase = info.urlBase
                             vozModelo = info.modelo
@@ -227,22 +235,30 @@ fun HojaAjustesAgente(
             }
         }
 
-        vozActual?.let { info ->
-            BotonBorde(
-                texto = "Conseguir mi API key",
-                onClick = { abrirNavegador(context, info.urlClave) },
+        if (usarVozAndroid) {
+            Text(
+                text = "Usa el reconocimiento de voz del sistema (es-CO), sin clave ni costo.",
+                fontSize = OrderTema.TamanoHora,
+                color = OrderTema.TextoTenue,
+            )
+        } else {
+            vozActual?.let { info ->
+                BotonBorde(
+                    texto = "Conseguir mi API key",
+                    onClick = { abrirNavegador(context, info.urlClave) },
+                )
+            }
+
+            CampoClaveAgente(
+                etiqueta = "API key de voz",
+                valor = vozApiKey,
+                alCambiar = { vozApiKey = it },
+                pista = if (vozProveedor == 1) "gsk_…" else "sk-…",
+                mostrar = verVozKey,
+                alAlternarMostrar = { verVozKey = !verVozKey },
+                mal = false,
             )
         }
-
-        CampoClaveAgente(
-            etiqueta = "API key de voz",
-            valor = vozApiKey,
-            alCambiar = { vozApiKey = it },
-            pista = if (vozProveedor == 1) "gsk_…" else "sk-…",
-            mostrar = verVozKey,
-            alAlternarMostrar = { verVozKey = !verVozKey },
-            mal = false,
-        )
 
         HorizontalDivider(color = OrderTema.BordeSuave, thickness = OrderTema.Linea)
 
@@ -277,26 +293,28 @@ fun HojaAjustesAgente(
                 pista = "modelo",
                 mal = campoMal == 2,
             )
-            CampoTextoAgente(
-                etiqueta = "URL base de la voz",
-                valor = vozUrlBase,
-                alCambiar = {
-                    vozUrlBase = it
-                    if (campoMal == 3) campoMal = 0
-                },
-                pista = "https://…",
-                mal = campoMal == 3,
-            )
-            CampoTextoAgente(
-                etiqueta = "Modelo de la voz",
-                valor = vozModelo,
-                alCambiar = {
-                    vozModelo = it
-                    if (campoMal == 4) campoMal = 0
-                },
-                pista = "modelo",
-                mal = campoMal == 4,
-            )
+            if (!usarVozAndroid) {
+                CampoTextoAgente(
+                    etiqueta = "URL base de la voz",
+                    valor = vozUrlBase,
+                    alCambiar = {
+                        vozUrlBase = it
+                        if (campoMal == 3) campoMal = 0
+                    },
+                    pista = "https://…",
+                    mal = campoMal == 3,
+                )
+                CampoTextoAgente(
+                    etiqueta = "Modelo de la voz",
+                    valor = vozModelo,
+                    alCambiar = {
+                        vozModelo = it
+                        if (campoMal == 4) campoMal = 0
+                    },
+                    pista = "modelo",
+                    mal = campoMal == 4,
+                )
+            }
             if (proveedorActual?.urlClave == null) {
                 Row(
                     modifier = Modifier
@@ -359,6 +377,7 @@ fun HojaAjustesAgente(
                             vozKey = vozApiKey,
                         )
                         if (err == null) {
+                            PreferenciasOrder.guardarUsarVozAndroid(context, usarVozAndroid)
                             alVolver()
                         } else {
                             if (err.campo in 1..4) avanzado = true

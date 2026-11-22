@@ -87,6 +87,7 @@ import com.jysusman.order.ui.theme.OrderTheme
 import com.jysusman.order.ui.tienePermisoAlarmaExacta
 import com.jysusman.order.ui.tienePermisoArchivos
 import com.jysusman.order.voz.Grabadora
+import com.jysusman.order.voz.VozAndroid
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -163,20 +164,46 @@ private fun OrderApp(
     var selectorFiltro by remember { mutableStateOf(SelectorFiltro.Ninguno) }
 
     val grabadora = remember { Grabadora() }
+    val vozAndroid = remember(context) { VozAndroid(context) }
     var grabandoVoz by remember { mutableStateOf(false) }
+    var grabandoConSistema by remember { mutableStateOf(false) }
     var tiempoGrabacion by remember { mutableStateOf("0:00") }
 
     fun iniciarGrabacionVoz() {
-        grabadora.empezar(context)
-            .onSuccess {
-                grabandoVoz = true
-                tiempoGrabacion = "0:00"
-                repositorio.mostrarAvisoAgente("", esError = false)
-            }
-            .onFailure { err ->
-                grabandoVoz = false
-                repositorio.mostrarAvisoAgente(err.message ?: "No se pudo usar el micrófono.", esError = true)
-            }
+        val usarSistema = PreferenciasOrder.usarVozAndroid(context)
+        if (usarSistema) {
+            grabandoConSistema = true
+            grabandoVoz = true
+            tiempoGrabacion = "escuchando…"
+            repositorio.mostrarAvisoAgente("", esError = false)
+            vozAndroid.empezar(
+                textoActual = estado.agenteTexto,
+                alActualizarTexto = { nuevo -> repositorio.actualizarTextoAgente(nuevo) },
+                alTerminar = {
+                    grabandoVoz = false
+                    grabandoConSistema = false
+                    tiempoGrabacion = ""
+                },
+                alError = { msg ->
+                    grabandoVoz = false
+                    grabandoConSistema = false
+                    tiempoGrabacion = ""
+                    repositorio.mostrarAvisoAgente(msg, esError = true)
+                },
+            )
+        } else {
+            grabandoConSistema = false
+            grabadora.empezar(context)
+                .onSuccess {
+                    grabandoVoz = true
+                    tiempoGrabacion = "0:00"
+                    repositorio.mostrarAvisoAgente("", esError = false)
+                }
+                .onFailure { err ->
+                    grabandoVoz = false
+                    repositorio.mostrarAvisoAgente(err.message ?: "No se pudo usar el micrófono.", esError = true)
+                }
+        }
     }
 
     val lanzadorMicrofono = rememberLauncherForActivityResult(
@@ -185,7 +212,10 @@ private fun OrderApp(
         if (concedido) {
             iniciarGrabacionVoz()
         } else {
-            repositorio.mostrarAvisoAgente("Permiso de micrófono denegado; no se puede grabar.", esError = true)
+            repositorio.mostrarAvisoAgente(
+                "Permiso de micrófono denegado; puedes usar el micrófono de Gboard.",
+                esError = true,
+            )
         }
     }
 
@@ -272,15 +302,18 @@ private fun OrderApp(
         }
     }
 
-    LaunchedEffect(grabandoVoz) {
-        while (grabandoVoz) {
+    LaunchedEffect(grabandoVoz, grabandoConSistema) {
+        while (grabandoVoz && !grabandoConSistema) {
             tiempoGrabacion = Grabadora.formatoTiempo(grabadora.segundosTranscurridos())
             delay(300)
         }
     }
 
-    DisposableEffect(grabadora) {
-        onDispose { grabadora.cancelar() }
+    DisposableEffect(grabadora, vozAndroid) {
+        onDispose {
+            grabadora.cancelar()
+            vozAndroid.cancelar()
+        }
     }
 
     val lanzadorNotif = rememberLauncherForActivityResult(
@@ -465,10 +498,17 @@ private fun OrderApp(
                     alCambiarTexto = { repositorio.actualizarTextoAgente(it) },
                     alGrabar = {
                         if (grabandoVoz) {
-                            grabandoVoz = false
-                            tiempoGrabacion = ""
-                            val muestras = grabadora.detener()
-                            scope.launch { repositorio.transcribirAudio(muestras) }
+                            if (grabandoConSistema) {
+                                vozAndroid.detener()
+                                grabandoVoz = false
+                                grabandoConSistema = false
+                                tiempoGrabacion = ""
+                            } else {
+                                grabandoVoz = false
+                                tiempoGrabacion = ""
+                                val muestras = grabadora.detener()
+                                scope.launch { repositorio.transcribirAudio(muestras) }
+                            }
                         } else if (!Grabadora.tienePermisoMicrofono(context)) {
                             lanzadorMicrofono.launch(Manifest.permission.RECORD_AUDIO)
                         } else {
