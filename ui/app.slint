@@ -242,8 +242,11 @@ export component AppWindow inherits Window {
     in property <string> sel-mes-texto: "";
     in property <[CeldaDia]> sel-celdas: [];
     in property <string> sel-hora-texto: "";
-    in property <int> sel-hora: 0;
+    // Índice de la rueda de horas (0 = 1) y de la de minutos (0 = 00).
+    in property <int> sel-hora12: 0;
     in property <int> sel-minuto: 0;
+    // ¿La hora elegida es de la tarde? Solo se usa al abrir el selector.
+    in property <bool> sel-tarde: false;
     in property <[string]> sel-horas: [];
     in property <[string]> sel-minutos: [];
     in property <[MateriaUI]> sel-materias: [];
@@ -278,8 +281,9 @@ export component AppWindow inherits Window {
     callback selector-cerrar();
     callback selector-mes(int);
     callback selector-dia(int);
-    callback selector-hora(int);
+    callback selector-hora12(int);
     callback selector-minuto(int);
+    callback selector-pm(bool);
     callback selector-aceptar();
     callback selector-escribir();
     callback selector-materia(string);
@@ -905,8 +909,9 @@ export component AppWindow inherits Window {
             etiqueta-mes: root.sel-mes-texto;
             celdas: root.sel-celdas;
             hora-texto: root.sel-hora-texto;
-            hora-elegida: root.sel-hora;
-            minuto-elegido: root.sel-minuto;
+            hora-inicial: root.sel-hora12;
+            minuto-inicial: root.sel-minuto;
+            tarde: root.sel-tarde;
             horas: root.sel-horas;
             minutos: root.sel-minutos;
             materias: root.sel-materias;
@@ -916,8 +921,9 @@ export component AppWindow inherits Window {
             cerrar => { root.selector-cerrar(); }
             mes(delta) => { root.selector-mes(delta); }
             dia(valor) => { root.selector-dia(valor); }
-            hora(valor) => { root.selector-hora(valor); }
+            hora12(valor) => { root.selector-hora12(valor); }
             minuto(valor) => { root.selector-minuto(valor); }
+            periodo(tarde) => { root.selector-pm(tarde); }
             aceptar => { root.selector-aceptar(); }
             escribir => { root.selector-escribir(); }
             materia(valor) => { root.selector-materia(valor); }

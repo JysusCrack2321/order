@@ -179,7 +179,7 @@ export component PendientesVista inherits Rectangle {
                 width: Tema.ancho-filtro-hora;
                 etiqueta: "Hora desde";
                 valor: root.pm-hora-desde;
-                pista: "00:00";
+                pista: "12:00 a. m.";
                 glifo: "◷";
                 clicked => { root.elegir-hora-desde(); }
             }
@@ -188,7 +188,7 @@ export component PendientesVista inherits Rectangle {
                 width: Tema.ancho-filtro-hora;
                 etiqueta: "Hora hasta";
                 valor: root.pm-hora-hasta;
-                pista: "23:59";
+                pista: "11:59 p. m.";
                 glifo: "◷";
                 clicked => { root.elegir-hora-hasta(); }
             }

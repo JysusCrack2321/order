@@ -6,6 +6,7 @@ mod filtros;
 mod modelo;
 mod ops;
 mod puente;
+mod reloj;
 mod semana;
 mod sistema;
 

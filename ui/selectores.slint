@@ -6,7 +6,7 @@
 // Nada de valores de color o tamaño escritos a mano: todo sale de tema.slint.
 
 import { Tema } from "tema.slint";
-import { Boton, Campo } from "formularios.slint";
+import { Boton, Campo, Chip } from "formularios.slint";
 import { FichaMateria } from "materias.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -25,6 +25,120 @@ export struct MateriaUI {
     tono: int,
 }
 
+/// Una rueda de valores: se mueve con la rueda del ratón y arrastrando, y el
+/// valor que queda en el centro es el elegido. La banda central lo resalta.
+component Rueda inherits Rectangle {
+    in property <[string]> valores;
+    /// Índice con el que abre la rueda; después manda lo que haga el usuario.
+    in property <int> inicial: 0;
+
+    callback elegido(int);
+
+    height: Tema.alto-rueda;
+    clip: true;
+
+    // Todo se calcula con números sueltos (sin unidad) y se vuelve a px al
+    // final: así las cuentas de la rueda son simples divisiones.
+    property <float> renglon: Tema.alto-rueda-item / 1px;
+    property <float> alto: self.height / 1px;
+    // Posición continua dentro de la lista: 0 = primer valor en el centro.
+    property <float> posicion: root.inicial;
+    // Posición al empezar a arrastrar y dónde se pulsó.
+    property <float> desde: 0;
+    property <float> y-pulsada: 0;
+    property <int> centro: Math.round(root.posicion);
+    property <int> avisado: -1;
+
+    function acotar() {
+        if root.posicion < 0 {
+            root.posicion = 0;
+        }
+        if root.posicion > (root.valores.length - 1) * 1.0 {
+            root.posicion = (root.valores.length - 1) * 1.0;
+        }
+        if root.centro != root.avisado {
+            root.avisado = root.centro;
+            root.elegido(root.centro);
+        }
+    }
+
+    function soltar() {
+        // Un clic sin arrastre elige el renglón que quedó bajo el cursor.
+        if Math.abs(root.y-pulsada - root.y-ultima) < Tema.espacio-md / 1px {
+            root.posicion = root.posicion + (root.y-ultima - root.alto / 2) / root.renglon;
+        }
+        root.posicion = Math.round(root.posicion) * 1.0;
+        root.acotar();
+    }
+
+    // Dónde está el cursor ahora (en números sueltos).
+    property <float> y-ultima: 0;
+
+    // Banda central: el valor elegido.
+    Rectangle {
+        y: (parent.height - Tema.alto-rueda-item) / 2;
+        width: parent.width;
+        height: Tema.alto-rueda-item;
+        border-radius: Tema.radio-pequeno;
+        background: Tema.acento-tenue;
+        border-width: Tema.linea;
+        border-color: Tema.acento-suave;
+    }
+
+    for texto[i] in root.valores : Text {
+        y: (parent.height - Tema.alto-rueda-item) / 2
+            + ((i * 1.0 - root.posicion) * root.renglon) * 1px;
+        width: parent.width;
+        height: Tema.alto-rueda-item;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: texto;
+        font-family: Tema.fuente-titulos;
+        font-size: i == root.centro ? Tema.tamano-texto : Tema.tamano-pequeno;
+        color: i == root.centro
+            ? Tema.acento
+            : (Math.abs(i - root.centro) == 1 ? Tema.texto-suave : Tema.texto-tenue);
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+
+        moved => {
+            root.y-ultima = self.mouse-y / 1px;
+            root.posicion = root.desde + (self.pressed-y / 1px - root.y-ultima) / root.renglon;
+            root.acotar();
+        }
+
+        pointer-event(evento) => {
+            if evento.kind == PointerEventKind.down {
+                root.desde = root.posicion;
+                root.y-pulsada = self.mouse-y / 1px;
+                root.y-ultima = root.y-pulsada;
+            }
+            if evento.kind == PointerEventKind.up {
+                root.y-ultima = self.mouse-y / 1px;
+                root.soltar();
+            }
+            EventResult.accept
+        }
+
+        scroll-event(evento) => {
+            // Una muesca de la rueda, un valor: así nunca queda a medio camino.
+            if evento.delta-y > 0 {
+                root.posicion = Math.round(root.posicion) + 1;
+                root.acotar();
+                return EventResult.accept;
+            }
+            if evento.delta-y < 0 {
+                root.posicion = Math.round(root.posicion) - 1;
+                root.acotar();
+                return EventResult.accept;
+            }
+            EventResult.reject
+        }
+    }
+}
+
 export component Selector inherits Rectangle {
     // 1 = fecha · 2 = hora · 3 = materia
     in property <int> tipo: 0;
@@ -34,10 +148,11 @@ export component Selector inherits Rectangle {
     in property <string> etiqueta-mes: "";
     in property <[CeldaDia]> celdas: [];
 
-    // Hora.
+    // Hora: dos ruedas (1–12 y 00–59) y el selector a. m. / p. m.
     in property <string> hora-texto: "";
-    in property <int> hora-elegida: 0;
-    in property <int> minuto-elegido: 0;
+    in property <int> hora-inicial: 0;
+    in property <int> minuto-inicial: 0;
+    in property <bool> tarde: false;
     in property <[string]> horas: [];
     in property <[string]> minutos: [];
 
@@ -49,8 +164,9 @@ export component Selector inherits Rectangle {
     callback cerrar();
     callback mes(int);
     callback dia(int);
-    callback hora(int);
+    callback hora12(int);
     callback minuto(int);
+    callback periodo(bool);
     callback aceptar();
     callback escribir();
     callback materia(string);
@@ -168,7 +284,7 @@ export component Selector inherits Rectangle {
                 }
             }
 
-            // --- Hora ------------------------------------------------------
+            // --- Hora: ruedas ------------------------------------------------
             if root.tipo == 2 : VerticalLayout {
                 spacing: Tema.espacio-sm;
 
@@ -184,78 +300,59 @@ export component Selector inherits Rectangle {
                 }
 
                 HorizontalLayout {
-                    height: Tema.alto-lista-selector;
+                    height: Tema.alto-rueda;
                     spacing: Tema.espacio-md;
+                    alignment: center;
 
-                    ScrollView {
-                        horizontal-stretch: 1;
-                        height: parent.height;
-
-                        VerticalLayout {
-                            spacing: Tema.espacio-2xs;
-
-                            for texto[i] in root.horas : Rectangle {
-                                height: Tema.alto-fila-selector;
-                                border-radius: Tema.radio-pequeno;
-                                background: i == root.hora-elegida ? Tema.acento-tenue : (hora-ta.has-hover ? Tema.fondo-hover : transparent);
-                                border-width: Tema.linea;
-                                border-color: i == root.hora-elegida ? Tema.acento : transparent;
-
-                                Text {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                    text: texto;
-                                    font-size: Tema.tamano-pequeno;
-                                    color: i == root.hora-elegida ? Tema.acento : Tema.texto-suave;
-                                }
-
-                                hora-ta := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.hora(i); }
-                                }
-                            }
-                        }
+                    Rueda {
+                        width: Tema.ancho-rueda;
+                        valores: root.horas;
+                        inicial: root.hora-inicial;
+                        elegido(valor) => { root.hora12(valor); }
                     }
 
-                    ScrollView {
-                        horizontal-stretch: 1;
-                        height: parent.height;
+                    Text {
+                        width: Tema.espacio-md;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        text: ":";
+                        font-family: Tema.fuente-titulos;
+                        font-size: Tema.tamano-titulo;
+                        color: Tema.texto-suave;
+                    }
 
-                        VerticalLayout {
-                            spacing: Tema.espacio-2xs;
+                    Rueda {
+                        width: Tema.ancho-rueda;
+                        valores: root.minutos;
+                        inicial: root.minuto-inicial;
+                        elegido(valor) => { root.minuto(valor); }
+                    }
+                }
 
-                            for texto[i] in root.minutos : Rectangle {
-                                height: Tema.alto-fila-selector;
-                                border-radius: Tema.radio-pequeno;
-                                background: i == root.minuto-elegido ? Tema.acento-tenue : (minuto-ta.has-hover ? Tema.fondo-hover : transparent);
-                                border-width: Tema.linea;
-                                border-color: i == root.minuto-elegido ? Tema.acento : transparent;
+                HorizontalLayout {
+                    spacing: Tema.espacio-xs;
+                    alignment: center;
 
-                                Text {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                    text: texto;
-                                    font-size: Tema.tamano-pequeno;
-                                    color: i == root.minuto-elegido ? Tema.acento : Tema.texto-suave;
-                                }
+                    Chip {
+                        texto: "a. m.";
+                        ancho: Tema.ancho-chip-meridiemo;
+                        activo: !root.tarde;
+                        clicked => { root.periodo(false); }
+                    }
 
-                                minuto-ta := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.minuto(i); }
-                                }
-                            }
-                        }
+                    Chip {
+                        texto: "p. m.";
+                        ancho: Tema.ancho-chip-meridiemo;
+                        activo: root.tarde;
+                        clicked => { root.periodo(true); }
                     }
                 }
 
                 Text {
-                    height: Tema.espacio-md;
+                    height: Tema.espacio-lg;
+                    horizontal-alignment: center;
                     vertical-alignment: center;
-                    text: "Horas a la izquierda, minutos a la derecha.";
+                    text: "Rueda del ratón o arrastra; se guarda en 24 h.";
                     font-size: Tema.tamano-hora;
                     color: Tema.texto-tenue;
                 }

@@ -13,6 +13,7 @@
 //! Aquí no se envía nada: solo se calcula la lista y se anota en el registro.
 
 use crate::modelo::{Datos, Dia, FORMATO_FECHA, Tarea};
+use crate::reloj;
 use chrono::{Datelike, Days, Duration, NaiveDate, NaiveDateTime, Weekday};
 use std::collections::HashSet;
 use std::io::Write;
@@ -23,8 +24,9 @@ use std::path::{Path, PathBuf};
 /// atrasados cuando el equipo estuvo apagado.
 const VENTANA_MINUTOS: i64 = 15;
 
-/// Cómo se dice la fecha y la hora dentro del cuerpo de un aviso.
-const FORMATO_LEGIBLE: &str = "%d/%m a las %H:%M";
+/// Cómo se dice la fecha dentro del cuerpo de un aviso; la hora va aparte,
+/// en 12 h con a. m. / p. m., igual que en la ventana.
+const FORMATO_DIA_MES: &str = "%d/%m";
 
 /// Lo que hay que mostrar: un título corto, el cuerpo y la clave que lo marca
 /// como enviado.
@@ -96,7 +98,7 @@ pub fn avisos_debidos(
             hoy.and_time(r.hora),
             ahora,
             r.texto.clone(),
-            format!("Recordatorio de las {}", r.hora.format("%H:%M")),
+            format!("Recordatorio de las {}", reloj::hora_texto(r.hora)),
         );
     }
 
@@ -234,7 +236,11 @@ fn en_ventana(momento: NaiveDateTime, ahora: NaiveDateTime) -> bool {
 }
 
 fn cuerpo_tarea(t: &Tarea) -> String {
-    let cuando = t.vence.format(FORMATO_LEGIBLE).to_string();
+    let cuando = format!(
+        "{} a las {}",
+        t.vence.format(FORMATO_DIA_MES),
+        reloj::hora_texto(t.vence.time())
+    );
     match t.materia.as_deref().map(str::trim) {
         Some(materia) if !materia.is_empty() => format!("{materia} · vence el {cuando}"),
         _ => format!("Vence el {cuando}"),
@@ -390,6 +396,28 @@ mod pruebas {
             avisos_debidos(&d, momento(2026, 12, 1, 18, 3), &HashSet::new()).is_empty(),
             "solo avisa los días indicados"
         );
+    }
+
+    /// Los avisos dicen la hora igual que la ventana: en 12 h.
+    #[test]
+    fn el_aviso_dice_la_hora_en_doce_horas() {
+        let d = datos(vec![tarea(false)], Vec::new());
+        let lista = avisos_debidos(&d, momento(2026, 11, 27, 20, 5), &HashSet::new());
+        assert!(
+            lista[0].cuerpo.contains("a las 11:59 p. m."),
+            "cuerpo: {}",
+            lista[0].cuerpo
+        );
+
+        let r = Recordatorio {
+            id: "r-uno".to_string(),
+            texto: "Revisar Moodle".to_string(),
+            dias: vec![Dia::Lun],
+            hora: chrono::NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
+        };
+        let d = datos(Vec::new(), vec![r]);
+        let lista = avisos_debidos(&d, momento(2026, 11, 30, 18, 3), &HashSet::new());
+        assert_eq!(lista[0].cuerpo, "Recordatorio de las 6:00 p. m.");
     }
 
     #[test]

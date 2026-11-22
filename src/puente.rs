@@ -17,6 +17,7 @@ use crate::modelo::{
     Semestre, Tarea,
 };
 use crate::ops::{self, NuevaTarea};
+use crate::reloj::{self, a_12h, a_24h, etiqueta_hora, hora_texto};
 use crate::semana;
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Timelike, Weekday};
 use slint::{ModelRc, SharedString, VecModel, Weak};
@@ -464,15 +465,21 @@ fn conectar(ui: &AppWindow) {
     });
 
     let debil = ui.as_weak();
-    ui.on_selector_hora(move |hora: i32| {
+    ui.on_selector_hora12(move |hora12: i32| {
         let Some(ui) = debil.upgrade() else { return };
-        elegir_hora(&ui, hora, None);
+        elegir_hora12(&ui, hora12);
     });
 
     let debil = ui.as_weak();
     ui.on_selector_minuto(move |minuto: i32| {
         let Some(ui) = debil.upgrade() else { return };
-        elegir_hora(&ui, -1, Some(minuto));
+        elegir_minuto(&ui, minuto);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_selector_pm(move |tarde: bool| {
+        let Some(ui) = debil.upgrade() else { return };
+        elegir_pm(&ui, tarde);
     });
 
     let debil = ui.as_weak();
@@ -532,7 +539,7 @@ fn abrir_tarea(ui: &AppWindow, tarea: Option<&Tarea>) {
             t.titulo.clone(),
             t.materia.clone().unwrap_or_default(),
             t.vence.format(FORMATO_FECHA).to_string(),
-            t.vence.format(FORMATO_HORA).to_string(),
+            hora_texto(t.vence.time()),
             t.hecha,
         ),
         None => (
@@ -542,7 +549,7 @@ fn abrir_tarea(ui: &AppWindow, tarea: Option<&Tarea>) {
             (Local::now().date_naive() + TimeDelta::days(7))
                 .format(FORMATO_FECHA)
                 .to_string(),
-            "23:59".to_string(),
+            hora_texto(hora(23, 59)),
             false,
         ),
     };
@@ -597,8 +604,8 @@ fn abrir_clase(ui: &AppWindow, clase: Option<&Clase>) {
     ui.set_form_edita(clase.is_some());
     ui.set_f_materia(materia.into());
     poner_dias_clase(ui, &dias);
-    ui.set_f_hora(inicio.format(FORMATO_HORA).to_string().into());
-    ui.set_f_fin(fin.format(FORMATO_HORA).to_string().into());
+    ui.set_f_hora(hora_texto(inicio).into());
+    ui.set_f_fin(hora_texto(fin).into());
     ui.set_f_lugar(lugar.into());
     abrir_panel(ui, 2);
 }
@@ -617,14 +624,7 @@ fn abrir_ajustes(ui: &AppWindow) {
     ui.set_a_sin_semestre(datos.semestre.is_none());
     ui.set_a_inicio(inicio.format(FORMATO_FECHA).to_string().into());
     ui.set_a_fin(fin.format(FORMATO_FECHA).to_string().into());
-    ui.set_a_hora(
-        datos
-            .ajustes
-            .aviso_dia_antes
-            .format(FORMATO_HORA)
-            .to_string()
-            .into(),
-    );
+    ui.set_a_hora(hora_texto(datos.ajustes.aviso_dia_antes).into());
     ui.set_a_horas(datos.ajustes.aviso_horas_antes.to_string().into());
     abrir_panel(ui, 3);
 }
@@ -651,7 +651,7 @@ fn abrir_recordatorio(ui: &AppWindow, recordatorio: Option<&Recordatorio>) {
     );
     ui.set_form_edita(recordatorio.is_some());
     ui.set_r_texto(texto.into());
-    ui.set_r_hora(hora.format(FORMATO_HORA).to_string().into());
+    ui.set_r_hora(hora_texto(hora).into());
     poner_dias_recordatorio(ui, &dias);
     abrir_panel(ui, 4);
 }
@@ -1069,7 +1069,7 @@ fn construir_vista() -> Vista {
             base,
             fin,
             etiquetas: (base..=fin)
-                .map(|hora| SharedString::from(format!("{hora:02}:00")))
+                .map(|hora| SharedString::from(etiqueta_hora(hora as u32)))
                 .collect(),
             mostrar_ahora,
             ahora_min,
@@ -1154,13 +1154,9 @@ fn construir_vista() -> Vista {
     })
 }
 
-/// "07:00–09:00".
+/// "7:00–9:00 a. m.".
 fn rango_hora(bloque: &semana::Bloque) -> String {
-    format!(
-        "{}–{}",
-        bloque.inicio.format("%H:%M"),
-        bloque.fin.format("%H:%M")
-    )
+    reloj::rango_texto(bloque.inicio, bloque.fin)
 }
 
 /// Una clase para las vistas de resumen. Si no es de hoy, la hora lleva delante
@@ -1190,7 +1186,7 @@ fn tarea_a_ui(tarea: &Tarea, ahora: NaiveDateTime) -> TareaUI {
             "{} {} · {}",
             nombre_dia(tarea.vence.date()),
             fecha_corta(tarea.vence.date()),
-            tarea.vence.format("%H:%M")
+            hora_texto(tarea.vence.time())
         )
         .into(),
         vencida: semana::vencida(tarea, ahora),
@@ -1199,10 +1195,10 @@ fn tarea_a_ui(tarea: &Tarea, ahora: NaiveDateTime) -> TareaUI {
     }
 }
 
-/// Un recordatorio con su cuándo escrito: "hoy · 18:00", "mañana · 09:00" o
-/// "lun 30 nov · 09:00".
+/// Un recordatorio con su cuándo escrito: "hoy · 6:00 p. m.", "mañana · 9:00
+/// a. m." o "lun 30 nov · 9:00 a. m.".
 fn recordatorio_ui(recordatorio: &semana::RecordatorioVisto, hoy: NaiveDate) -> RecordatorioInicioUI {
-    let hora = recordatorio.hora.format("%H:%M");
+    let hora = hora_texto(recordatorio.hora);
     let cuando = if recordatorio.fecha == hoy {
         format!("hoy · {hora}")
     } else if recordatorio.fecha == hoy + TimeDelta::days(1) {
@@ -1237,7 +1233,7 @@ fn dia_ui(dia: &semana::DiaVista) -> DiaUI {
         .iter()
         .map(|tarea| TareaDiaUI {
             titulo: tarea.titulo.clone().into(),
-            hora: tarea.vence.format("%H:%M").to_string().into(),
+            hora: hora_texto(tarea.vence.time()).into(),
             hecha: tarea.hecha,
         })
         .collect();
@@ -1260,12 +1256,7 @@ fn dia_ui(dia: &semana::DiaVista) -> DiaUI {
                     id: bloque.clase_id.clone().into(),
                     materia: bloque.materia.clone().into(),
                     lugar: bloque.lugar.clone().unwrap_or_default().into(),
-                    hora: format!(
-                        "{}–{}",
-                        bloque.inicio.format("%H:%M"),
-                        bloque.fin.format("%H:%M")
-                    )
-                    .into(),
+                    hora: reloj::rango_texto(bloque.inicio, bloque.fin).into(),
                     inicio: minutos(bloque.inicio),
                     fin: minutos(bloque.fin),
                     tono: tono_materia(&bloque.materia),
@@ -1285,7 +1276,7 @@ fn recordatorios_ui(datos: &Datos) -> Vec<RecordatorioUI> {
             id: recordatorio.id.clone().into(),
             texto: recordatorio.texto.clone().into(),
             dias: dias_texto(&recordatorio.dias).into(),
-            hora: recordatorio.hora.format("%H:%M").to_string().into(),
+            hora: hora_texto(recordatorio.hora).into(),
         })
         .collect()
 }
@@ -1389,21 +1380,44 @@ fn elegir_dia(ui: &AppWindow, dia: i32) {
     pintar_calendario(ui);
 }
 
-/// `hora` negativa significa "solo cambió el minuto" (los dos botones de la
-/// lista de horas y minutos llaman aquí).
-fn elegir_hora(ui: &AppWindow, hora_elegida: i32, minuto_elegido: Option<i32>) {
+/// La rueda de horas da 1–12 (el índice 0 es la 1); se guarda en 24 h
+/// conservando a. m. / p. m.
+fn elegir_hora12(ui: &AppWindow, indice: i32) {
+    let Some(mut seleccion) = con_estado(|estado| estado.seleccion.clone()) else {
+        return;
+    };
+    if seleccion.tipo != Selector::Hora || !(0..12).contains(&indice) {
+        return;
+    }
+    let (_, tarde) = a_12h(seleccion.hora);
+    seleccion.hora = a_24h(indice as u32 + 1, tarde);
+    con_estado(|estado| estado.seleccion = Some(seleccion));
+    pintar_hora(ui);
+}
+
+/// La rueda de minutos da 00–59, de uno en uno.
+fn elegir_minuto(ui: &AppWindow, minuto: i32) {
+    let Some(mut seleccion) = con_estado(|estado| estado.seleccion.clone()) else {
+        return;
+    };
+    if seleccion.tipo != Selector::Hora || !(0..60).contains(&minuto) {
+        return;
+    }
+    seleccion.minuto = minuto as u32;
+    con_estado(|estado| estado.seleccion = Some(seleccion));
+    pintar_hora(ui);
+}
+
+/// a. m. / p. m. cambia la mitad del día sin mover la hora de la rueda.
+fn elegir_pm(ui: &AppWindow, tarde: bool) {
     let Some(mut seleccion) = con_estado(|estado| estado.seleccion.clone()) else {
         return;
     };
     if seleccion.tipo != Selector::Hora {
         return;
     }
-    if (0..24).contains(&hora_elegida) {
-        seleccion.hora = hora_elegida as u32;
-    }
-    if let Some(minuto) = minuto_elegido.filter(|m| (0..60).contains(m)) {
-        seleccion.minuto = minuto as u32;
-    }
+    let (hora12, _) = a_12h(seleccion.hora);
+    seleccion.hora = a_24h(hora12, tarde);
     con_estado(|estado| estado.seleccion = Some(seleccion));
     pintar_hora(ui);
 }
@@ -1474,9 +1488,11 @@ fn pintar_hora(ui: &AppWindow) {
     let Some(seleccion) = con_estado(|estado| estado.seleccion.clone()) else {
         return;
     };
-    ui.set_sel_hora(seleccion.hora as i32);
+    let (hora12, tarde) = a_12h(seleccion.hora);
+    ui.set_sel_hora12(hora12 as i32 - 1);
     ui.set_sel_minuto(seleccion.minuto as i32);
-    ui.set_sel_hora_texto(format!("{:02}:{:02}", seleccion.hora, seleccion.minuto).into());
+    ui.set_sel_tarde(tarde);
+    ui.set_sel_hora_texto(hora_texto(hora(seleccion.hora, seleccion.minuto)).into());
 }
 
 /// La fecha que muestra el campo que se va a llenar, si ya tiene una válida.
@@ -1531,7 +1547,7 @@ fn poner_fecha_en_campo(ui: &AppWindow, campo: i32, fecha: NaiveDate) {
 }
 
 fn poner_hora_en_campo(ui: &AppWindow, campo: i32, hora: NaiveTime) {
-    let texto = SharedString::from(hora.format(FORMATO_HORA).to_string());
+    let texto = SharedString::from(hora_texto(hora));
     match campo {
         CAMPO_FILTRO_HORA_DESDE => con_estado(|estado| estado.filtro.hora_desde = Some(hora)),
         CAMPO_FILTRO_HORA_HASTA => con_estado(|estado| estado.filtro.hora_hasta = Some(hora)),
@@ -1555,8 +1571,9 @@ fn modelo_textos(textos: &[String]) -> ModelRc<SharedString> {
     ))
 }
 
+/// Las doce horas de la rueda, de la 1 a las 12.
 fn horas_texto() -> Vec<String> {
-    (0..24).map(|hora| format!("{hora:02}")).collect()
+    (1..=12).map(|hora| hora.to_string()).collect()
 }
 
 fn minutos_texto() -> Vec<String> {
@@ -1779,8 +1796,7 @@ fn fecha_o_vacio(fecha: Option<NaiveDate>) -> String {
 }
 
 fn hora_o_vacio(hora: Option<NaiveTime>) -> String {
-    hora.map(|hora| hora.format(FORMATO_HORA).to_string())
-        .unwrap_or_default()
+    hora.map(hora_texto).unwrap_or_default()
 }
 
 fn fecha_corta(fecha: NaiveDate) -> String {
@@ -1846,14 +1862,11 @@ fn pie(datos: &Datos, pendientes: usize, ahora: NaiveDateTime) -> String {
         n => format!("Hoy: {n} tareas pendientes"),
     };
     if let Some((recordatorio, momento)) = proximo_recordatorio(datos, ahora) {
+        let hora = hora_texto(momento.time());
         let cuando = if momento.date() == ahora.date() {
-            momento.format("%H:%M").to_string()
+            hora
         } else {
-            format!(
-                "{} {}",
-                nombre_dia(momento.date()).to_lowercase(),
-                momento.format("%H:%M")
-            )
+            format!("{} {}", nombre_dia(momento.date()).to_lowercase(), hora)
         };
         texto.push_str(&format!(" · {recordatorio} {cuando}"));
     }
@@ -1954,8 +1967,29 @@ fn interpretar_fecha(texto: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(texto.trim(), FORMATO_FECHA).ok()
 }
 
+/// Acepta lo que escriben los campos: "23:59" (24 h) y también "11:59 p. m.",
+/// "7:00 a. m." o "7:00am", que es como se leen las horas en la ventana.
 fn interpretar_hora(texto: &str) -> Option<NaiveTime> {
-    NaiveTime::parse_from_str(texto.trim(), FORMATO_HORA).ok()
+    let limpio = texto.trim();
+    if let Ok(hora) = NaiveTime::parse_from_str(limpio, FORMATO_HORA) {
+        return Some(hora);
+    }
+    let compacto: String = limpio
+        .to_lowercase()
+        .chars()
+        .filter(|caracter| !caracter.is_whitespace() && *caracter != '.')
+        .collect();
+    let (reloj, tarde) = compacto
+        .strip_suffix("am")
+        .map(|reloj| (reloj, false))
+        .or_else(|| compacto.strip_suffix("pm").map(|reloj| (reloj, true)))?;
+    let (horas, minutos) = reloj.split_once(':')?;
+    let horas: u32 = horas.parse().ok()?;
+    let minutos: u32 = minutos.parse().ok()?;
+    if !(1..=12).contains(&horas) || minutos > 59 {
+        return None;
+    }
+    NaiveTime::from_hms_opt(a_24h(horas, tarde), minutos, 0)
 }
 
 fn almacen() -> Almacen {
@@ -2043,7 +2077,10 @@ mod pruebas {
         });
         // Viernes 20-nov-2026, 17:00.
         let texto = pie(&d, 2, momento(2026, 11, 20, 17, 0));
-        assert_eq!(texto, "Hoy: 2 tareas pendientes · Revisar Moodle 18:00");
+        assert_eq!(
+            texto,
+            "Hoy: 2 tareas pendientes · Revisar Moodle 6:00 p. m."
+        );
     }
 
     #[test]
@@ -2082,16 +2119,17 @@ mod pruebas {
         // Viernes 20-nov-2026, 17:00: el de hoy a las 18:00.
         assert_eq!(
             pie(&d, 0, momento(2026, 11, 20, 17, 0)),
-            "Hoy: sin tareas pendientes · Revisar Moodle 18:00"
+            "Hoy: sin tareas pendientes · Revisar Moodle 6:00 p. m."
         );
         // Pasadas las 18:00, el lunes a la misma hora: una sola vez.
         assert_eq!(
             pie(&d, 0, momento(2026, 11, 20, 19, 0)),
-            "Hoy: sin tareas pendientes · Revisar Moodle lun 18:00"
+            "Hoy: sin tareas pendientes · Revisar Moodle lun 6:00 p. m."
         );
     }
 
-    /// Los formularios solo aceptan los formatos del archivo.
+    /// Los formularios aceptan los formatos del archivo y las horas tal como
+    /// se leen en la ventana (12 h con a. m. / p. m.).
     #[test]
     fn solo_acepta_los_formatos_del_archivo() {
         assert_eq!(interpretar_fecha("2026-11-28"), Some(fecha(2026, 11, 28)));
@@ -2105,6 +2143,28 @@ mod pruebas {
         );
         assert_eq!(interpretar_hora("25:00"), None);
         assert_eq!(interpretar_hora("7"), None);
+    }
+
+    /// El campo de hora entiende lo que la ventana muestra (12 h) y lo que
+    /// hay escrito en el archivo (24 h).
+    #[test]
+    fn el_campo_de_hora_entiende_las_dos_formas() {
+        for (texto, esperada) in [
+            ("7:00 a. m.", hora(7, 0)),
+            ("07:00 a.m.", hora(7, 0)),
+            ("7:00am", hora(7, 0)),
+            ("12:00 a. m.", hora(0, 0)),
+            ("12:00 p. m.", hora(12, 0)),
+            ("11:59 p. m.", hora(23, 59)),
+            ("2:30 p. m.", hora(14, 30)),
+            ("23:59", hora(23, 59)),
+        ] {
+            assert_eq!(interpretar_hora(texto), Some(esperada), "{texto}");
+        }
+        assert_eq!(interpretar_hora("13:00 p. m."), None, "13 no existe en 12 h");
+        assert_eq!(interpretar_hora("7:60 a. m."), None);
+        assert_eq!(interpretar_hora("7:00 x. m."), None);
+        assert_eq!(hora_texto(hora(14, 30)), "2:30 p. m.");
     }
 
     #[test]
@@ -2314,7 +2374,7 @@ mod pruebas {
         assert_eq!(hora_o_vacio(None), "");
         assert_eq!(
             hora_o_vacio(Some(NaiveTime::from_hms_opt(8, 5, 0).unwrap())),
-            "08:05"
+            "8:05 a. m."
         );
     }
 
@@ -2336,11 +2396,11 @@ mod pruebas {
         };
         let hoy = fecha(2026, 11, 25);
         let de_hoy = clase_ui(&bloque, hoy, hoy);
-        assert_eq!(de_hoy.hora, "07:00–09:00");
+        assert_eq!(de_hoy.hora, "7:00–9:00 a. m.");
         assert_eq!(de_hoy.materia, "Control");
 
         let otro = clase_ui(&bloque, fecha(2026, 11, 26), hoy);
-        assert_eq!(otro.hora, "jue 26 nov · 07:00–09:00");
+        assert_eq!(otro.hora, "jue 26 nov · 7:00–9:00 a. m.");
     }
 
     /// El cuándo de un recordatorio usa "hoy" y "mañana" cuando toca.
@@ -2353,14 +2413,17 @@ mod pruebas {
             fecha: dia,
             hora: NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
         };
-        assert_eq!(recordatorio_ui(&recordatorio(hoy), hoy).cuando, "hoy · 18:00");
+        assert_eq!(
+            recordatorio_ui(&recordatorio(hoy), hoy).cuando,
+            "hoy · 6:00 p. m."
+        );
         assert_eq!(
             recordatorio_ui(&recordatorio(fecha(2026, 11, 26)), hoy).cuando,
-            "mañana · 18:00"
+            "mañana · 6:00 p. m."
         );
         assert_eq!(
             recordatorio_ui(&recordatorio(fecha(2026, 11, 30)), hoy).cuando,
-            "lun 30 nov · 18:00"
+            "lun 30 nov · 6:00 p. m."
         );
     }
 }
