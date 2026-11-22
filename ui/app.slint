@@ -4,6 +4,9 @@
 import { Tema } from "tema.slint";
 import { SemanaVista, DiaUI } from "semana.slint";
 import { PendientesVista, TareaUI } from "pendientes.slint";
+import { InicioVista } from "inicio.slint";
+import { DiaVista } from "dia.slint";
+import { ClaseInicioUI, ConteoMateriaUI, RecordatorioInicioUI } from "listas.slint";
 import { Marco, Campo, CampoBoton, Chip, Casilla, Boton, Etiqueta, RecordatorioUI } from "formularios.slint";
 import { Selector, CeldaDia } from "selectores.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -151,6 +154,24 @@ export component AppWindow inherits Window {
     in property <string> resumen-pendientes: "";
     in property <[RecordatorioUI]> recordatorios;
 
+    // --- Inicio (el tablero del día) --------------------------------------
+    in property <string> inicio-fecha: "";
+    in property <[ClaseInicioUI]> inicio-clases;
+    in property <bool> inicio-hay-siguiente: false;
+    in property <ClaseInicioUI> inicio-siguiente;
+    in property <[TareaUI]> inicio-vencidas;
+    in property <[TareaUI]> inicio-de-hoy;
+    in property <[TareaUI]> inicio-proximas;
+    in property <[RecordatorioInicioUI]> inicio-recordatorios;
+    in property <[ConteoMateriaUI]> inicio-por-materia;
+
+    // --- Día --------------------------------------------------------------
+    in property <string> dia-etiqueta: "";
+    in property <bool> dia-es-hoy: false;
+    in property <[ClaseInicioUI]> dia-clases;
+    in property <[TareaUI]> dia-tareas;
+    in property <[RecordatorioInicioUI]> dia-recordatorios;
+
     // --- Barra de filtros de Pendientes (la pone puente.rs) ---------------
     // Los valores llegan ya resueltos: aquí solo se dibujan.
     in property <string> pm-materia: "";
@@ -232,6 +253,9 @@ export component AppWindow inherits Window {
     callback semana-anterior();
     callback semana-siguiente();
     callback ir-hoy();
+    callback dia-anterior();
+    callback dia-siguiente();
+    callback dia-hoy();
     callback nueva-tarea();
     callback abrir-ajustes();
     callback editar-tarea(string);
@@ -310,15 +334,27 @@ export component AppWindow inherits Window {
                         cross-axis-alignment: center;
 
                         Pestana {
-                            texto: "Semana";
+                            texto: "Inicio";
                             activa: root.pestana == 0;
                             clicked => { root.pestana = 0; }
                         }
 
                         Pestana {
-                            texto: "Pendientes";
+                            texto: "Día";
                             activa: root.pestana == 1;
                             clicked => { root.pestana = 1; }
+                        }
+
+                        Pestana {
+                            texto: "Semana";
+                            activa: root.pestana == 2;
+                            clicked => { root.pestana = 2; }
+                        }
+
+                        Pestana {
+                            texto: "Pendientes";
+                            activa: root.pestana == 3;
+                            clicked => { root.pestana = 3; }
                         }
                     }
 
@@ -367,7 +403,44 @@ export component AppWindow inherits Window {
                 padding: Tema.espacio-lg;
                 spacing: 0;
 
-                if root.pestana == 0 : SemanaVista {
+                if root.pestana == 0 : InicioVista {
+                    vertical-stretch: 1;
+                    fecha-larga: root.inicio-fecha;
+                    clases: root.inicio-clases;
+                    hay-siguiente: root.inicio-hay-siguiente;
+                    siguiente: root.inicio-siguiente;
+                    vencidas: root.inicio-vencidas;
+                    de-hoy: root.inicio-de-hoy;
+                    proximas: root.inicio-proximas;
+                    recordatorios: root.inicio-recordatorios;
+                    por-materia: root.inicio-por-materia;
+
+                    editar-tarea(id) => { root.editar-tarea(id); }
+                    editar-clase(id) => { root.editar-clase(id); }
+                    editar-recordatorio(id) => { root.editar-recordatorio(id); }
+                    nueva-clase => { root.nueva-clase(); }
+                    nueva-tarea => { root.nueva-tarea(); }
+                }
+
+                if root.pestana == 1 : DiaVista {
+                    vertical-stretch: 1;
+                    etiqueta: root.dia-etiqueta;
+                    es-hoy: root.dia-es-hoy;
+                    clases: root.dia-clases;
+                    tareas: root.dia-tareas;
+                    recordatorios: root.dia-recordatorios;
+
+                    anterior => { root.dia-anterior(); }
+                    siguiente => { root.dia-siguiente(); }
+                    ir-hoy => { root.dia-hoy(); }
+                    editar-tarea(id) => { root.editar-tarea(id); }
+                    editar-clase(id) => { root.editar-clase(id); }
+                    editar-recordatorio(id) => { root.editar-recordatorio(id); }
+                    nueva-clase => { root.nueva-clase(); }
+                    nueva-tarea => { root.nueva-tarea(); }
+                }
+
+                if root.pestana == 2 : SemanaVista {
                     vertical-stretch: 1;
                     dias: root.dias;
                     etiqueta: root.etiqueta-semana;
@@ -386,7 +459,7 @@ export component AppWindow inherits Window {
                     editar-clase(id) => { root.editar-clase(id); }
                 }
 
-                if root.pestana == 1 : PendientesVista {
+                if root.pestana == 3 : PendientesVista {
                     vertical-stretch: 1;
                     tareas: root.tareas;
                     resumen: root.resumen-pendientes;

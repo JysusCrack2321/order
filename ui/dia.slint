@@ -1,0 +1,318 @@
+// Vista Día: una fecha con sus clases en línea de tiempo, las tareas que
+// vencen ese día y sus recordatorios. Se mueve con ‹ › y "Hoy".
+//
+// Los datos los prepara `src/semana.rs` (`semana::dia` y `semana::recordatorios_de`);
+// aquí solo se dibuja. Colores, tamaños y tipografía salen siempre de Tema.
+
+import { Tema } from "tema.slint";
+import { TareaUI } from "pendientes.slint";
+import {
+    ClaseInicioUI,
+    FilaRecordatorio,
+    FilaTarea,
+    RecordatorioInicioUI,
+    Seccion,
+    Vacio,
+} from "listas.slint";
+import { ScrollView } from "std-widgets.slint";
+
+/// Botón cuadrado de navegación (‹ ›), igual que el de la semana.
+component BotonPaso inherits Rectangle {
+    in property <string> glifo;
+    callback clicked();
+
+    width: Tema.ancho-boton-nav;
+    height: Tema.ancho-boton-nav;
+    border-radius: Tema.radio-pequeno;
+    background: ta.has-hover ? Tema.fondo-hover : transparent;
+    border-width: Tema.linea;
+    border-color: ta.has-hover ? Tema.acento-suave : Tema.borde;
+
+    Text {
+        text: root.glifo;
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-family: Tema.fuente-titulos;
+        font-size: Tema.tamano-pestana;
+        color: ta.has-hover ? Tema.acento : Tema.texto-suave;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// Una clase en la línea de tiempo: hora, eje con su punto y el bloque.
+component FilaTiempo inherits Rectangle {
+    in property <string> hora;
+    in property <string> materia;
+    in property <string> lugar;
+
+    callback clicked();
+
+    height: Tema.alto-fila-dia;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    // Hora, alineada a la derecha contra el eje.
+    Text {
+        x: 0;
+        y: 0;
+        width: Tema.ancho-hora-dia - Tema.espacio-sm;
+        height: parent.height;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        text: root.hora;
+        font-size: Tema.tamano-pequeno;
+        color: ta.has-hover ? Tema.acento : Tema.texto-suave;
+    }
+
+    // Eje vertical de la línea de tiempo.
+    Rectangle {
+        x: Tema.ancho-hora-dia;
+        y: 0;
+        width: Tema.linea;
+        height: parent.height;
+        background: Tema.borde;
+    }
+
+    // Punto de la clase, centrado en el eje.
+    Rectangle {
+        x: Tema.ancho-hora-dia - (Tema.alto-punto - Tema.linea) / 2;
+        y: (parent.height - Tema.alto-punto) / 2;
+        width: Tema.alto-punto;
+        height: Tema.alto-punto;
+        border-radius: Tema.alto-punto / 2;
+        background: ta.has-hover ? Tema.acento : Tema.acento-suave;
+    }
+
+    // Bloque de la clase.
+    Rectangle {
+        x: Tema.ancho-hora-dia + Tema.ancho-linea-tiempo;
+        y: Tema.espacio-xs;
+        width: parent.width - self.x - Tema.espacio-md;
+        height: parent.height - 2 * Tema.espacio-xs;
+        border-radius: Tema.radio-pequeno;
+        background: ta.has-hover ? Tema.fondo-hover : Tema.fondo-clase;
+        border-width: Tema.linea;
+        border-color: ta.has-hover ? Tema.acento-suave : Tema.borde-clase;
+
+        HorizontalLayout {
+            width: parent.width;
+            height: parent.height;
+            padding-left: Tema.espacio-md;
+            padding-right: Tema.espacio-md;
+            spacing: Tema.espacio-md;
+            cross-axis-alignment: center;
+
+            Text {
+                horizontal-stretch: 1;
+                text: root.materia;
+                font-size: Tema.tamano-texto;
+                font-weight: 600;
+                color: Tema.texto;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            if root.lugar != "" : Text {
+                text: root.lugar;
+                font-size: Tema.tamano-hora;
+                color: Tema.texto-tenue;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+export component DiaVista inherits Rectangle {
+    in property <string> etiqueta: "";
+    in property <bool> es-hoy: false;
+
+    in property <[ClaseInicioUI]> clases;
+    in property <[TareaUI]> tareas;
+    in property <[RecordatorioInicioUI]> recordatorios;
+
+    callback anterior();
+    callback siguiente();
+    callback ir-hoy();
+    callback editar-clase(string);
+    callback editar-tarea(string);
+    callback editar-recordatorio(string);
+    callback nueva-clase();
+    callback nueva-tarea();
+
+    background: transparent;
+
+    VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        spacing: Tema.espacio-md;
+
+        // --- Navegación ----------------------------------------------------
+        HorizontalLayout {
+            spacing: Tema.espacio-sm;
+            cross-axis-alignment: center;
+
+            BotonPaso {
+                glifo: "‹";
+                clicked => { root.anterior(); }
+            }
+            BotonPaso {
+                glifo: "›";
+                clicked => { root.siguiente(); }
+            }
+
+            Text {
+                text: root.etiqueta;
+                font-family: Tema.fuente-titulos;
+                font-size: Tema.tamano-semana;
+                font-weight: 700;
+                letter-spacing: Tema.letra-normal;
+                color: Tema.texto;
+                vertical-alignment: center;
+            }
+
+            if root.es-hoy : Rectangle {
+                width: Tema.ancho-boton-hoy;
+                height: Tema.alto-insignia;
+                border-radius: Tema.radio-pequeno;
+                border-width: Tema.linea;
+                border-color: Tema.acento-suave;
+                background: Tema.acento-tenue;
+
+                Text {
+                    text: "HOY";
+                    width: parent.width;
+                    height: parent.height;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    font-family: Tema.fuente-titulos;
+                    font-size: Tema.tamano-hora;
+                    letter-spacing: Tema.letra-normal;
+                    color: Tema.acento;
+                }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            Text {
+                text: "+  Clase";
+                font-size: Tema.tamano-pequeno;
+                color: nueva-clase-ta.has-hover ? Tema.acento : Tema.texto-suave;
+                vertical-alignment: center;
+                height: Tema.alto-boton;
+
+                nueva-clase-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.nueva-clase(); }
+                }
+            }
+
+            Text {
+                text: "+  Tarea";
+                font-family: Tema.fuente-titulos;
+                font-size: Tema.tamano-pequeno;
+                letter-spacing: Tema.letra-normal;
+                color: nueva-tarea-ta.has-hover ? Tema.acento : Tema.texto-suave;
+                vertical-alignment: center;
+                height: Tema.alto-boton;
+
+                nueva-tarea-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.nueva-tarea(); }
+                }
+            }
+
+            Rectangle {
+                width: Tema.ancho-boton-hoy;
+                height: Tema.alto-boton;
+                border-radius: Tema.radio-pequeno;
+                background: hoy-ta.has-hover ? Tema.acento-tenue : transparent;
+                border-width: Tema.linea;
+                border-color: hoy-ta.has-hover ? Tema.acento : Tema.acento-suave;
+
+                Text {
+                    text: "Hoy";
+                    width: parent.width;
+                    height: parent.height;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    font-family: Tema.fuente-titulos;
+                    font-size: Tema.tamano-pequeno;
+                    letter-spacing: Tema.letra-normal;
+                    color: hoy-ta.has-hover ? Tema.acento : Tema.texto-suave;
+                }
+
+                hoy-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.ir-hoy(); }
+                }
+            }
+        }
+
+        // --- Contenido -----------------------------------------------------
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                spacing: Tema.espacio-sm;
+
+                Seccion {
+                    texto: "CLASES";
+                    detalle: root.clases.length == 0
+                        ? ""
+                        : (root.clases.length == 1 ? "1 clase" : "\{root.clases.length} clases");
+                }
+
+                if root.clases.length == 0 : Vacio {
+                    texto: "sin clases este día";
+                }
+
+                for clase in root.clases : FilaTiempo {
+                    hora: clase.hora;
+                    materia: clase.materia;
+                    lugar: clase.lugar;
+                    clicked => { root.editar-clase(clase.id); }
+                }
+
+                Rectangle { height: Tema.espacio-md; }
+
+                Seccion {
+                    texto: "TAREAS QUE VENCEN";
+                    detalle: root.tareas.length == 0 ? "" : "\{root.tareas.length}";
+                }
+
+                if root.tareas.length == 0 : Vacio {
+                    texto: "ninguna tarea vence este día";
+                }
+
+                for tarea in root.tareas : FilaTarea {
+                    tarea: tarea;
+                    clicked => { root.editar-tarea(tarea.id); }
+                }
+
+                Rectangle { height: Tema.espacio-md; }
+
+                Seccion { texto: "RECORDATORIOS"; }
+
+                if root.recordatorios.length == 0 : Vacio {
+                    texto: "sin recordatorios este día";
+                }
+
+                for recordatorio in root.recordatorios : FilaRecordatorio {
+                    texto: recordatorio.texto;
+                    cuando: recordatorio.cuando;
+                    clicked => { root.editar-recordatorio(recordatorio.id); }
+                }
+            }
+        }
+    }
+}

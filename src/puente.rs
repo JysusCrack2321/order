@@ -27,6 +27,15 @@ slint::include_modules!();
 const MESES: [&str; 12] = [
     "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic",
 ];
+const DIAS_LARGOS: [&str; 7] = [
+    "lunes",
+    "martes",
+    "miércoles",
+    "jueves",
+    "viernes",
+    "sábado",
+    "domingo",
+];
 const MESES_LARGOS: [&str; 12] = [
     "enero",
     "febrero",
@@ -101,12 +110,16 @@ struct Estado {
     datos: Option<Datos>,
     /// Lunes de la semana que se está viendo.
     lunes: NaiveDate,
+    /// Fecha que muestra la pestaña Día.
+    dia: NaiveDate,
     error: Option<String>,
     advertencias: Vec<String>,
     edicion: Edicion,
     seleccion: Option<Seleccion>,
     /// Barra de filtros de Pendientes: se conserva mientras la app vive.
     filtro: Filtro,
+    /// El recordatorio abierto se abrió desde Ajustes: al salir se vuelve allí.
+    volver_ajustes: bool,
 }
 
 impl Estado {
@@ -114,11 +127,13 @@ impl Estado {
         Estado {
             datos: None,
             lunes: semana::lunes_de(Local::now().date_naive()),
+            dia: Local::now().date_naive(),
             error: None,
             advertencias: Vec::new(),
             edicion: Edicion::Ninguna,
             seleccion: None,
             filtro: Filtro::default(),
+            volver_ajustes: false,
         }
     }
 }
@@ -141,6 +156,20 @@ struct Vista {
     hay_tareas: bool,
     tareas: Vec<TareaUI>,
     recordatorios: Vec<RecordatorioUI>,
+    inicio_fecha: String,
+    inicio_clases: Vec<ClaseInicioUI>,
+    inicio_hay_siguiente: bool,
+    inicio_siguiente: ClaseInicioUI,
+    inicio_vencidas: Vec<TareaUI>,
+    inicio_de_hoy: Vec<TareaUI>,
+    inicio_proximas: Vec<TareaUI>,
+    inicio_recordatorios: Vec<RecordatorioInicioUI>,
+    inicio_por_materia: Vec<ConteoMateriaUI>,
+    dia_etiqueta: String,
+    dia_es_hoy: bool,
+    dia_clases: Vec<ClaseInicioUI>,
+    dia_tareas: Vec<TareaUI>,
+    dia_recordatorios: Vec<RecordatorioInicioUI>,
     filtro_materia: String,
     filtro_fecha: i32,
     filtro_desde: String,
@@ -211,6 +240,7 @@ pub fn refrescar(datos: &Datos) {
     con_estado(|estado| {
         estado.datos = Some(datos.clone());
         estado.lunes = semana::lunes_de(hoy);
+        estado.dia = hoy;
         estado.error = None;
     });
     actualizar_si_existe();
@@ -271,6 +301,20 @@ fn conectar(ui: &AppWindow) {
         let Some(ui) = debil.upgrade() else { return };
         let hoy = Local::now().date_naive();
         con_estado(|estado| estado.lunes = semana::lunes_de(hoy));
+        actualizar(&ui);
+    });
+
+    // --- Navegación del día ----------------------------------------------
+    let debil = ui.as_weak();
+    ui.on_dia_anterior(move || mover_dia(&debil, -1));
+
+    let debil = ui.as_weak();
+    ui.on_dia_siguiente(move || mover_dia(&debil, 1));
+
+    let debil = ui.as_weak();
+    ui.on_dia_hoy(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        con_estado(|estado| estado.dia = Local::now().date_naive());
         actualizar(&ui);
     });
 
@@ -463,6 +507,20 @@ fn mover(debil: &Weak<AppWindow>, delta_dias: i64) {
     actualizar(&ui);
 }
 
+/// Mueve la fecha de la pestaña Día un día atrás o adelante.
+fn mover_dia(debil: &Weak<AppWindow>, delta_dias: i64) {
+    let Some(ui) = debil.upgrade() else { return };
+    con_estado(|estado| {
+        let delta = TimeDelta::days(delta_dias);
+        estado.dia = if delta_dias < 0 {
+            estado.dia - delta
+        } else {
+            estado.dia + delta
+        };
+    });
+    actualizar(&ui);
+}
+
 // ---------------------------------------------------------------------------
 // Formularios: abrir
 // ---------------------------------------------------------------------------
@@ -572,6 +630,11 @@ fn abrir_ajustes(ui: &AppWindow) {
 }
 
 fn abrir_recordatorio(ui: &AppWindow, recordatorio: Option<&Recordatorio>) {
+    // Si el panel de ajustes estaba abierto (se pinchó en su lista), al salir
+    // se vuelve allí; si se llegó desde Inicio o Día, se cierra sin más.
+    let desde_ajustes = con_estado(|estado| matches!(estado.edicion, Edicion::Ajustes));
+    con_estado(|estado| estado.volver_ajustes = desde_ajustes);
+
     let (id, texto, dias, hora) = match recordatorio {
         Some(r) => (r.id.clone(), r.texto.clone(), r.dias.clone(), r.hora),
         None => (String::new(), String::new(), Vec::new(), hora(18, 0)),
@@ -603,11 +666,13 @@ fn abrir_panel(ui: &AppWindow, cual: i32) {
 }
 
 fn cancelar(ui: &AppWindow) {
-    let edicion = con_estado(|estado| estado.edicion.clone());
+    let volver_ajustes = con_estado(|estado| {
+        estado.volver_ajustes && matches!(estado.edicion, Edicion::Recordatorio(_))
+    });
     ui.set_form_confirma(false);
     ui.set_form_error("".into());
     ui.set_campo_mal(0);
-    if matches!(edicion, Edicion::Recordatorio(_)) {
+    if volver_ajustes {
         // El recordatorio se edita desde los ajustes: al salir se vuelve allí.
         abrir_ajustes(ui);
     } else {
@@ -749,8 +814,9 @@ fn guardar_recordatorio(ui: &AppWindow) {
     };
 
     let resultado = almacen().modificar(|doc| ops::guardar_recordatorio(doc, &recordatorio));
-    // Al guardar se vuelve a los ajustes, que es de donde se abrió.
-    terminar(ui, resultado, true);
+    // Si se abrió desde Ajustes, al guardar se vuelve a su lista.
+    let volver = con_estado(|estado| estado.volver_ajustes);
+    terminar(ui, resultado, volver);
 }
 
 fn guardar_ajustes(ui: &AppWindow) {
@@ -849,6 +915,7 @@ fn aviso(ui: &AppWindow, mensaje: &str) {
 
 fn borrar(ui: &AppWindow) {
     let edicion = con_estado(|estado| estado.edicion.clone());
+    let volver_ajustes = con_estado(|estado| estado.volver_ajustes);
     let resultado = almacen().modificar(|doc| match &edicion {
         Edicion::Tarea(id) => ops::borrar_tarea(doc, id),
         Edicion::Clase(id) => ops::borrar_clase(doc, id),
@@ -859,7 +926,8 @@ fn borrar(ui: &AppWindow) {
     ui.set_form_confirma(false);
     match resultado {
         Ok(datos) => {
-            let volver_ajustes = matches!(edicion, Edicion::Recordatorio(_));
+            let volver_ajustes =
+                volver_ajustes && matches!(edicion, Edicion::Recordatorio(_));
             crate::sistema::publicar(&datos);
             con_estado(|estado| {
                 estado.datos = Some(datos);
@@ -927,6 +995,20 @@ fn actualizar(ui: &AppWindow) {
     ui.set_hay_tareas(vista.hay_tareas);
     ui.set_tareas(ModelRc::new(VecModel::from(vista.tareas)));
     ui.set_recordatorios(ModelRc::new(VecModel::from(vista.recordatorios)));
+    ui.set_inicio_fecha(vista.inicio_fecha.into());
+    ui.set_inicio_clases(ModelRc::new(VecModel::from(vista.inicio_clases)));
+    ui.set_inicio_hay_siguiente(vista.inicio_hay_siguiente);
+    ui.set_inicio_siguiente(vista.inicio_siguiente);
+    ui.set_inicio_vencidas(ModelRc::new(VecModel::from(vista.inicio_vencidas)));
+    ui.set_inicio_de_hoy(ModelRc::new(VecModel::from(vista.inicio_de_hoy)));
+    ui.set_inicio_proximas(ModelRc::new(VecModel::from(vista.inicio_proximas)));
+    ui.set_inicio_recordatorios(ModelRc::new(VecModel::from(vista.inicio_recordatorios)));
+    ui.set_inicio_por_materia(ModelRc::new(VecModel::from(vista.inicio_por_materia)));
+    ui.set_dia_etiqueta(vista.dia_etiqueta.into());
+    ui.set_dia_es_hoy(vista.dia_es_hoy);
+    ui.set_dia_clases(ModelRc::new(VecModel::from(vista.dia_clases)));
+    ui.set_dia_tareas(ModelRc::new(VecModel::from(vista.dia_tareas)));
+    ui.set_dia_recordatorios(ModelRc::new(VecModel::from(vista.dia_recordatorios)));
     ui.set_resumen_pendientes(vista.resumen.into());
     ui.set_pm_materia(vista.filtro_materia.into());
     ui.set_pm_fecha(vista.filtro_fecha);
@@ -960,6 +1042,10 @@ fn construir_vista() -> Vista {
             }
         }
 
+        let hoy = ahora.date();
+        let resumen_inicio = semana::inicio(datos, ahora);
+        let dia_vista = semana::dia(datos, estado.dia);
+
         let ahora_min = ahora.hour() as i32 * 60 + ahora.minute() as i32;
         let es_actual = estado.lunes == semana::lunes_de(ahora.date());
         let mostrar_ahora = es_actual && ahora_min >= base * 60 && ahora_min <= fin * 60;
@@ -973,20 +1059,7 @@ fn construir_vista() -> Vista {
         let visibles = estado.filtro.aplicar(&datos.tareas, ahora.date());
         let tareas: Vec<TareaUI> = visibles
             .iter()
-            .map(|tarea| TareaUI {
-                id: tarea.id.clone().into(),
-                titulo: tarea.titulo.clone().into(),
-                materia: tarea.materia.clone().unwrap_or_default().into(),
-                fecha: format!(
-                    "{} {} · {}",
-                    nombre_dia(tarea.vence.date()),
-                    fecha_corta(tarea.vence.date()),
-                    tarea.vence.format("%H:%M")
-                )
-                .into(),
-                vencida: semana::vencida(tarea, ahora),
-                hecha: tarea.hecha,
-            })
+            .map(|tarea| tarea_a_ui(tarea, ahora))
             .collect();
 
         Vista {
@@ -1001,6 +1074,62 @@ fn construir_vista() -> Vista {
             mostrar_ahora,
             ahora_min,
             hay_tareas,
+            inicio_fecha: fecha_larga(hoy),
+            inicio_clases: resumen_inicio
+                .clases
+                .iter()
+                .map(|bloque| clase_ui(bloque, hoy, hoy))
+                .collect(),
+            inicio_hay_siguiente: resumen_inicio.siguiente.is_some(),
+            inicio_siguiente: resumen_inicio
+                .siguiente
+                .as_ref()
+                .map(|(fecha, bloque)| clase_ui(bloque, *fecha, hoy))
+                .unwrap_or_default(),
+            inicio_vencidas: resumen_inicio
+                .vencidas
+                .iter()
+                .map(|tarea| tarea_a_ui(tarea, ahora))
+                .collect(),
+            inicio_de_hoy: resumen_inicio
+                .de_hoy
+                .iter()
+                .map(|tarea| tarea_a_ui(tarea, ahora))
+                .collect(),
+            inicio_proximas: resumen_inicio
+                .proximos
+                .iter()
+                .map(|tarea| tarea_a_ui(tarea, ahora))
+                .collect(),
+            inicio_recordatorios: resumen_inicio
+                .recordatorios
+                .iter()
+                .map(|recordatorio| recordatorio_ui(recordatorio, hoy))
+                .collect(),
+            inicio_por_materia: resumen_inicio
+                .por_materia
+                .iter()
+                .map(|(materia, cuantas)| ConteoMateriaUI {
+                    materia: materia.clone().into(),
+                    cuantas: *cuantas as i32,
+                })
+                .collect(),
+            dia_etiqueta: fecha_larga(estado.dia),
+            dia_es_hoy: estado.dia == hoy,
+            dia_clases: dia_vista
+                .bloques
+                .iter()
+                .map(|bloque| clase_ui(bloque, estado.dia, hoy))
+                .collect(),
+            dia_tareas: dia_vista
+                .tareas
+                .iter()
+                .map(|tarea| tarea_a_ui(tarea, ahora))
+                .collect(),
+            dia_recordatorios: semana::recordatorios_de(datos, estado.dia)
+                .iter()
+                .map(|recordatorio| recordatorio_ui(recordatorio, hoy))
+                .collect(),
             resumen: resumen(&tareas, estado.filtro.activo()),
             pie: pie(datos, pendientes.len(), ahora),
             tareas,
@@ -1022,6 +1151,81 @@ fn construir_vista() -> Vista {
                 .collect(),
         }
     })
+}
+
+/// "07:00–09:00".
+fn rango_hora(bloque: &semana::Bloque) -> String {
+    format!(
+        "{}–{}",
+        bloque.inicio.format("%H:%M"),
+        bloque.fin.format("%H:%M")
+    )
+}
+
+/// Una clase para las vistas de resumen. Si no es de hoy, la hora lleva delante
+/// el día ("jue 26 nov · 09:00–11:00").
+fn clase_ui(bloque: &semana::Bloque, fecha: NaiveDate, hoy: NaiveDate) -> ClaseInicioUI {
+    let hora = if fecha == hoy {
+        rango_hora(bloque)
+    } else {
+        format!("{} {} · {}", nombre_dia(fecha).to_lowercase(), fecha_corta(fecha), rango_hora(bloque))
+    };
+    ClaseInicioUI {
+        id: bloque.clase_id.clone().into(),
+        materia: bloque.materia.clone().into(),
+        lugar: bloque.lugar.clone().unwrap_or_default().into(),
+        hora: hora.into(),
+    }
+}
+
+/// Una tarea tal como la dibujan las tres listas (Pendientes, Inicio y Día).
+fn tarea_a_ui(tarea: &Tarea, ahora: NaiveDateTime) -> TareaUI {
+    TareaUI {
+        id: tarea.id.clone().into(),
+        titulo: tarea.titulo.clone().into(),
+        materia: tarea.materia.clone().unwrap_or_default().into(),
+        fecha: format!(
+            "{} {} · {}",
+            nombre_dia(tarea.vence.date()),
+            fecha_corta(tarea.vence.date()),
+            tarea.vence.format("%H:%M")
+        )
+        .into(),
+        vencida: semana::vencida(tarea, ahora),
+        hecha: tarea.hecha,
+    }
+}
+
+/// Un recordatorio con su cuándo escrito: "hoy · 18:00", "mañana · 09:00" o
+/// "lun 30 nov · 09:00".
+fn recordatorio_ui(recordatorio: &semana::RecordatorioVisto, hoy: NaiveDate) -> RecordatorioInicioUI {
+    let hora = recordatorio.hora.format("%H:%M");
+    let cuando = if recordatorio.fecha == hoy {
+        format!("hoy · {hora}")
+    } else if recordatorio.fecha == hoy + TimeDelta::days(1) {
+        format!("mañana · {hora}")
+    } else {
+        format!(
+            "{} {} · {hora}",
+            nombre_dia(recordatorio.fecha).to_lowercase(),
+            fecha_corta(recordatorio.fecha)
+        )
+    };
+    RecordatorioInicioUI {
+        id: recordatorio.id.clone().into(),
+        texto: recordatorio.texto.clone().into(),
+        cuando: cuando.into(),
+    }
+}
+
+/// "miércoles 25 de noviembre", para la cabecera de Inicio y de Día.
+fn fecha_larga(fecha: NaiveDate) -> String {
+    format!(
+        "{} {} de {}",
+        DIAS_LARGOS[fecha.weekday().num_days_from_monday() as usize],
+        fecha.day(),
+        MESES_LARGOS[fecha.month0() as usize]
+    )
 }
 
 fn dia_ui(dia: &semana::DiaVista) -> DiaUI {
@@ -1985,6 +2189,52 @@ mod pruebas {
         assert_eq!(
             hora_o_vacio(Some(NaiveTime::from_hms_opt(8, 5, 0).unwrap())),
             "08:05"
+        );
+    }
+
+    #[test]
+    fn fecha_larga_en_espanol() {
+        assert_eq!(fecha_larga(fecha(2026, 11, 25)), "miércoles 25 de noviembre");
+        assert_eq!(fecha_larga(fecha(2026, 8, 3)), "lunes 3 de agosto");
+    }
+
+    /// Una clase de otro día lleva el día delante; la de hoy no.
+    #[test]
+    fn clase_ui_lleva_el_dia_solo_si_no_es_hoy() {
+        let bloque = crate::semana::Bloque {
+            clase_id: "c-uno".into(),
+            materia: "Control".into(),
+            inicio: NaiveTime::from_hms_opt(7, 0, 0).unwrap(),
+            fin: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+            lugar: Some("453-201".into()),
+        };
+        let hoy = fecha(2026, 11, 25);
+        let de_hoy = clase_ui(&bloque, hoy, hoy);
+        assert_eq!(de_hoy.hora, "07:00–09:00");
+        assert_eq!(de_hoy.materia, "Control");
+
+        let otro = clase_ui(&bloque, fecha(2026, 11, 26), hoy);
+        assert_eq!(otro.hora, "jue 26 nov · 07:00–09:00");
+    }
+
+    /// El cuándo de un recordatorio usa "hoy" y "mañana" cuando toca.
+    #[test]
+    fn cuando_del_recordatorio() {
+        let hoy = fecha(2026, 11, 25);
+        let recordatorio = |dia: NaiveDate| crate::semana::RecordatorioVisto {
+            id: "r-uno".into(),
+            texto: "Revisar Moodle".into(),
+            fecha: dia,
+            hora: NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
+        };
+        assert_eq!(recordatorio_ui(&recordatorio(hoy), hoy).cuando, "hoy · 18:00");
+        assert_eq!(
+            recordatorio_ui(&recordatorio(fecha(2026, 11, 26)), hoy).cuando,
+            "mañana · 18:00"
+        );
+        assert_eq!(
+            recordatorio_ui(&recordatorio(fecha(2026, 11, 30)), hoy).cuando,
+            "lun 30 nov · 18:00"
         );
     }
 }

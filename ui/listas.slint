@@ -1,0 +1,240 @@
+// Piezas que comparten las vistas Inicio y Día: rótulos de sección, filas de
+// clase, de tarea y de recordatorio, todas pinchables para abrir su formulario.
+// Colores, tamaños y tipografía salen siempre de Tema.
+
+import { Tema } from "tema.slint";
+import { TituloTachado } from "formularios.slint";
+import { TareaUI } from "pendientes.slint";
+
+/// Una clase colocada en un día, con su hora ya escrita ("07:00–09:00" o
+/// "jue 26 nov · 09:00–11:00" cuando es de otro día).
+export struct ClaseInicioUI {
+    id: string,
+    materia: string,
+    lugar: string,
+    hora: string,
+}
+
+/// Un recordatorio próximo, con su cuándo ya escrito ("hoy · 18:00").
+export struct RecordatorioInicioUI {
+    id: string,
+    texto: string,
+    cuando: string,
+}
+
+/// Cuántas tareas quedan de una materia.
+export struct ConteoMateriaUI {
+    materia: string,
+    cuantas: int,
+}
+
+/// Rótulo de sección en Cinzel: "HOY", "VENCIDAS"… con un detalle a la derecha.
+export component Seccion inherits HorizontalLayout {
+    in property <string> texto;
+    in property <string> detalle: "";
+
+    spacing: Tema.espacio-sm;
+    cross-axis-alignment: end;
+
+    Text {
+        text: root.texto;
+        font-family: Tema.fuente-titulos;
+        font-size: Tema.tamano-seccion;
+        font-weight: 700;
+        letter-spacing: Tema.letra-seccion;
+        color: Tema.texto-suave;
+    }
+
+    if root.detalle != "" : Text {
+        text: root.detalle;
+        font-size: Tema.tamano-hora;
+        color: Tema.texto-tenue;
+        vertical-alignment: center;
+    }
+}
+
+/// Texto tenue para las secciones vacías ("sin clases", "nada por aquí").
+export component Vacio inherits Text {
+    in property <string> texto: "nada";
+
+    height: Tema.alto-fila-compacta;
+    text: root.texto;
+    font-size: Tema.tamano-pequeno;
+    color: Tema.texto-tenue;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+/// Una clase: hora a la izquierda y materia con su lugar.
+export component FilaClase inherits Rectangle {
+    in property <string> hora;
+    in property <string> materia;
+    in property <string> lugar;
+
+    callback clicked();
+
+    height: Tema.alto-fila-tarea;
+    border-radius: Tema.radio-pequeno;
+    background: ta.has-hover ? Tema.fondo-hover : transparent;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding-left: Tema.espacio-sm;
+        padding-right: Tema.espacio-sm;
+        spacing: Tema.espacio-md;
+        cross-axis-alignment: center;
+
+        Rectangle {
+            width: Tema.ancho-marca;
+            height: parent.height - 2 * Tema.espacio-sm;
+            background: Tema.acento-suave;
+        }
+
+        Text {
+            width: Tema.ancho-hora-fila;
+            text: root.hora;
+            font-size: Tema.tamano-pequeno;
+            color: Tema.texto-suave;
+            vertical-alignment: center;
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.materia;
+            font-size: Tema.tamano-texto;
+            color: Tema.texto;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        if root.lugar != "" : Text {
+            text: root.lugar;
+            font-size: Tema.tamano-hora;
+            color: Tema.texto-tenue;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+/// Una tarea en las vistas de resumen. Pinchar abre su formulario; lo hecho
+/// se ve tachado y tenue, igual que en Pendientes.
+export component FilaTarea inherits Rectangle {
+    in property <TareaUI> tarea;
+
+    callback clicked();
+
+    height: Tema.alto-fila-tarea;
+    border-radius: Tema.radio-pequeno;
+    background: ta.has-hover ? Tema.fondo-hover : transparent;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding-left: Tema.espacio-sm;
+        padding-right: Tema.espacio-sm;
+        spacing: Tema.espacio-md;
+        cross-axis-alignment: center;
+
+        Rectangle {
+            width: Tema.ancho-marca;
+            height: parent.height - 2 * Tema.espacio-sm;
+            background: root.tarea.hecha
+                ? Tema.borde-suave
+                : (root.tarea.vencida ? Tema.vencida : Tema.acento-suave);
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 0;
+
+            TituloTachado {
+                texto: root.tarea.titulo;
+                tachada: root.tarea.hecha;
+                tinta: root.tarea.hecha
+                    ? Tema.texto-tenue
+                    : (root.tarea.vencida ? Tema.vencida-texto : Tema.texto);
+            }
+
+            HorizontalLayout {
+                alignment: start;
+                spacing: Tema.espacio-sm;
+
+                if root.tarea.materia != "" : Text {
+                    text: root.tarea.materia;
+                    font-size: Tema.tamano-hora;
+                    color: Tema.texto-suave;
+                }
+
+                Text {
+                    text: root.tarea.fecha;
+                    font-size: Tema.tamano-hora;
+                    color: (root.tarea.vencida && !root.tarea.hecha) ? Tema.vencida : Tema.texto-tenue;
+                }
+            }
+        }
+
+        if root.tarea.vencida && !root.tarea.hecha : Text {
+            text: "VENCIDA";
+            font-family: Tema.fuente-titulos;
+            font-size: Tema.tamano-hora;
+            letter-spacing: Tema.letra-normal;
+            color: Tema.vencida;
+        }
+    }
+}
+
+/// Un recordatorio: texto a la izquierda y cuándo a la derecha.
+export component FilaRecordatorio inherits Rectangle {
+    in property <string> texto;
+    in property <string> cuando;
+
+    callback clicked();
+
+    height: Tema.alto-fila-compacta;
+    border-radius: Tema.radio-pequeno;
+    background: ta.has-hover ? Tema.fondo-hover : transparent;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding-left: Tema.espacio-sm;
+        padding-right: Tema.espacio-sm;
+        spacing: Tema.espacio-md;
+        cross-axis-alignment: center;
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.texto;
+            font-size: Tema.tamano-pequeno;
+            color: Tema.texto;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.cuando;
+            font-size: Tema.tamano-hora;
+            color: Tema.texto-suave;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}

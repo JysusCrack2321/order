@@ -7,7 +7,7 @@
 // salen siempre de Tema.
 
 import { Tema } from "tema.slint";
-import { CampoBoton, Casilla, Chip, Etiqueta } from "formularios.slint";
+import { CampoBoton, Casilla, Chip, Etiqueta, TituloTachado } from "formularios.slint";
 import { ScrollView } from "std-widgets.slint";
 
 export struct TareaUI {
@@ -17,33 +17,6 @@ export struct TareaUI {
     fecha: string,
     vencida: bool,
     hecha: bool,
-}
-
-/// Título de una tarea. Si está hecha se dibuja una línea encima, del ancho
-/// justo del texto: Slint no trae tachado, así que se pinta.
-component TituloTachado inherits Rectangle {
-    in property <string> texto;
-    in property <bool> tachada: false;
-    in property <color> tinta: Tema.texto;
-
-    height: Tema.alto-linea-titulo;
-
-    txt := Text {
-        width: min(parent.width, self.preferred-width);
-        height: parent.height;
-        vertical-alignment: center;
-        text: root.texto;
-        font-size: Tema.tamano-texto;
-        color: root.tinta;
-        overflow: elide;
-    }
-
-    if root.tachada : Rectangle {
-        y: (parent.height - Tema.linea) / 2;
-        width: txt.width;
-        height: Tema.linea;
-        background: root.tinta;
-    }
 }
 
 export component PendientesVista inherits Rectangle {

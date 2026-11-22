@@ -1,0 +1,306 @@
+// Vista Inicio: el resumen del día al abrir ORDER.
+// ---------------------------------------------------------------------------
+// Izquierda: clases de hoy, la siguiente clase, tareas vencidas, las de hoy y
+// las de los próximos siete días. Derecha: próximos recordatorios y cuántas
+// tareas quedan por materia. Todo lo que se pincha abre su formulario.
+//
+// Lo que se muestra se calcula en `src/semana.rs` (`semana::inicio`); aquí solo
+// se dibuja. Colores, tamaños y tipografía salen siempre de Tema.
+
+import { Tema } from "tema.slint";
+import { TareaUI } from "pendientes.slint";
+import {
+    ClaseInicioUI,
+    ConteoMateriaUI,
+    FilaClase,
+    FilaRecordatorio,
+    FilaTarea,
+    RecordatorioInicioUI,
+    Seccion,
+    Vacio,
+} from "listas.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export component InicioVista inherits Rectangle {
+    in property <string> fecha-larga: "";
+
+    in property <[ClaseInicioUI]> clases;
+    in property <bool> hay-siguiente: false;
+    in property <ClaseInicioUI> siguiente;
+
+    in property <[TareaUI]> vencidas;
+    in property <[TareaUI]> de-hoy;
+    in property <[TareaUI]> proximas;
+    in property <[RecordatorioInicioUI]> recordatorios;
+    in property <[ConteoMateriaUI]> por-materia;
+
+    callback editar-tarea(string);
+    callback editar-clase(string);
+    callback editar-recordatorio(string);
+    callback nueva-clase();
+    callback nueva-tarea();
+
+    background: transparent;
+
+    VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        spacing: Tema.espacio-md;
+
+        // --- Cabecera ------------------------------------------------------
+        HorizontalLayout {
+            spacing: Tema.espacio-md;
+            cross-axis-alignment: end;
+
+            Text {
+                text: "INICIO";
+                font-family: Tema.fuente-titulos;
+                font-size: Tema.tamano-seccion;
+                font-weight: 700;
+                letter-spacing: Tema.letra-seccion;
+                color: Tema.texto-suave;
+            }
+
+            Text {
+                text: root.fecha-larga;
+                font-family: Tema.fuente-titulos;
+                font-size: Tema.tamano-semana;
+                font-weight: 700;
+                letter-spacing: Tema.letra-normal;
+                color: Tema.texto;
+                vertical-alignment: center;
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            Text {
+                text: "+  Clase";
+                font-size: Tema.tamano-pequeno;
+                color: nueva-clase-ta.has-hover ? Tema.acento : Tema.texto-suave;
+                vertical-alignment: center;
+                height: Tema.alto-boton;
+
+                nueva-clase-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.nueva-clase(); }
+                }
+            }
+
+            Text {
+                text: "+  Tarea";
+                font-family: Tema.fuente-titulos;
+                font-size: Tema.tamano-pequeno;
+                letter-spacing: Tema.letra-normal;
+                color: nueva-tarea-ta.has-hover ? Tema.acento : Tema.texto-suave;
+                vertical-alignment: center;
+                height: Tema.alto-boton;
+
+                nueva-tarea-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.nueva-tarea(); }
+                }
+            }
+        }
+
+        // --- Tablero -------------------------------------------------------
+        ScrollView {
+            vertical-stretch: 1;
+
+            HorizontalLayout {
+                spacing: Tema.espacio-xl;
+
+                // --- Columna izquierda: el día y lo que viene --------------
+                VerticalLayout {
+                    horizontal-stretch: 3;
+                    spacing: Tema.espacio-sm;
+
+                    Seccion {
+                        texto: "HOY";
+                        detalle: root.clases.length == 0
+                            ? ""
+                            : (root.clases.length == 1 ? "1 clase" : "\{root.clases.length} clases");
+                    }
+
+                    if root.clases.length == 0 : Vacio {
+                        texto: "sin clases hoy";
+                    }
+
+                    for clase in root.clases : FilaClase {
+                        hora: clase.hora;
+                        materia: clase.materia;
+                        lugar: clase.lugar;
+                        clicked => { root.editar-clase(clase.id); }
+                    }
+
+                    // La siguiente clase, enmarcada para que se vea de lejos.
+                    if root.hay-siguiente : Rectangle {
+                        height: Tema.alto-fila-tarea + Tema.espacio-sm;
+                        border-radius: Tema.radio-pequeno;
+                        border-width: Tema.linea;
+                        border-color: siguiente-ta.has-hover ? Tema.acento : Tema.acento-suave;
+                        background: Tema.acento-tenue;
+
+                        siguiente-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.editar-clase(root.siguiente.id); }
+                        }
+
+                        HorizontalLayout {
+                            width: parent.width;
+                            height: parent.height;
+                            padding-left: Tema.espacio-md;
+                            padding-right: Tema.espacio-md;
+                            spacing: Tema.espacio-md;
+                            cross-axis-alignment: center;
+
+                            Text {
+                                text: "SIGUIENTE CLASE";
+                                font-family: Tema.fuente-titulos;
+                                font-size: Tema.tamano-hora;
+                                letter-spacing: Tema.letra-normal;
+                                color: Tema.acento;
+                                vertical-alignment: center;
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: 0;
+
+                                Text {
+                                    text: root.siguiente.materia;
+                                    font-size: Tema.tamano-texto;
+                                    color: Tema.texto;
+                                    overflow: elide;
+                                }
+
+                                Text {
+                                    text: root.siguiente.hora
+                                        + (root.siguiente.lugar == "" ? "" : " · " + root.siguiente.lugar);
+                                    font-size: Tema.tamano-hora;
+                                    color: Tema.texto-suave;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle { height: Tema.espacio-sm; }
+
+                    Seccion {
+                        texto: "VENCIDAS";
+                        detalle: root.vencidas.length == 0
+                            ? ""
+                            : "\{root.vencidas.length}";
+                    }
+
+                    if root.vencidas.length == 0 : Vacio {
+                        texto: "nada atrasado";
+                    }
+
+                    for tarea in root.vencidas : FilaTarea {
+                        tarea: tarea;
+                        clicked => { root.editar-tarea(tarea.id); }
+                    }
+
+                    Rectangle { height: Tema.espacio-sm; }
+
+                    Seccion {
+                        texto: "TAREAS DE HOY";
+                        detalle: root.de-hoy.length == 0 ? "" : "\{root.de-hoy.length}";
+                    }
+
+                    if root.de-hoy.length == 0 : Vacio {
+                        texto: "nada vence hoy";
+                    }
+
+                    for tarea in root.de-hoy : FilaTarea {
+                        tarea: tarea;
+                        clicked => { root.editar-tarea(tarea.id); }
+                    }
+
+                    Rectangle { height: Tema.espacio-sm; }
+
+                    Seccion {
+                        texto: "PRÓXIMOS 7 DÍAS";
+                        detalle: root.proximas.length == 0 ? "" : "\{root.proximas.length}";
+                    }
+
+                    if root.proximas.length == 0 : Vacio {
+                        texto: "sin entregas a la vista";
+                    }
+
+                    for tarea in root.proximas : FilaTarea {
+                        tarea: tarea;
+                        clicked => { root.editar-tarea(tarea.id); }
+                    }
+                }
+
+                // --- Columna derecha: recordatorios y conteo ----------------
+                VerticalLayout {
+                    horizontal-stretch: 2;
+                    spacing: Tema.espacio-sm;
+
+                    Seccion { texto: "PRÓXIMOS RECORDATORIOS"; }
+
+                    if root.recordatorios.length == 0 : Vacio {
+                        texto: "sin recordatorios";
+                    }
+
+                    for recordatorio in root.recordatorios : FilaRecordatorio {
+                        texto: recordatorio.texto;
+                        cuando: recordatorio.cuando;
+                        clicked => { root.editar-recordatorio(recordatorio.id); }
+                    }
+
+                    Rectangle { height: Tema.espacio-lg; }
+
+                    Seccion { texto: "PENDIENTES POR MATERIA"; }
+
+                    if root.por-materia.length == 0 : Vacio {
+                        texto: "nada pendiente";
+                    }
+
+                    for conteo in root.por-materia : Rectangle {
+                        height: Tema.alto-fila-compacta;
+
+                        HorizontalLayout {
+                            width: parent.width;
+                            height: parent.height;
+                            padding-left: Tema.espacio-sm;
+                            padding-right: Tema.espacio-sm;
+                            spacing: Tema.espacio-md;
+                            cross-axis-alignment: center;
+
+                            Text {
+                                horizontal-stretch: 1;
+                                text: conteo.materia;
+                                font-size: Tema.tamano-pequeno;
+                                color: Tema.texto-suave;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+
+                            Text {
+                                width: Tema.ancho-conteo;
+                                horizontal-alignment: right;
+                                text: "\{conteo.cuantas}";
+                                font-family: Tema.fuente-titulos;
+                                font-size: Tema.tamano-pequeno;
+                                color: Tema.acento;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Rectangle {
+                            y: parent.height - Tema.linea;
+                            width: parent.width;
+                            height: Tema.linea;
+                            background: Tema.borde-suave;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

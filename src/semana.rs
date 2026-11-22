@@ -5,7 +5,7 @@
 //! y las clases se repiten cada siete días mientras la fecha caiga dentro de
 //! `[semestre]`; sin `[semestre]`, aparecen todas las semanas.
 
-use crate::modelo::{Clase, Datos, Dia, Tarea};
+use crate::modelo::{Datos, Dia, Tarea};
 use chrono::{Datelike, Days, NaiveDate, NaiveDateTime, NaiveTime, Weekday};
 
 /// Una clase ya colocada en un día concreto de la semana mostrada.
@@ -27,6 +27,35 @@ pub struct DiaVista {
     pub tareas: Vec<Tarea>,
 }
 
+/// Un recordatorio que cae en una fecha concreta.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordatorioVisto {
+    pub id: String,
+    pub texto: String,
+    pub fecha: NaiveDate,
+    pub hora: NaiveTime,
+}
+
+/// Lo que dibuja la pestaña **Inicio**: el resumen del día y de lo que viene.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InicioVista {
+    /// Clases de hoy, por hora.
+    pub clases: Vec<Bloque>,
+    /// La próxima clase (hoy si aún no termina, o la primera de los próximos
+    /// siete días) con la fecha en la que cae.
+    pub siguiente: Option<(NaiveDate, Bloque)>,
+    /// Tareas sin hacer cuyo vencimiento ya pasó.
+    pub vencidas: Vec<Tarea>,
+    /// Tareas sin hacer que vencen hoy.
+    pub de_hoy: Vec<Tarea>,
+    /// Tareas sin hacer que vencen de mañana a dentro de siete días.
+    pub proximos: Vec<Tarea>,
+    /// Los próximos recordatorios, en orden.
+    pub recordatorios: Vec<RecordatorioVisto>,
+    /// Cuántas tareas quedan por materia, de más a menos.
+    pub por_materia: Vec<(String, usize)>,
+}
+
 /// El lunes de la semana que contiene `fecha` (la semana empieza en lunes).
 pub fn lunes_de(fecha: NaiveDate) -> NaiveDate {
     fecha - Days::new(u64::from(fecha.weekday().num_days_from_monday()))
@@ -42,51 +71,185 @@ pub fn semana(datos: &Datos, lunes: NaiveDate) -> Vec<DiaVista> {
             break;
         };
         let dia = dia_de(fecha);
-
-        let del_dia: Vec<&Clase> = datos
-            .clases
-            .iter()
-            .filter(|c| c.dias.contains(&dia) && dentro_del_semestre(datos, fecha))
-            .collect();
+        let bloques = bloques_de(datos, fecha);
 
         // El fin de semana solo ocupa columna si de verdad hay clase.
-        if matches!(dia, Dia::Sab | Dia::Dom) && del_dia.is_empty() {
+        if matches!(dia, Dia::Sab | Dia::Dom) && bloques.is_empty() {
             continue;
         }
 
-        let mut bloques: Vec<Bloque> = del_dia
-            .into_iter()
-            .map(|c| Bloque {
-                clase_id: c.id.clone(),
-                materia: c.materia.clone(),
-                inicio: c.inicio,
-                fin: c.fin,
-                lugar: c.lugar.clone(),
-            })
-            .collect();
-        bloques.sort_by(|a, b| {
-            a.inicio
-                .cmp(&b.inicio)
-                .then(a.fin.cmp(&b.fin))
-                .then(a.materia.cmp(&b.materia))
-        });
-
-        let mut tareas: Vec<Tarea> = datos
-            .tareas
-            .iter()
-            .filter(|t| t.vence.date() == fecha)
-            .cloned()
-            .collect();
-        tareas.sort_by_key(|t| t.vence);
-
-        dias.push(DiaVista {
-            fecha,
-            bloques,
-            tareas,
-        });
+        dias.push(dia_completo(datos, fecha));
     }
 
     dias
+}
+
+/// Las clases de una fecha concreta, por hora. Fuera del semestre no hay.
+pub fn bloques_de(datos: &Datos, fecha: NaiveDate) -> Vec<Bloque> {
+    if !dentro_del_semestre(datos, fecha) {
+        return Vec::new();
+    }
+    let dia = dia_de(fecha);
+    let mut bloques: Vec<Bloque> = datos
+        .clases
+        .iter()
+        .filter(|clase| clase.dias.contains(&dia))
+        .map(|clase| Bloque {
+            clase_id: clase.id.clone(),
+            materia: clase.materia.clone(),
+            inicio: clase.inicio,
+            fin: clase.fin,
+            lugar: clase.lugar.clone(),
+        })
+        .collect();
+    bloques.sort_by(|a, b| {
+        a.inicio
+            .cmp(&b.inicio)
+            .then(a.fin.cmp(&b.fin))
+            .then(a.materia.cmp(&b.materia))
+    });
+    bloques
+}
+
+/// Un día suelto (lo que dibuja la pestaña **Día**): sus clases y las tareas
+/// que vencen ese día, hechas o no.
+pub fn dia(datos: &Datos, fecha: NaiveDate) -> DiaVista {
+    dia_completo(datos, fecha)
+}
+
+fn dia_completo(datos: &Datos, fecha: NaiveDate) -> DiaVista {
+    let mut tareas: Vec<Tarea> = datos
+        .tareas
+        .iter()
+        .filter(|tarea| tarea.vence.date() == fecha)
+        .cloned()
+        .collect();
+    tareas.sort_by_key(|tarea| tarea.vence);
+    DiaVista {
+        fecha,
+        bloques: bloques_de(datos, fecha),
+        tareas,
+    }
+}
+
+/// Los recordatorios que tocan en una fecha, por hora.
+pub fn recordatorios_de(datos: &Datos, fecha: NaiveDate) -> Vec<RecordatorioVisto> {
+    let dia = dia_de(fecha);
+    let mut lista: Vec<RecordatorioVisto> = datos
+        .recordatorios
+        .iter()
+        .filter(|recordatorio| recordatorio.dias.contains(&dia))
+        .map(|recordatorio| RecordatorioVisto {
+            id: recordatorio.id.clone(),
+            texto: recordatorio.texto.clone(),
+            fecha,
+            hora: recordatorio.hora,
+        })
+        .collect();
+    lista.sort_by_key(|recordatorio| recordatorio.hora);
+    lista
+}
+
+/// Los `cuantos` recordatorios que vienen después de `ahora`, en orden. Se
+/// buscan en los próximos ocho días: con uno por semana basta para tener
+/// siempre alguno si hay recordatorios.
+pub fn proximos_recordatorios(
+    datos: &Datos,
+    ahora: NaiveDateTime,
+    cuantos: usize,
+) -> Vec<RecordatorioVisto> {
+    let mut lista = Vec::new();
+    for adelanto in 0..8 {
+        let fecha = ahora.date() + Days::new(adelanto);
+        for recordatorio in recordatorios_de(datos, fecha) {
+            if fecha.and_time(recordatorio.hora) <= ahora {
+                continue;
+            }
+            lista.push(recordatorio);
+        }
+        if lista.len() >= cuantos {
+            break;
+        }
+    }
+    lista.truncate(cuantos);
+    lista
+}
+
+/// El resumen de la pestaña **Inicio**: lo de hoy, lo próximo y lo atrasado.
+pub fn inicio(datos: &Datos, ahora: NaiveDateTime) -> InicioVista {
+    let hoy = ahora.date();
+
+    // La siguiente clase: la de hoy que todavía no termina o, si ya no queda
+    // ninguna, la primera de los próximos siete días.
+    let mut siguiente = None;
+    for adelanto in 0..8 {
+        let Some(fecha) = hoy.checked_add_days(Days::new(adelanto)) else {
+            break;
+        };
+        let bloque = bloques_de(datos, fecha)
+            .into_iter()
+            .find(|bloque| fecha > hoy || bloque.fin > ahora.time());
+        if let Some(bloque) = bloque {
+            siguiente = Some((fecha, bloque));
+            break;
+        }
+    }
+
+    let pendientes: Vec<&Tarea> = datos.tareas.iter().filter(|tarea| !tarea.hecha).collect();
+    let limite = hoy.checked_add_days(Days::new(7)).unwrap_or(hoy);
+
+    let por_fecha = |desde: NaiveDate, hasta: NaiveDate| -> Vec<Tarea> {
+        let mut lista: Vec<Tarea> = pendientes
+            .iter()
+            .filter(|tarea| {
+                let fecha = tarea.vence.date();
+                fecha >= desde && fecha <= hasta
+            })
+            .map(|tarea| (*tarea).clone())
+            .collect();
+        lista.sort_by_key(|tarea| tarea.vence);
+        lista
+    };
+    let de_hoy = por_fecha(hoy, hoy);
+    let proximos = por_fecha(hoy + Days::new(1), limite);
+
+    // "Vencidas" son las de días anteriores: las de hoy ya salen en su lista
+    // aunque su hora haya pasado, para no verlas dos veces.
+    let mut vencidas: Vec<Tarea> = pendientes
+        .iter()
+        .filter(|tarea| tarea.vence.date() < hoy)
+        .map(|tarea| (*tarea).clone())
+        .collect();
+    vencidas.sort_by_key(|tarea| tarea.vence);
+
+    InicioVista {
+        clases: bloques_de(datos, hoy),
+        siguiente,
+        vencidas,
+        de_hoy,
+        proximos,
+        recordatorios: proximos_recordatorios(datos, ahora, 5),
+        por_materia: conteo_por_materia(&pendientes),
+    }
+}
+
+/// Cuántas pendientes hay por materia, de más a menos y sin repetir la grafía.
+fn conteo_por_materia(pendientes: &[&Tarea]) -> Vec<(String, usize)> {
+    let mut lista: Vec<(String, usize)> = Vec::new();
+    for tarea in pendientes {
+        let materia = tarea
+            .materia
+            .as_deref()
+            .map(str::trim)
+            .filter(|materia| !materia.is_empty())
+            .unwrap_or("Sin materia");
+        match lista.iter_mut().find(|(nombre, _)| nombre == materia) {
+            Some((_, cuantas)) => *cuantas += 1,
+            None => lista.push((materia.to_string(), 1)),
+        }
+    }
+    lista.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    lista
 }
 
 /// Tareas sin hacer, de la que vence antes a la que vence después.
@@ -125,7 +288,7 @@ fn dentro_del_semestre(datos: &Datos, fecha: NaiveDate) -> bool {
 #[cfg(test)]
 mod pruebas {
     use super::*;
-    use crate::modelo::{Ajustes, Semestre};
+    use crate::modelo::{Ajustes, Clase, Recordatorio, Semestre};
 
     fn fecha(anio: i32, mes: u32, dia: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(anio, mes, dia).unwrap()
@@ -180,6 +343,15 @@ mod pruebas {
 
     fn fechas(dias: &[DiaVista]) -> Vec<NaiveDate> {
         dias.iter().map(|d| d.fecha).collect()
+    }
+
+    fn recordatorio(texto: &str, dias: &[Dia], h: u32, m: u32) -> Recordatorio {
+        Recordatorio {
+            id: texto.to_lowercase().replace(' ', "-"),
+            texto: texto.to_string(),
+            dias: dias.to_vec(),
+            hora: hora(h, m),
+        }
     }
 
     #[test]
@@ -273,6 +445,182 @@ mod pruebas {
             dias[2].bloques[0].clase_id, "",
             "el bloque conserva la clase que lo originó"
         );
+    }
+
+    /// Un miércoles con clase, una tarea atrasada, una de hoy, una próxima y
+    /// una lejana: el resumen de Inicio las separa y cuenta por materia.
+    fn miércoles(ahora_h: u32, ahora_m: u32) -> (Datos, NaiveDateTime) {
+        let mut d = datos(
+            vec![
+                {
+                    let mut c = clase_en("Control", &[Dia::Mie]);
+                    c.inicio = hora(7, 0);
+                    c.fin = hora(9, 0);
+                    c
+                },
+                {
+                    let mut c = clase_en("Robótica", &[Dia::Jue]);
+                    c.inicio = hora(9, 0);
+                    c.fin = hora(11, 0);
+                    c
+                },
+            ],
+            vec![
+                {
+                    let mut t = tarea("Atrasada", momento(2026, 11, 24, 23, 59), false);
+                    t.materia = None;
+                    t
+                },
+                {
+                    let mut t = tarea("Taller", momento(2026, 11, 25, 23, 59), false);
+                    t.materia = Some("Control".into());
+                    t
+                },
+                {
+                    let mut t = tarea("Informe", momento(2026, 12, 1, 18, 0), false);
+                    t.materia = Some("Control".into());
+                    t
+                },
+                tarea("Examen", momento(2026, 12, 10, 9, 0), false),
+                {
+                    let mut t = tarea("Quiz", momento(2026, 11, 26, 10, 0), true);
+                    t.materia = Some("Control".into());
+                    t
+                },
+            ],
+            Some(Semestre {
+                inicio: fecha(2026, 8, 3),
+                fin: fecha(2026, 12, 5),
+            }),
+        );
+        d.recordatorios = vec![
+            recordatorio("Revisar Moodle", &[Dia::Mie], 18, 0),
+            recordatorio("Revisar Classroom", &[Dia::Lun], 9, 0),
+        ];
+        (d, momento(2026, 11, 25, ahora_h, ahora_m))
+    }
+
+    #[test]
+    fn inicio_resume_el_dia() {
+        let (d, ahora) = miércoles(8, 0); // la clase de 7–9 todavía no termina
+        let resumen = inicio(&d, ahora);
+
+        assert_eq!(resumen.clases.len(), 1);
+        assert_eq!(resumen.clases[0].materia, "Control");
+        let (fecha_siguiente, siguiente) = resumen.siguiente.clone().expect("hay siguiente clase");
+        assert_eq!(fecha_siguiente, fecha(2026, 11, 25));
+        assert_eq!(siguiente.materia, "Control", "la de hoy aún no termina");
+
+        assert_eq!(
+            resumen.vencidas.iter().map(|t| t.titulo.as_str()).collect::<Vec<_>>(),
+            vec!["Atrasada"]
+        );
+        assert_eq!(
+            resumen.de_hoy.iter().map(|t| t.titulo.as_str()).collect::<Vec<_>>(),
+            vec!["Taller"],
+            "la hecha no entra"
+        );
+        assert_eq!(
+            resumen.proximos.iter().map(|t| t.titulo.as_str()).collect::<Vec<_>>(),
+            vec!["Informe"],
+            "el examen del 10-dic queda fuera de los siete días"
+        );
+
+        assert_eq!(
+            resumen.recordatorios[0].texto, "Revisar Moodle",
+            "el de hoy va primero"
+        );
+        assert_eq!(resumen.recordatorios[0].fecha, fecha(2026, 11, 25));
+        assert_eq!(resumen.recordatorios[1].fecha, fecha(2026, 11, 30), "el lunes siguiente");
+
+        assert_eq!(
+            resumen.por_materia,
+            vec![("Control".to_string(), 2), ("Sin materia".to_string(), 2)],
+            "cuenta todas las pendientes, no solo las de la semana"
+        );
+    }
+
+    /// Una tarea de hoy con la hora ya pasada sigue siendo "de hoy", no
+    /// "vencida": así no aparece dos veces en el tablero.
+    #[test]
+    fn lo_de_hoy_no_se_repite_en_vencidas() {
+        let (mut d, ahora) = miércoles(10, 0);
+        let mut temprano = tarea("Exposición", momento(2026, 11, 25, 8, 0), false);
+        temprano.materia = Some("Control".into());
+        d.tareas.push(temprano);
+        let resumen = inicio(&d, ahora);
+        assert_eq!(
+            resumen.vencidas.iter().map(|t| t.titulo.as_str()).collect::<Vec<_>>(),
+            vec!["Atrasada"]
+        );
+        assert_eq!(
+            resumen.de_hoy.iter().map(|t| t.titulo.as_str()).collect::<Vec<_>>(),
+            vec!["Exposición", "Taller"],
+            "las de hoy, por hora"
+        );
+    }
+
+    /// Si la clase de hoy ya terminó, la siguiente es la del día siguiente.
+    #[test]
+    fn siguiente_clase_salta_al_dia_que_viene() {
+        let (d, ahora) = miércoles(10, 0);
+        let resumen = inicio(&d, ahora);
+        let (fecha_siguiente, siguiente) = resumen.siguiente.expect("hay siguiente clase");
+        assert_eq!(fecha_siguiente, fecha(2026, 11, 26));
+        assert_eq!(siguiente.materia, "Robótica");
+    }
+
+    /// Sin clases en los próximos días no hay "siguiente".
+    #[test]
+    fn sin_clases_no_hay_siguiente() {
+        let d = datos(Vec::new(), Vec::new(), None);
+        let resumen = inicio(&d, momento(2026, 11, 25, 8, 0));
+        assert!(resumen.siguiente.is_none());
+        assert!(resumen.clases.is_empty());
+        assert!(resumen.por_materia.is_empty());
+    }
+
+    /// La pestaña Día trae las clases y las tareas de esa fecha.
+    #[test]
+    fn vista_de_un_dia() {
+        let (d, _) = miércoles(8, 0);
+        let vista = dia(&d, fecha(2026, 11, 25));
+        assert_eq!(vista.fecha, fecha(2026, 11, 25));
+        assert_eq!(vista.bloques.len(), 1);
+        assert_eq!(vista.bloques[0].materia, "Control");
+        assert_eq!(
+            vista.tareas.iter().map(|t| t.titulo.as_str()).collect::<Vec<_>>(),
+            vec!["Taller"]
+        );
+
+        let recordatorios = recordatorios_de(&d, fecha(2026, 11, 25));
+        assert_eq!(recordatorios.len(), 1);
+        assert_eq!(recordatorios[0].texto, "Revisar Moodle");
+
+        let jueves = dia(&d, fecha(2026, 11, 26));
+        assert_eq!(
+            jueves.tareas.iter().map(|t| t.titulo.as_str()).collect::<Vec<_>>(),
+            vec!["Quiz"],
+            "la vista del día muestra también lo hecho"
+        );
+        assert_eq!(jueves.bloques[0].materia, "Robótica");
+    }
+
+    /// Los próximos recordatorios salen en orden y sin pasados.
+    #[test]
+    fn proximos_recordatorios_en_orden() {
+        let (d, ahora) = miércoles(8, 0);
+        let lista = proximos_recordatorios(&d, ahora, 5);
+        assert_eq!(
+            lista.iter().map(|r| r.texto.as_str()).collect::<Vec<_>>(),
+            vec!["Revisar Moodle", "Revisar Classroom", "Revisar Moodle"],
+            "miércoles 18:00, lunes 9:00 y el miércoles siguiente"
+        );
+        assert_eq!(proximos_recordatorios(&d, ahora, 1).len(), 1, "respeta el tope");
+
+        // Después de la hora del recordatorio de hoy, el de hoy ya no cuenta.
+        let tarde = proximos_recordatorios(&d, momento(2026, 11, 25, 19, 0), 1);
+        assert_eq!(tarde[0].texto, "Revisar Classroom");
     }
 
     #[test]
