@@ -29,6 +29,7 @@ const IDS: [(&str, char); 3] = [("clase", 'c'), ("tarea", 't'), ("recordatorio",
 
 /// El archivo de datos y todo lo necesario para leerlo y reemplazarlo sin
 /// perder nada. Se le puede dar cualquier ruta (las pruebas usan una temporal).
+#[derive(Clone)]
 pub struct Almacen {
     pub ruta: PathBuf,
 }

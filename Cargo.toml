@@ -13,6 +13,9 @@ toml_edit = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 slint = "1.19"
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }
+notify = "8"
+notify-rust = "4"
 
 [dev-dependencies]
 tempfile = "3"

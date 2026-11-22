@@ -162,6 +162,26 @@ pub fn mostrar_ventana() {
     });
 }
 
+/// Clic en el icono de la bandeja: si la ventana se ve, se oculta; si no, se
+/// muestra (creándola la primera vez).
+pub fn alternar_ventana() {
+    let visible = VENTANA.with(|celda| {
+        celda
+            .borrow()
+            .as_ref()
+            .is_some_and(|ui| ui.window().is_visible())
+    });
+    if visible {
+        VENTANA.with(|celda| {
+            if let Some(ui) = celda.borrow().as_ref() {
+                let _ = ui.hide();
+            }
+        });
+    } else {
+        mostrar_ventana();
+    }
+}
+
 /// Guarda los datos y vuelve a la semana actual. La usa main al arrancar y la
 /// usará el observador del archivo al recargar (Tarea 8).
 pub fn refrescar(datos: &Datos) {
@@ -169,6 +189,17 @@ pub fn refrescar(datos: &Datos) {
     con_estado(|estado| {
         estado.datos = Some(datos.clone());
         estado.lunes = semana::lunes_de(hoy);
+        estado.error = None;
+    });
+    actualizar_si_existe();
+}
+
+/// Recarga que no mueve nada de la ventana: se usa cuando el archivo cambia
+/// por fuera (Hermes o a mano). A diferencia de `refrescar`, no vuelve a la
+/// semana actual ni cierra el formulario que estuviera abierto.
+pub fn recargar(datos: &Datos) {
+    con_estado(|estado| {
+        estado.datos = Some(datos.clone());
         estado.error = None;
     });
     actualizar_si_existe();
@@ -203,6 +234,10 @@ pub fn mostrar_advertencias(advertencias: &[ErrorDatos]) {
 // ---------------------------------------------------------------------------
 
 fn conectar(ui: &AppWindow) {
+    // Cerrar con la X oculta la ventana: ORDER sigue en la bandeja.
+    ui.window()
+        .on_close_requested(|| slint::CloseRequestResponse::HideWindow);
+
     let debil = ui.as_weak();
     ui.on_semana_anterior(move || mover(&debil, -7));
 
@@ -715,6 +750,7 @@ fn guardar_ajustes(ui: &AppWindow) {
 fn terminar(ui: &AppWindow, resultado: Result<Datos, ErrorDatos>, volver_ajustes: bool) {
     match resultado {
         Ok(datos) => {
+            crate::sistema::publicar(&datos);
             con_estado(|estado| {
                 estado.datos = Some(datos);
                 estado.error = None;
@@ -768,6 +804,7 @@ fn borrar(ui: &AppWindow) {
     match resultado {
         Ok(datos) => {
             let volver_ajustes = matches!(edicion, Edicion::Recordatorio(_));
+            crate::sistema::publicar(&datos);
             con_estado(|estado| {
                 estado.datos = Some(datos);
                 estado.error = None;
@@ -794,6 +831,7 @@ fn marcar(ui: &AppWindow, id: &str) {
     let resultado = almacen().modificar(|doc| ops::marcar_tarea(doc, id, true, hoy));
     match resultado {
         Ok(datos) => {
+            crate::sistema::publicar(&datos);
             con_estado(|estado| {
                 estado.datos = Some(datos);
                 estado.error = None;
