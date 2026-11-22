@@ -3502,11 +3502,9 @@ dependencies = [
  "notify-rust",
  "order-core",
  "png",
- "serde_json",
  "slint",
  "slint-build",
  "tempfile",
- "ureq",
 ]
 
 [[package]]

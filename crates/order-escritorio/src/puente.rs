@@ -10,11 +10,12 @@
 //! nada y el error sale en el banner rojo mientras el formulario sigue abierto
 //! con lo que el usuario había escrito.
 
-use crate::agente::voz::{self, Grabacion};
+use crate::grabacion::{self, Grabacion};
 use order_core::agente::acciones::{self, Accion};
 use order_core::agente::cliente::{self, ErrorAgente};
 use order_core::agente::config::{self, AgenteConfig, Proveedor};
 use order_core::agente::contexto;
+use order_core::agente::voz;
 use order_core::almacen::Almacen;
 use order_core::filtros::{Filtro, TipoFecha};
 use order_core::modelo::{
@@ -1379,7 +1380,7 @@ fn grabar_voz(ui: &AppWindow) {
         return;
     }
 
-    match voz::empezar() {
+    match grabacion::empezar() {
         Ok(grabacion) => {
             // Reloj del indicador rojo mientras se graba.
             let debil = ui.as_weak();
@@ -1430,7 +1431,7 @@ fn detener_y_transcribir(ui: &AppWindow) {
         aviso(ui, "La grabación quedó vacía; revisa el micrófono.");
         return;
     }
-    let wav = match voz::a_wav(&muestras, tasa, canales) {
+    let wav = match grabacion::a_wav(&muestras, tasa, canales) {
         Ok(wav) => wav,
         Err(mensaje) => {
             aviso(ui, &format!("No se pudo preparar el audio — {mensaje}"));
