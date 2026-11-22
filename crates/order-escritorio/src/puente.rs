@@ -19,56 +19,26 @@ use order_core::agente::voz;
 use order_core::almacen::Almacen;
 use order_core::filtros::{Filtro, TipoFecha};
 use order_core::modelo::{
-    self, Ajustes, Clase, Datos, Dia, ErrorDatos, FORMATO_FECHA, FORMATO_HORA, Recordatorio,
-    Semestre, Tarea,
+    self, Ajustes, Clase, Datos, Dia, ErrorDatos, FORMATO_FECHA, Recordatorio, Tarea,
 };
-use order_core::ops::{self, NuevaTarea};
+use order_core::ops;
+use order_core::presentacion::formularios::{
+    self, codigo_fecha, fecha_del_codigo, interpretar_fecha, interpretar_hora, opcional,
+};
+use order_core::presentacion::materias::{self, canonica, materias_de, tono_materia};
+use order_core::presentacion::textos::{
+    self, DIAS_SEMANA, cuando_recordatorio, dias_del_mes, dias_texto, etiqueta_mes,
+    etiqueta_semana, fecha_larga, fecha_o_vacio, fecha_tarea, formato_tiempo, hora, hora_clase,
+    hora_o_vacio, horas_texto, mes_vecino, minutos, minutos_texto, pie,
+};
 use order_core::reloj::{self, a_12h, a_24h, etiqueta_hora, hora_texto};
 use order_core::semana;
-use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Timelike, Weekday};
+use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Timelike};
 use slint::{ModelRc, SharedString, VecModel, Weak};
 use std::cell::RefCell;
 use std::time::Duration;
 
 slint::include_modules!();
-
-const MESES: [&str; 12] = [
-    "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic",
-];
-const DIAS_LARGOS: [&str; 7] = [
-    "lunes",
-    "martes",
-    "miércoles",
-    "jueves",
-    "viernes",
-    "sábado",
-    "domingo",
-];
-const MESES_LARGOS: [&str; 12] = [
-    "enero",
-    "febrero",
-    "marzo",
-    "abril",
-    "mayo",
-    "junio",
-    "julio",
-    "agosto",
-    "septiembre",
-    "octubre",
-    "noviembre",
-    "diciembre",
-];
-
-/// Los días en el mismo orden que las fichas del formulario (lun → dom).
-const DIAS_SEMANA: [Dia; 7] = [
-    Dia::Lun,
-    Dia::Mar,
-    Dia::Mie,
-    Dia::Jue,
-    Dia::Vie,
-    Dia::Sab,
-    Dia::Dom,
-];
 
 /// Campos del formulario y de la barra de filtros que abren un selector.
 /// Los del formulario usan 1–4 (ver `campo-mal` en app.slint); los filtros de
@@ -832,25 +802,18 @@ fn guardar(ui: &AppWindow) {
 }
 
 fn guardar_tarea(ui: &AppWindow) {
-    let titulo = ui.get_f_titulo().trim().to_string();
-    if titulo.is_empty() {
-        falta(ui, 1, "El título no puede quedar vacío.");
-        return;
-    }
-    let Some(fecha) = interpretar_fecha(&ui.get_f_fecha()) else {
-        falta(ui, 2, "Elige la fecha de entrega.");
-        return;
-    };
-    let Some(hora) = interpretar_hora(&ui.get_f_hora()) else {
-        falta(ui, 3, "Elige la hora de entrega.");
-        return;
-    };
-
-    let materias = materias_actuales();
-    let nueva = NuevaTarea {
-        titulo,
-        materia: opcional(&canonica(&materias, &ui.get_f_materia())),
-        vence: fecha.and_time(hora),
+    let nueva = match formularios::validar_tarea(
+        &ui.get_f_titulo(),
+        &ui.get_f_fecha(),
+        &ui.get_f_hora(),
+        &ui.get_f_materia(),
+        &materias_actuales(),
+    ) {
+        Ok(nueva) => nueva,
+        Err(err) => {
+            falta(ui, err.campo, &err.mensaje);
+            return;
+        }
     };
     let hecha = ui.get_f_hecha();
     let edicion = con_estado(|estado| estado.edicion.clone());
@@ -879,41 +842,24 @@ fn guardar_tarea(ui: &AppWindow) {
 }
 
 fn guardar_clase(ui: &AppWindow) {
-    let materia = ui.get_f_materia().trim().to_string();
-    if materia.is_empty() {
-        falta(ui, 1, "La materia no puede quedar vacía.");
-        return;
-    }
-    let dias = dias_de_clase(ui);
-    if dias.is_empty() {
-        falta(ui, 4, "Marca al menos un día para la clase.");
-        return;
-    }
-    let Some(inicio) = interpretar_hora(&ui.get_f_hora()) else {
-        falta(ui, 2, "Elige la hora de inicio.");
-        return;
-    };
-    let Some(fin) = interpretar_hora(&ui.get_f_fin()) else {
-        falta(ui, 3, "Elige la hora de fin.");
-        return;
-    };
-    if fin <= inicio {
-        falta(ui, 3, "La hora de fin debe ser posterior a la de inicio.");
-        return;
-    }
-
     let id = match con_estado(|estado| estado.edicion.clone()) {
         Edicion::Clase(id) => id,
         _ => String::new(),
     };
-    let materia = canonica(&materias_actuales(), &materia);
-    let clase = Clase {
+    let clase = match formularios::validar_clase(
         id,
-        materia,
-        dias,
-        inicio,
-        fin,
-        lugar: opcional(&ui.get_f_lugar()),
+        &ui.get_f_materia(),
+        dias_de_clase(ui),
+        &ui.get_f_hora(),
+        &ui.get_f_fin(),
+        &ui.get_f_lugar(),
+        &materias_actuales(),
+    ) {
+        Ok(clase) => clase,
+        Err(err) => {
+            falta(ui, err.campo, &err.mensaje);
+            return;
+        }
     };
 
     let resultado = almacen().modificar(|doc| ops::guardar_clase(doc, &clase));
@@ -921,30 +867,21 @@ fn guardar_clase(ui: &AppWindow) {
 }
 
 fn guardar_recordatorio(ui: &AppWindow) {
-    let texto = ui.get_r_texto().trim().to_string();
-    if texto.is_empty() {
-        falta(ui, 1, "El texto del recordatorio no puede quedar vacío.");
-        return;
-    }
-    let Some(hora) = interpretar_hora(&ui.get_r_hora()) else {
-        falta(ui, 2, "Elige la hora del recordatorio.");
-        return;
-    };
-    let dias = dias_del_recordatorio(ui);
-    if dias.is_empty() {
-        falta(ui, 4, "Marca al menos un día para el recordatorio.");
-        return;
-    }
-
     let id = match con_estado(|estado| estado.edicion.clone()) {
         Edicion::Recordatorio(id) => id,
         _ => String::new(),
     };
-    let recordatorio = Recordatorio {
+    let recordatorio = match formularios::validar_recordatorio(
         id,
-        texto,
-        dias,
-        hora,
+        &ui.get_r_texto(),
+        &ui.get_r_hora(),
+        dias_del_recordatorio(ui),
+    ) {
+        Ok(recordatorio) => recordatorio,
+        Err(err) => {
+            falta(ui, err.campo, &err.mensaje);
+            return;
+        }
     };
 
     let resultado = almacen().modificar(|doc| ops::guardar_recordatorio(doc, &recordatorio));
@@ -954,45 +891,18 @@ fn guardar_recordatorio(ui: &AppWindow) {
 }
 
 fn guardar_ajustes(ui: &AppWindow) {
-    let mut semestre = None;
-    if !ui.get_a_sin_semestre() {
-        let Some(inicio) = interpretar_fecha(&ui.get_a_inicio()) else {
-            falta(ui, 1, "Elige el inicio del semestre.");
-            return;
-        };
-        let Some(fin) = interpretar_fecha(&ui.get_a_fin()) else {
-            falta(ui, 2, "Elige el fin del semestre.");
-            return;
-        };
-        if fin < inicio {
-            falta(ui, 2, "El fin del semestre debe ser posterior al inicio.");
+    let (ajustes, semestre) = match formularios::validar_ajustes(
+        ui.get_a_sin_semestre(),
+        &ui.get_a_inicio(),
+        &ui.get_a_fin(),
+        &ui.get_a_hora(),
+        &ui.get_a_horas(),
+    ) {
+        Ok(par) => par,
+        Err(err) => {
+            falta(ui, err.campo, &err.mensaje);
             return;
         }
-        semestre = Some(Semestre { inicio, fin });
-    }
-
-    let Some(aviso) = interpretar_hora(&ui.get_a_hora()) else {
-        falta(ui, 3, "Elige la hora del aviso.");
-        return;
-    };
-    let horas = ui
-        .get_a_horas()
-        .trim()
-        .parse::<u32>()
-        .ok()
-        .filter(|horas| (1..=168).contains(horas));
-    let Some(aviso_horas_antes) = horas else {
-        falta(
-            ui,
-            4,
-            "Las horas de aviso deben ser un número entre 1 y 168.",
-        );
-        return;
-    };
-
-    let ajustes = Ajustes {
-        aviso_dia_antes: aviso,
-        aviso_horas_antes,
     };
     let resultado = almacen().modificar(|doc| {
         ops::guardar_ajustes(doc, &ajustes)?;
@@ -1131,44 +1041,20 @@ fn abrir_agente(ui: &AppWindow) {
 
 /// Guarda la sección del agente; vuelve a Ajustes.
 fn guardar_agente(ui: &AppWindow) {
-    let prueba = |url: &str, modelo: &str| -> Result<(), String> {
-        if url.trim().is_empty() {
-            return Err("La URL base no puede quedar vacía.".to_string());
+    let agente = match formularios::validar_agente(
+        ui.get_a_proveedor(),
+        &ui.get_a_url(),
+        &ui.get_a_modelo(),
+        &ui.get_a_key(),
+        &ui.get_v_url(),
+        &ui.get_v_modelo(),
+        &ui.get_v_key(),
+    ) {
+        Ok(agente) => agente,
+        Err(err) => {
+            falta(ui, err.campo, &err.mensaje);
+            return;
         }
-        if !url.trim().starts_with("http") {
-            return Err("La URL base debe empezar por http:// o https://.".to_string());
-        }
-        if modelo.trim().is_empty() {
-            return Err("El modelo no puede quedar vacío.".to_string());
-        }
-        Ok(())
-    };
-    let url = ui.get_a_url().trim().to_string();
-    let modelo = ui.get_a_modelo().trim().to_string();
-    if let Err(mensaje) = prueba(&url, &modelo) {
-        falta(ui, if url.trim().is_empty() { 1 } else { 2 }, &mensaje);
-        return;
-    }
-
-    // La voz tiene sus propios valores por defecto: un campo vacío no deja la
-    // sección sin URL ni modelo.
-    let defecto = config::Voz::default();
-    let voz = config::Voz {
-        url_base: valor_o(ui.get_v_url().trim(), &defecto.url_base),
-        modelo: valor_o(ui.get_v_modelo().trim(), &defecto.modelo),
-        api_key: ui.get_v_key().trim().to_string(),
-    };
-    if !voz.api_key.is_empty() && !voz.url_base.starts_with("http") {
-        falta(ui, 3, "La URL de la voz debe empezar por http:// o https://.");
-        return;
-    }
-
-    let agente = AgenteConfig {
-        proveedor: Proveedor::de_codigo(ui.get_a_proveedor()),
-        url_base: url,
-        modelo,
-        api_key: ui.get_a_key().trim().to_string(),
-        voz,
     };
 
     match config::guardar(&agente) {
@@ -1330,29 +1216,18 @@ fn descartar_accion(ui: &AppWindow, indice: i32) {
 /// Aplica en orden; si una falla, se detiene y dice cuántas quedaron hechas.
 fn aplicar_todas(ui: &AppWindow) {
     let pendientes = con_estado(|estado| estado.acciones.clone());
-    let mut aplicadas = 0;
-    let mut fallo = None;
-    for accion in &pendientes {
-        match acciones::aplicar(&almacen(), accion) {
-            Ok(datos) => {
-                crate::sistema::publicar(&datos);
-                con_estado(|estado| {
-                    estado.datos = Some(datos);
-                    estado.error = None;
-                    if !estado.acciones.is_empty() {
-                        estado.acciones.remove(0);
-                    }
-                });
-                aplicadas += 1;
-            }
-            Err(error) => {
-                fallo = Some(format!("Aplicadas {aplicadas}; falló «{}» — {error}", accion.etiqueta()));
-                break;
-            }
-        }
+    let resultado = acciones::aplicar_todas(&almacen(), &pendientes);
+    if let Some(datos) = resultado.ultimos_datos {
+        crate::sistema::publicar(&datos);
+        con_estado(|estado| {
+            estado.datos = Some(datos);
+            estado.error = None;
+            let quitar = resultado.aplicadas.min(estado.acciones.len());
+            estado.acciones.drain(..quitar);
+        });
     }
 
-    match fallo {
+    match resultado.error {
         Some(mensaje) => {
             con_estado(|estado| estado.error = Some(mensaje));
         }
@@ -1483,11 +1358,6 @@ fn recibir_transcripcion(ui: &AppWindow, salida: Result<String, ErrorAgente>) {
         }
     }
     actualizar(ui);
-}
-
-/// "0:07" para el indicador de grabación.
-fn formato_tiempo(segundos: u64) -> String {
-    format!("{}:{:02}", segundos / 60, segundos % 60)
 }
 
 // ---------------------------------------------------------------------------
@@ -1659,7 +1529,10 @@ fn construir_vista() -> Vista {
                 .iter()
                 .map(|recordatorio| recordatorio_ui(recordatorio, hoy))
                 .collect(),
-            resumen: resumen(&tareas, estado.filtro.activo()),
+            resumen: {
+                let hechas: Vec<bool> = tareas.iter().map(|tarea| tarea.hecha).collect();
+                textos::resumen(&hechas, estado.filtro.activo())
+            },
             pie: pie(datos, pendientes.len(), ahora),
             tareas,
             recordatorios: recordatorios_ui(datos),
@@ -1703,24 +1576,14 @@ fn construir_vista() -> Vista {
     })
 }
 
-/// "7:00–9:00 a. m.".
-fn rango_hora(bloque: &semana::Bloque) -> String {
-    reloj::rango_texto(bloque.inicio, bloque.fin)
-}
-
 /// Una clase para las vistas de resumen. Si no es de hoy, la hora lleva delante
 /// el día ("jue 26 nov · 09:00–11:00").
 fn clase_ui(bloque: &semana::Bloque, fecha: NaiveDate, hoy: NaiveDate) -> ClaseInicioUI {
-    let hora = if fecha == hoy {
-        rango_hora(bloque)
-    } else {
-        format!("{} {} · {}", nombre_dia(fecha).to_lowercase(), fecha_corta(fecha), rango_hora(bloque))
-    };
     ClaseInicioUI {
         id: bloque.clase_id.clone().into(),
         materia: bloque.materia.clone().into(),
         lugar: bloque.lugar.clone().unwrap_or_default().into(),
-        hora: hora.into(),
+        hora: hora_clase(bloque, fecha, hoy).into(),
         tono: tono_materia(&bloque.materia),
     }
 }
@@ -1731,13 +1594,7 @@ fn tarea_a_ui(tarea: &Tarea, ahora: NaiveDateTime) -> TareaUI {
         id: tarea.id.clone().into(),
         titulo: tarea.titulo.clone().into(),
         materia: tarea.materia.clone().unwrap_or_default().into(),
-        fecha: format!(
-            "{} {} · {}",
-            nombre_dia(tarea.vence.date()),
-            fecha_corta(tarea.vence.date()),
-            hora_texto(tarea.vence.time())
-        )
-        .into(),
+        fecha: fecha_tarea(tarea.vence).into(),
         vencida: semana::vencida(tarea, ahora),
         hecha: tarea.hecha,
         tono: tono_materia(tarea.materia.as_deref().unwrap_or("")),
@@ -1747,33 +1604,11 @@ fn tarea_a_ui(tarea: &Tarea, ahora: NaiveDateTime) -> TareaUI {
 /// Un recordatorio con su cuándo escrito: "hoy · 6:00 p. m.", "mañana · 9:00
 /// a. m." o "lun 30 nov · 9:00 a. m.".
 fn recordatorio_ui(recordatorio: &semana::RecordatorioVisto, hoy: NaiveDate) -> RecordatorioInicioUI {
-    let hora = hora_texto(recordatorio.hora);
-    let cuando = if recordatorio.fecha == hoy {
-        format!("hoy · {hora}")
-    } else if recordatorio.fecha == hoy + TimeDelta::days(1) {
-        format!("mañana · {hora}")
-    } else {
-        format!(
-            "{} {} · {hora}",
-            nombre_dia(recordatorio.fecha).to_lowercase(),
-            fecha_corta(recordatorio.fecha)
-        )
-    };
     RecordatorioInicioUI {
         id: recordatorio.id.clone().into(),
         texto: recordatorio.texto.clone().into(),
-        cuando: cuando.into(),
+        cuando: cuando_recordatorio(recordatorio, hoy).into(),
     }
-}
-
-/// "miércoles 25 de noviembre", para la cabecera de Inicio y de Día.
-fn fecha_larga(fecha: NaiveDate) -> String {
-    format!(
-        "{} {} de {}",
-        DIAS_LARGOS[fecha.weekday().num_days_from_monday() as usize],
-        fecha.day(),
-        MESES_LARGOS[fecha.month0() as usize]
-    )
 }
 
 fn dia_ui(dia: &semana::DiaVista) -> DiaUI {
@@ -1795,8 +1630,8 @@ fn dia_ui(dia: &semana::DiaVista) -> DiaUI {
     };
 
     DiaUI {
-        nombre: nombre_dia(dia.fecha).to_string().into(),
-        fecha: fecha_corta(dia.fecha).into(),
+        nombre: textos::nombre_dia(dia.fecha).to_string().into(),
+        fecha: textos::fecha_corta(dia.fecha).into(),
         es_hoy: dia.fecha == Local::now().date_naive(),
         bloques: ModelRc::new(VecModel::from(
             dia.bloques
@@ -2026,11 +1861,18 @@ fn pintar_calendario(ui: &AppWindow) {
         return;
     };
     ui.set_sel_mes_texto(etiqueta_mes(seleccion.anio, seleccion.mes).into());
-    ui.set_sel_celdas(ModelRc::new(VecModel::from(celdas_mes(
-        seleccion.anio,
-        seleccion.mes,
-        seleccion.dia,
-    ))));
+    let hoy = Local::now().date_naive();
+    let celdas: Vec<CeldaDia> = textos::celdas_mes(seleccion.anio, seleccion.mes, seleccion.dia, hoy)
+        .into_iter()
+        .map(|celda| CeldaDia {
+            dia: celda.dia,
+            fila: celda.fila,
+            columna: celda.columna,
+            hoy: celda.hoy,
+            elegida: celda.elegida,
+        })
+        .collect();
+    ui.set_sel_celdas(ModelRc::new(VecModel::from(celdas)));
 }
 
 fn pintar_hora(ui: &AppWindow) {
@@ -2120,86 +1962,6 @@ fn modelo_textos(textos: &[String]) -> ModelRc<SharedString> {
     ))
 }
 
-/// Las doce horas de la rueda, de la 1 a las 12.
-fn horas_texto() -> Vec<String> {
-    (1..=12).map(|hora| hora.to_string()).collect()
-}
-
-fn minutos_texto() -> Vec<String> {
-    (0..60).map(|minuto| format!("{minuto:02}")).collect()
-}
-
-fn etiqueta_mes(anio: i32, mes: u32) -> String {
-    let nombre = MESES_LARGOS
-        .get(mes.saturating_sub(1) as usize)
-        .copied()
-        .unwrap_or("mes");
-    format!("{nombre} de {anio}")
-}
-
-/// El mes que está `delta` meses antes o después, cruzando años.
-fn mes_vecino(anio: i32, mes: u32, delta: i32) -> (i32, u32) {
-    let total = anio * 12 + mes as i32 - 1 + delta;
-    (total.div_euclid(12), (total.rem_euclid(12) + 1) as u32)
-}
-
-fn dias_del_mes(anio: i32, mes: u32) -> i32 {
-    let (siguiente_anio, siguiente_mes) = mes_vecino(anio, mes, 1);
-    NaiveDate::from_ymd_opt(siguiente_anio, siguiente_mes, 1)
-        .and_then(|primero| primero.pred_opt())
-        .map(|ultimo| ultimo.day() as i32)
-        .unwrap_or(30)
-}
-
-/// Seis semanas de siete casillas, con el día 1 en su columna real.
-fn celdas_mes(anio: i32, mes: u32, elegido: u32) -> Vec<CeldaDia> {
-    let Some(primero) = NaiveDate::from_ymd_opt(anio, mes, 1) else {
-        return Vec::new();
-    };
-    let desfase = primero.weekday().num_days_from_monday() as i32;
-    let dias = dias_del_mes(anio, mes);
-    let hoy = Local::now().date_naive();
-
-    (0..42)
-        .map(|i| {
-            let dia = i - desfase + 1;
-            let dentro = (1..=dias).contains(&dia);
-            CeldaDia {
-                dia: if dentro { dia } else { 0 },
-                fila: i / 7,
-                columna: i % 7,
-                hoy: dentro && hoy.year() == anio && hoy.month() == mes && hoy.day() as i32 == dia,
-                elegida: dentro && dia == elegido as i32,
-            }
-        })
-        .collect()
-}
-
-/// Las materias del archivo, en el orden en que aparecen (primero las clases),
-/// sin repetir aunque cambien mayúsculas o acentos.
-fn materias_de(datos: &Datos) -> Vec<String> {
-    let mut lista: Vec<String> = Vec::new();
-    let mut claves: Vec<String> = Vec::new();
-    for materia in datos
-        .clases
-        .iter()
-        .map(|clase| &clase.materia)
-        .chain(datos.tareas.iter().filter_map(|tarea| tarea.materia.as_ref()))
-    {
-        let materia = materia.trim();
-        if materia.is_empty() {
-            continue;
-        }
-        let clave = clave_materia(materia);
-        if claves.contains(&clave) {
-            continue;
-        }
-        claves.push(clave);
-        lista.push(materia.to_string());
-    }
-    lista
-}
-
 fn materias_actuales() -> Vec<String> {
     con_estado(|estado| {
         estado
@@ -2212,213 +1974,13 @@ fn materias_actuales() -> Vec<String> {
 
 /// Las materias del archivo con el tono que les toca, para el selector.
 fn materias_ui(materias: &[String]) -> Vec<MateriaUI> {
-    materias
-        .iter()
+    materias::materias_con_tono(materias)
+        .into_iter()
         .map(|materia| MateriaUI {
-            nombre: materia.as_str().into(),
-            tono: tono_materia(materia),
+            nombre: materia.nombre.into(),
+            tono: materia.tono,
         })
         .collect()
-}
-
-/// La grafía que ya existe para esa materia, o el texto tal cual si es nueva.
-fn canonica(materias: &[String], texto: &str) -> String {
-    modelo::canonica_materia(materias, texto)
-}
-
-/// Clave de comparación: minúsculas, sin acentos y con un solo espacio entre
-/// palabras. "Robótica  " y "robotica" dan la misma clave.
-fn clave_materia(texto: &str) -> String {
-    modelo::clave_materia(texto)
-}
-
-// ---------------------------------------------------------------------------
-// Color de las materias
-// ---------------------------------------------------------------------------
-// Cada materia tiene un color suave y estable, sacado solo de su nombre: el
-// mismo nombre da siempre el mismo tono, sin importar mayúsculas, acentos ni
-// el orden del archivo. La paleta vive en `tema.slint` (`Tema.materias` y
-// `Tema.materias-fondo`); aquí solo se elige el índice.
-
-/// Cuántos tonos tiene la paleta de materias de `tema.slint`.
-pub const TONOS_MATERIA: i32 = 9;
-
-/// El tono gris de los elementos sin materia: el último de la paleta.
-pub const TONO_SIN_MATERIA: i32 = TONOS_MATERIA - 1;
-
-/// El tono que le toca a una materia. Vacía (o "Sin materia") va en gris.
-pub fn tono_materia(materia: &str) -> i32 {
-    let clave = clave_materia(materia);
-    if clave.is_empty() || clave == "sin materia" {
-        return TONO_SIN_MATERIA;
-    }
-    // djb2 (h * 33 ^ byte): barato y reparte bien los nombres cortos.
-    let mut hash: u32 = 5381;
-    for byte in clave.as_bytes() {
-        hash = hash.wrapping_mul(33) ^ u32::from(*byte);
-    }
-    (hash % TONOS_MATERIA as u32) as i32
-}
-
-// ---------------------------------------------------------------------------
-// Textos y cálculos pequeños
-// ---------------------------------------------------------------------------
-
-fn minutos(hora: NaiveTime) -> i32 {
-    hora.hour() as i32 * 60 + hora.minute() as i32
-}
-
-fn hora(h: u32, m: u32) -> NaiveTime {
-    NaiveTime::from_hms_opt(h, m, 0).unwrap_or_default()
-}
-
-fn nombre_dia(fecha: NaiveDate) -> &'static str {
-    texto_dia(dia_de(fecha.weekday()))
-}
-
-fn texto_dia(dia: Dia) -> &'static str {
-    match dia {
-        Dia::Lun => "Lun",
-        Dia::Mar => "Mar",
-        Dia::Mie => "Mié",
-        Dia::Jue => "Jue",
-        Dia::Vie => "Vie",
-        Dia::Sab => "Sáb",
-        Dia::Dom => "Dom",
-    }
-}
-
-fn dias_texto(dias: &[Dia]) -> String {
-    dias.iter()
-        .map(|dia| texto_dia(*dia))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// La opción de fecha de la barra de filtros: 0 Todas · 1 Hoy · 2 Esta semana
-/// · 3 Rango. El orden es el de las fichas que dibuja pendientes.slint.
-fn codigo_fecha(tipo: TipoFecha) -> i32 {
-    match tipo {
-        TipoFecha::Todas => 0,
-        TipoFecha::Hoy => 1,
-        TipoFecha::EstaSemana => 2,
-        TipoFecha::Rango => 3,
-    }
-}
-
-fn fecha_del_codigo(codigo: i32) -> TipoFecha {
-    match codigo {
-        1 => TipoFecha::Hoy,
-        2 => TipoFecha::EstaSemana,
-        3 => TipoFecha::Rango,
-        _ => TipoFecha::Todas,
-    }
-}
-
-fn fecha_o_vacio(fecha: Option<NaiveDate>) -> String {
-    fecha
-        .map(|fecha| fecha.format(FORMATO_FECHA).to_string())
-        .unwrap_or_default()
-}
-
-fn hora_o_vacio(hora: Option<NaiveTime>) -> String {
-    hora.map(hora_texto).unwrap_or_default()
-}
-
-fn fecha_corta(fecha: NaiveDate) -> String {
-    format!("{} {}", fecha.day(), MESES[fecha.month0() as usize])
-}
-
-/// "17 – 21 de noviembre de 2026", o "30 de noviembre – 4 de diciembre de 2026"
-/// cuando la semana cruza de mes.
-fn etiqueta_semana(lunes: NaiveDate, dias: &[semana::DiaVista]) -> String {
-    let Some(ultimo) = dias.last() else {
-        return String::new();
-    };
-    let fin = ultimo.fecha;
-    if lunes.month() == fin.month() {
-        format!(
-            "{} – {} de {} de {}",
-            lunes.day(),
-            fin.day(),
-            MESES_LARGOS[lunes.month0() as usize],
-            lunes.year()
-        )
-    } else {
-        format!(
-            "{} {} – {} {} de {}",
-            lunes.day(),
-            MESES_LARGOS[lunes.month0() as usize],
-            fin.day(),
-            MESES_LARGOS[fin.month0() as usize],
-            fin.year()
-        )
-    }
-}
-
-/// Lo que dice la cabecera de Pendientes: cuántas quedan y cuántas hechas se
-/// están viendo. Con filtros puestos, se dice que la lista está filtrada.
-fn resumen(tareas: &[TareaUI], filtrado: bool) -> String {
-    let hechas = tareas.iter().filter(|tarea| tarea.hecha).count();
-    let pendientes = tareas.len() - hechas;
-    let cuerpo = match (pendientes, hechas) {
-        (0, 0) if filtrado => "sin resultados para estos filtros".to_string(),
-        (0, 0) => "nada por entregar".to_string(),
-        (1, 0) => "1 tarea pendiente".to_string(),
-        (n, 0) => format!("{n} tareas pendientes"),
-        (0, 1) => "1 tarea hecha".to_string(),
-        (0, h) => format!("{h} tareas hechas"),
-        (1, 1) => "1 pendiente · 1 hecha".to_string(),
-        (1, h) => format!("1 pendiente · {h} hechas"),
-        (n, 1) => format!("{n} pendientes · 1 hecha"),
-        (n, h) => format!("{n} pendientes · {h} hechas"),
-    };
-    // "sin resultados para estos filtros" ya lo dice todo: no se repite.
-    if filtrado && !cuerpo.starts_with("sin resultados") {
-        format!("{cuerpo} (filtrado)")
-    } else {
-        cuerpo
-    }
-}
-
-fn pie(datos: &Datos, pendientes: usize, ahora: NaiveDateTime) -> String {
-    let mut texto = match pendientes {
-        0 => "Hoy: sin tareas pendientes".to_string(),
-        1 => "Hoy: 1 tarea pendiente".to_string(),
-        n => format!("Hoy: {n} tareas pendientes"),
-    };
-    if let Some((recordatorio, momento)) = proximo_recordatorio(datos, ahora) {
-        let hora = hora_texto(momento.time());
-        let cuando = if momento.date() == ahora.date() {
-            hora
-        } else {
-            format!("{} {}", nombre_dia(momento.date()).to_lowercase(), hora)
-        };
-        texto.push_str(&format!(" · {recordatorio} {cuando}"));
-    }
-    texto
-}
-
-/// El próximo recordatorio que toca, buscando en los próximos ocho días. Sale
-/// de la misma lista sin repetidos que la pestaña Inicio, así que el pie dice
-/// siempre el que viene antes, y una sola vez aunque el recordatorio sea diario.
-fn proximo_recordatorio(datos: &Datos, ahora: NaiveDateTime) -> Option<(String, NaiveDateTime)> {
-    let proximo = semana::proximos_recordatorios(datos, ahora, 1)
-        .into_iter()
-        .next()?;
-    Some((proximo.texto, proximo.fecha.and_time(proximo.hora)))
-}
-
-fn dia_de(dia: Weekday) -> Dia {
-    match dia {
-        Weekday::Mon => Dia::Lun,
-        Weekday::Tue => Dia::Mar,
-        Weekday::Wed => Dia::Mie,
-        Weekday::Thu => Dia::Jue,
-        Weekday::Fri => Dia::Vie,
-        Weekday::Sat => Dia::Sab,
-        Weekday::Sun => Dia::Dom,
-    }
 }
 
 /// Los siete días marcados en el formulario de recordatorio.
@@ -2479,55 +2041,6 @@ fn poner_dias_clase(ui: &AppWindow, dias: &[Dia]) {
     ui.set_f_dom(dias.contains(&Dia::Dom));
 }
 
-/// Texto del campo, o `None` si quedó vacío (para los campos opcionales).
-fn opcional(texto: &str) -> Option<String> {
-    let texto = texto.trim();
-    if texto.is_empty() {
-        None
-    } else {
-        Some(texto.to_string())
-    }
-}
-
-/// Texto escrito o, si está vacío, el valor por defecto.
-fn valor_o(texto: &str, defecto: &str) -> String {
-    let texto = texto.trim();
-    if texto.is_empty() {
-        defecto.to_string()
-    } else {
-        texto.to_string()
-    }
-}
-
-fn interpretar_fecha(texto: &str) -> Option<NaiveDate> {
-    NaiveDate::parse_from_str(texto.trim(), FORMATO_FECHA).ok()
-}
-
-/// Acepta lo que escriben los campos: "23:59" (24 h) y también "11:59 p. m.",
-/// "7:00 a. m." o "7:00am", que es como se leen las horas en la ventana.
-fn interpretar_hora(texto: &str) -> Option<NaiveTime> {
-    let limpio = texto.trim();
-    if let Ok(hora) = NaiveTime::parse_from_str(limpio, FORMATO_HORA) {
-        return Some(hora);
-    }
-    let compacto: String = limpio
-        .to_lowercase()
-        .chars()
-        .filter(|caracter| !caracter.is_whitespace() && *caracter != '.')
-        .collect();
-    let (reloj, tarde) = compacto
-        .strip_suffix("am")
-        .map(|reloj| (reloj, false))
-        .or_else(|| compacto.strip_suffix("pm").map(|reloj| (reloj, true)))?;
-    let (horas, minutos) = reloj.split_once(':')?;
-    let horas: u32 = horas.parse().ok()?;
-    let minutos: u32 = minutos.parse().ok()?;
-    if !(1..=12).contains(&horas) || minutos > 59 {
-        return None;
-    }
-    NaiveTime::from_hms_opt(a_24h(horas, tarde), minutos, 0)
-}
-
 fn almacen() -> Almacen {
     Almacen::por_defecto()
 }
@@ -2580,250 +2093,7 @@ mod pruebas {
         fecha(anio, mes, dia).and_hms_opt(h, m, 0).unwrap()
     }
 
-    fn datos() -> Datos {
-        datos_vacios()
-    }
-
-    #[test]
-    fn etiqueta_dentro_del_mes() {
-        let dias = semana::semana(&datos(), fecha(2026, 11, 16));
-        assert_eq!(
-            etiqueta_semana(fecha(2026, 11, 16), &dias),
-            "16 – 20 de noviembre de 2026"
-        );
-    }
-
-    #[test]
-    fn etiqueta_cruzando_mes() {
-        let dias = semana::semana(&datos(), fecha(2026, 11, 30));
-        assert_eq!(
-            etiqueta_semana(fecha(2026, 11, 30), &dias),
-            "30 noviembre – 4 diciembre de 2026"
-        );
-    }
-
-    #[test]
-    fn pie_resume_pendientes_y_recordatorio() {
-        let mut d = datos();
-        d.recordatorios.push(Recordatorio {
-            id: "r-uno".into(),
-            texto: "Revisar Moodle".into(),
-            dias: vec![Dia::Vie],
-            hora: NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
-        });
-        // Viernes 20-nov-2026, 17:00.
-        let texto = pie(&d, 2, momento(2026, 11, 20, 17, 0));
-        assert_eq!(
-            texto,
-            "Hoy: 2 tareas pendientes · Revisar Moodle 6:00 p. m."
-        );
-    }
-
-    #[test]
-    fn proximo_recordatorio_salta_al_siguiente_dia() {
-        let mut d = datos();
-        d.recordatorios.push(Recordatorio {
-            id: "r-uno".into(),
-            texto: "Revisar Classroom".into(),
-            dias: vec![Dia::Lun],
-            hora: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
-        });
-        // Viernes 20-nov-2026: el próximo lunes es el 23.
-        let (texto, cuando) = proximo_recordatorio(&d, momento(2026, 11, 20, 10, 0)).unwrap();
-        assert_eq!(texto, "Revisar Classroom");
-        assert_eq!(cuando, momento(2026, 11, 23, 9, 0));
-    }
-
-    #[test]
-    fn sin_recordatorios_el_pie_es_solo_el_conteo() {
-        assert_eq!(
-            pie(&datos(), 1, momento(2026, 11, 20, 10, 0)),
-            "Hoy: 1 tarea pendiente"
-        );
-    }
-
-    /// El pie enseña el próximo recordatorio una sola vez, aunque sea diario.
-    #[test]
-    fn el_pie_no_repite_recordatorios() {
-        let mut d = datos();
-        d.recordatorios.push(Recordatorio {
-            id: "r-moodle".into(),
-            texto: "Revisar Moodle".into(),
-            dias: vec![Dia::Lun, Dia::Mar, Dia::Mie, Dia::Jue, Dia::Vie],
-            hora: NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
-        });
-        // Viernes 20-nov-2026, 17:00: el de hoy a las 18:00.
-        assert_eq!(
-            pie(&d, 0, momento(2026, 11, 20, 17, 0)),
-            "Hoy: sin tareas pendientes · Revisar Moodle 6:00 p. m."
-        );
-        // Pasadas las 18:00, el lunes a la misma hora: una sola vez.
-        assert_eq!(
-            pie(&d, 0, momento(2026, 11, 20, 19, 0)),
-            "Hoy: sin tareas pendientes · Revisar Moodle lun 6:00 p. m."
-        );
-    }
-
-    /// Los formularios aceptan los formatos del archivo y las horas tal como
-    /// se leen en la ventana (12 h con a. m. / p. m.).
-    #[test]
-    fn solo_acepta_los_formatos_del_archivo() {
-        assert_eq!(interpretar_fecha("2026-11-28"), Some(fecha(2026, 11, 28)));
-        assert_eq!(interpretar_fecha(" 2026-11-28 "), Some(fecha(2026, 11, 28)));
-        assert_eq!(interpretar_fecha("28/11/2026"), None);
-        assert_eq!(interpretar_fecha(""), None);
-
-        assert_eq!(
-            interpretar_hora("23:59"),
-            Some(NaiveTime::from_hms_opt(23, 59, 0).unwrap())
-        );
-        assert_eq!(interpretar_hora("25:00"), None);
-        assert_eq!(interpretar_hora("7"), None);
-    }
-
-    /// El campo de hora entiende lo que la ventana muestra (12 h) y lo que
-    /// hay escrito en el archivo (24 h).
-    #[test]
-    fn el_campo_de_hora_entiende_las_dos_formas() {
-        for (texto, esperada) in [
-            ("7:00 a. m.", hora(7, 0)),
-            ("07:00 a.m.", hora(7, 0)),
-            ("7:00am", hora(7, 0)),
-            ("12:00 a. m.", hora(0, 0)),
-            ("12:00 p. m.", hora(12, 0)),
-            ("11:59 p. m.", hora(23, 59)),
-            ("2:30 p. m.", hora(14, 30)),
-            ("23:59", hora(23, 59)),
-        ] {
-            assert_eq!(interpretar_hora(texto), Some(esperada), "{texto}");
-        }
-        assert_eq!(interpretar_hora("13:00 p. m."), None, "13 no existe en 12 h");
-        assert_eq!(interpretar_hora("7:60 a. m."), None);
-        assert_eq!(interpretar_hora("7:00 x. m."), None);
-        assert_eq!(hora_texto(hora(14, 30)), "2:30 p. m.");
-    }
-
-    #[test]
-    fn dias_del_recordatorio_en_orden() {
-        assert_eq!(dias_texto(&[Dia::Lun, Dia::Mie, Dia::Dom]), "Lun, Mié, Dom");
-        assert_eq!(DIAS_SEMANA[0], Dia::Lun, "el formulario empieza en lunes");
-        assert_eq!(DIAS_SEMANA[6], Dia::Dom);
-    }
-
-    /// El calendario pone el día 1 en su columna y marca el elegido.
-    #[test]
-    fn calendario_del_mes() {
-        // Noviembre de 2026 empieza en domingo (columna 6) y tiene 30 días.
-        let celdas = celdas_mes(2026, 11, 21);
-        assert_eq!(celdas.len(), 42, "siempre seis semanas");
-        assert!(celdas[..6].iter().all(|celda| celda.dia == 0), "huecos");
-        assert_eq!(celdas[6].dia, 1, "el 1 va en la columna del domingo");
-        assert_eq!(celdas[6].columna, 6);
-        assert_eq!(celdas[6].fila, 0);
-        let veintiuno = celdas.iter().find(|celda| celda.dia == 21).unwrap();
-        assert!(veintiuno.elegida, "el día elegido va marcado");
-        assert_eq!(
-            celdas.iter().filter(|celda| celda.elegida).count(),
-            1,
-            "solo uno elegido"
-        );
-    }
-
-    #[test]
-    fn meses_vecinos_cruzan_el_anio() {
-        assert_eq!(mes_vecino(2026, 12, 1), (2027, 1));
-        assert_eq!(mes_vecino(2026, 1, -1), (2025, 12));
-        assert_eq!(mes_vecino(2026, 11, -1), (2026, 10));
-        assert_eq!(dias_del_mes(2028, 2), 29, "año bisiesto");
-        assert_eq!(dias_del_mes(2026, 11), 30);
-        assert_eq!(etiqueta_mes(2026, 11), "noviembre de 2026");
-    }
-
-    /// La lista de materias no repite y manda la grafía del archivo.
-    #[test]
-    fn materias_sin_duplicados_ni_acentos() {
-        let mut d = datos();
-        d.clases.push(Clase {
-            id: "c-uno".into(),
-            materia: "Robótica".into(),
-            dias: vec![Dia::Lun],
-            inicio: hora(7, 0),
-            fin: hora(9, 0),
-            lugar: None,
-        });
-        d.clases.push(Clase {
-            id: "c-dos".into(),
-            materia: "CONTROL".into(),
-            dias: vec![Dia::Mar],
-            inicio: hora(7, 0),
-            fin: hora(9, 0),
-            lugar: None,
-        });
-        d.tareas.push(Tarea {
-            id: "t-uno".into(),
-            titulo: "Taller".into(),
-            materia: Some("robotica".into()),
-            vence: momento(2026, 11, 28, 23, 59),
-            hecha: false,
-            hecha_en: None,
-        });
-
-        let lista = materias_de(&d);
-        assert_eq!(lista, vec!["Robótica".to_string(), "CONTROL".to_string()]);
-        assert_eq!(canonica(&lista, " robotica "), "Robótica");
-        assert_eq!(canonica(&lista, "control"), "CONTROL");
-        assert_eq!(canonica(&lista, "Cálculo"), "Cálculo");
-        assert_eq!(canonica(&lista, "   "), "");
-        assert_eq!(clave_materia("  Análisis   Numérico "), "analisis numerico");
-    }
-
-    /// El color de una materia depende solo de su nombre normalizado y no
-    /// cambia entre arranques: si cambiara, las materias cambiarían de color
-    /// solas y la interfaz perdería su sentido.
-    #[test]
-    fn tono_estable_por_materia() {
-        assert_eq!(tono_materia("Control"), tono_materia("control"));
-        assert_eq!(tono_materia("Robótica"), tono_materia("  robotica "));
-        assert_eq!(tono_materia("Álgebra"), tono_materia("algebra"));
-
-        // Valores fijos: si cambia el cálculo, estos números lo delatan.
-        assert_eq!(tono_materia("Control"), 3);
-        assert_eq!(tono_materia("Robótica"), 7);
-        assert_eq!(tono_materia("Cálculo"), 5);
-        assert_eq!(tono_materia("Física"), 1);
-        assert_eq!(TONOS_MATERIA, 9, "la paleta de tema.slint tiene nueve tonos");
-
-        assert_eq!(tono_materia(""), TONO_SIN_MATERIA);
-        assert_eq!(tono_materia("   "), TONO_SIN_MATERIA);
-        assert_eq!(tono_materia("Sin materia"), TONO_SIN_MATERIA);
-
-        for materia in ["Control", "Robótica", "Cálculo", "Física", "Análisis Numérico"] {
-            let tono = tono_materia(materia);
-            assert!((0..TONOS_MATERIA).contains(&tono), "{materia} → {tono}");
-        }
-
-        // La paleta se reparte: no todas las materias caen en el mismo tono.
-        let distintos: std::collections::HashSet<i32> = [
-            "Control",
-            "Robótica",
-            "Cálculo",
-            "Física",
-            "Álgebra",
-            "Probabilidad",
-        ]
-        .iter()
-        .map(|materia| tono_materia(materia))
-        .collect();
-        assert!(distintos.len() >= 4, "tonos distintos: {distintos:?}");
-
-        // El selector recibe el nombre y su tono.
-        let lista = materias_ui(&["Robótica".to_string(), "Control".to_string()]);
-        assert_eq!(lista[0].nombre, "Robótica");
-        assert_eq!(lista[0].tono, tono_materia("Robótica"));
-        assert_eq!(lista[1].tono, tono_materia("CONTROL"));
-    }
-
-    /// Las tareas y las clases llegan a la interfaz con el tono de su materia.
+    /// Las tareas, clases y selector de materias llegan a la interfaz con el tono de su materia.
     #[test]
     fn las_listas_llevan_el_tono_de_la_materia() {
         let ahora = momento(2026, 11, 25, 8, 0);
@@ -2841,7 +2111,10 @@ mod pruebas {
             materia: None,
             ..tarea
         };
-        assert_eq!(tarea_a_ui(&sin_materia, ahora).tono, TONO_SIN_MATERIA);
+        assert_eq!(
+            tarea_a_ui(&sin_materia, ahora).tono,
+            materias::TONO_SIN_MATERIA
+        );
 
         let bloque = semana::Bloque {
             clase_id: "c-uno".into(),
@@ -2854,70 +2127,11 @@ mod pruebas {
             clase_ui(&bloque, ahora.date(), ahora.date()).tono,
             tono_materia("Cálculo")
         );
-    }
 
-    /// Un campo vacío no se guarda como cadena vacía en el TOML.
-    #[test]
-    fn campos_opcionales_vacios_son_none() {
-        assert_eq!(opcional("   "), None);
-        assert_eq!(opcional(" Control "), Some("Control".to_string()));
-    }
-
-    fn tarea_ui(hecha: bool) -> TareaUI {
-        TareaUI {
-            id: "t-uno".into(),
-            titulo: "Taller".into(),
-            materia: "Control".into(),
-            fecha: "lun 30 nov · 23:59".into(),
-            vencida: false,
-            hecha,
-            tono: 3,
-        }
-    }
-
-    /// La cabecera de Pendientes cuenta lo pendiente y lo hecho por separado.
-    #[test]
-    fn resumen_cuenta_pendientes_y_hechas() {
-        let lista = vec![tarea_ui(false), tarea_ui(false), tarea_ui(true)];
-        assert_eq!(resumen(&lista, false), "2 pendientes · 1 hecha");
-        assert_eq!(resumen(&lista, true), "2 pendientes · 1 hecha (filtrado)");
-        assert_eq!(resumen(&[], false), "nada por entregar");
-        assert_eq!(resumen(&[], true), "sin resultados para estos filtros");
-        assert_eq!(resumen(&[tarea_ui(false)], false), "1 tarea pendiente");
-        assert_eq!(resumen(&[tarea_ui(true), tarea_ui(true)], false), "2 tareas hechas");
-    }
-
-    /// Las fichas de fecha de la barra de filtros y su código van de la mano.
-    #[test]
-    fn codigos_de_fecha_del_filtro() {
-        for (codigo, tipo) in [
-            (0, TipoFecha::Todas),
-            (1, TipoFecha::Hoy),
-            (2, TipoFecha::EstaSemana),
-            (3, TipoFecha::Rango),
-        ] {
-            assert_eq!(codigo_fecha(tipo), codigo);
-            assert_eq!(fecha_del_codigo(codigo), tipo);
-        }
-        assert_eq!(fecha_del_codigo(99), TipoFecha::Todas, "código raro = todas");
-    }
-
-    /// Los campos del filtro se muestran vacíos cuando no hay valor.
-    #[test]
-    fn filtros_vacios_no_escriben_texto() {
-        assert_eq!(fecha_o_vacio(None), "");
-        assert_eq!(fecha_o_vacio(Some(fecha(2026, 12, 1))), "2026-12-01");
-        assert_eq!(hora_o_vacio(None), "");
-        assert_eq!(
-            hora_o_vacio(Some(NaiveTime::from_hms_opt(8, 5, 0).unwrap())),
-            "8:05 a. m."
-        );
-    }
-
-    #[test]
-    fn fecha_larga_en_espanol() {
-        assert_eq!(fecha_larga(fecha(2026, 11, 25)), "miércoles 25 de noviembre");
-        assert_eq!(fecha_larga(fecha(2026, 8, 3)), "lunes 3 de agosto");
+        let lista = materias_ui(&["Robótica".to_string(), "Control".to_string()]);
+        assert_eq!(lista[0].nombre, "Robótica");
+        assert_eq!(lista[0].tono, tono_materia("Robótica"));
+        assert_eq!(lista[1].tono, tono_materia("CONTROL"));
     }
 
     /// Una clase de otro día lleva el día delante; la de hoy no.

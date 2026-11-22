@@ -298,9 +298,46 @@ pub fn esquema() -> Value {
 // Aplicar
 // ---------------------------------------------------------------------------
 
+/// Resultado de aplicar en orden varias acciones propuestas.
+#[derive(Debug, Clone)]
+pub struct ResultadoAplicarTodas {
+    pub aplicadas: usize,
+    pub ultimos_datos: Option<Datos>,
+    pub error: Option<String>,
+}
+
 /// Aplica una acción sobre el archivo real: relee, valida, cambia y guarda.
 pub fn aplicar(almacen: &Almacen, accion: &Accion) -> Result<Datos, ErrorDatos> {
     almacen.modificar(|doc| aplicar_en(doc, accion))
+}
+
+/// Aplica en orden; si una falla, se detiene y dice cuántas quedaron hechas.
+pub fn aplicar_todas(almacen: &Almacen, acciones: &[Accion]) -> ResultadoAplicarTodas {
+    let mut aplicadas = 0;
+    let mut ultimos_datos = None;
+    for accion in acciones {
+        match aplicar(almacen, accion) {
+            Ok(datos) => {
+                ultimos_datos = Some(datos);
+                aplicadas += 1;
+            }
+            Err(error) => {
+                return ResultadoAplicarTodas {
+                    aplicadas,
+                    ultimos_datos,
+                    error: Some(format!(
+                        "Aplicadas {aplicadas}; falló «{}» — {error}",
+                        accion.etiqueta()
+                    )),
+                };
+            }
+        }
+    }
+    ResultadoAplicarTodas {
+        aplicadas,
+        ultimos_datos,
+        error: None,
+    }
 }
 
 /// La misma aplicación sobre un documento ya abierto (por `modificar`). Las
@@ -950,5 +987,31 @@ hora = \"18:00\"
                 "falta {accion}"
             );
         }
+    }
+
+    #[test]
+    fn aplicar_todas_se_detiene_en_error() {
+        let (_dir, almacen) = almacen_con_base();
+        let acciones = vec![
+            Accion::CrearTarea {
+                titulo: "Taller 3".into(),
+                materia: Some("Control".into()),
+                vence: "2026-12-10T18:00".into(),
+            },
+            Accion::BorrarTarea {
+                id: "t-fantasma".into(),
+            },
+            Accion::CrearTarea {
+                titulo: "Taller 4".into(),
+                materia: None,
+                vence: "2026-12-12T18:00".into(),
+            },
+        ];
+        let resultado = aplicar_todas(&almacen, &acciones);
+        assert_eq!(resultado.aplicadas, 1);
+        let datos = resultado.ultimos_datos.expect("la primera se aplicó");
+        assert_eq!(datos.tareas.len(), 2);
+        let err = resultado.error.expect("la segunda falló");
+        assert!(err.starts_with("Aplicadas 1; falló «Borrar tarea»"), "{err}");
     }
 }

@@ -17,6 +17,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
 /// Campos que el formulario de tarea entrega para crear o editar una tarea.
+#[derive(Debug, Clone, PartialEq)]
 pub struct NuevaTarea {
     pub titulo: String,
     pub materia: Option<String>,
