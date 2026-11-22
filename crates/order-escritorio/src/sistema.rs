@@ -6,10 +6,10 @@
 //! `slint::invoke_from_event_loop`, que es la única forma segura de tocar la
 //! interfaz desde fuera de su bucle de eventos.
 
-use crate::almacen::Almacen;
-use crate::avisos::{self, Registro};
-use crate::modelo::{self, Datos};
 use crate::puente;
+use order_core::almacen::Almacen;
+use order_core::avisos::{self, Registro};
+use order_core::modelo::{self, Datos};
 use chrono::{Local, TimeDelta};
 use ksni::blocking::TrayMethods;
 use notify::{RecursiveMode, Watcher};

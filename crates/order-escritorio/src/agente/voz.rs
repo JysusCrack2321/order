@@ -8,8 +8,8 @@
 //! Igual que `cliente`, la llamada HTTP bloquea: la ventana la lanza en un
 //! hilo. El texto vuelve al campo de la barra para revisarlo antes de enviar.
 
-use crate::agente::cliente::{self, ErrorAgente};
-use crate::agente::config::Voz;
+use order_core::agente::cliente::{self, ErrorAgente};
+use order_core::agente::config::Voz;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use hound::{SampleFormat as FormatoWav, WavSpec, WavWriter};
 use std::io::{Cursor, Seek, SeekFrom, Write};

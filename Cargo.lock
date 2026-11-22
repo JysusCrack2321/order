@@ -3477,24 +3477,35 @@ dependencies = [
 ]
 
 [[package]]
-name = "order"
+name = "order-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dirs",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 0.8.23",
+ "toml_edit 0.22.27",
+ "ureq",
+]
+
+[[package]]
+name = "order-escritorio"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "cpal",
- "dirs",
  "hound",
  "ksni",
  "notify",
  "notify-rust",
+ "order-core",
  "png",
- "serde",
  "serde_json",
  "slint",
  "slint-build",
  "tempfile",
- "toml 0.8.23",
- "toml_edit 0.22.27",
  "ureq",
 ]
 

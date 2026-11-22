@@ -1,17 +1,11 @@
 //! ORDER — horario, tareas y recordatorios en un solo binario.
 
 mod agente;
-mod almacen;
-mod avisos;
-mod filtros;
-mod modelo;
-mod ops;
 mod puente;
-mod reloj;
-mod semana;
 mod sistema;
 
-use almacen::Almacen;
+use order_core::almacen::Almacen;
+use order_core::modelo;
 
 fn main() -> Result<(), slint::PlatformError> {
     // Instancia única: si ya corre ORDER, solo se le pide mostrar la ventana.

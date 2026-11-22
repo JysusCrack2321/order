@@ -331,6 +331,24 @@ mod pruebas {
     }
 
     #[test]
+    fn agente_toml_junto_a_order_archivo() {
+        let dir = tempfile::tempdir().expect("directorio temporal");
+        let order_toml = dir.path().join("order.toml");
+        let anterior = std::env::var_os("ORDER_ARCHIVO");
+        unsafe {
+            std::env::set_var("ORDER_ARCHIVO", &order_toml);
+        }
+        let calculada = ruta();
+        unsafe {
+            match anterior {
+                Some(valor) => std::env::set_var("ORDER_ARCHIVO", valor),
+                None => std::env::remove_var("ORDER_ARCHIVO"),
+            }
+        }
+        assert_eq!(calculada, dir.path().join("agente.toml"));
+    }
+
+    #[test]
     fn codigos_de_las_fichas() {
         for proveedor in Proveedor::TODOS {
             assert_eq!(Proveedor::de_codigo(proveedor.codigo()), proveedor);

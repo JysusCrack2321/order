@@ -10,20 +10,20 @@
 //! nada y el error sale en el banner rojo mientras el formulario sigue abierto
 //! con lo que el usuario había escrito.
 
-use crate::agente::acciones::{self, Accion};
-use crate::agente::cliente::{self, ErrorAgente};
-use crate::agente::config::{self, AgenteConfig, Proveedor};
-use crate::agente::contexto;
 use crate::agente::voz::{self, Grabacion};
-use crate::almacen::Almacen;
-use crate::filtros::{Filtro, TipoFecha};
-use crate::modelo::{
+use order_core::agente::acciones::{self, Accion};
+use order_core::agente::cliente::{self, ErrorAgente};
+use order_core::agente::config::{self, AgenteConfig, Proveedor};
+use order_core::agente::contexto;
+use order_core::almacen::Almacen;
+use order_core::filtros::{Filtro, TipoFecha};
+use order_core::modelo::{
     self, Ajustes, Clase, Datos, Dia, ErrorDatos, FORMATO_FECHA, FORMATO_HORA, Recordatorio,
     Semestre, Tarea,
 };
-use crate::ops::{self, NuevaTarea};
-use crate::reloj::{self, a_12h, a_24h, etiqueta_hora, hora_texto};
-use crate::semana;
+use order_core::ops::{self, NuevaTarea};
+use order_core::reloj::{self, a_12h, a_24h, etiqueta_hora, hora_texto};
+use order_core::semana;
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Timelike, Weekday};
 use slint::{ModelRc, SharedString, VecModel, Weak};
 use std::cell::RefCell;
@@ -2585,7 +2585,7 @@ mod pruebas {
 
     #[test]
     fn etiqueta_dentro_del_mes() {
-        let dias = crate::semana::semana(&datos(), fecha(2026, 11, 16));
+        let dias = semana::semana(&datos(), fecha(2026, 11, 16));
         assert_eq!(
             etiqueta_semana(fecha(2026, 11, 16), &dias),
             "16 – 20 de noviembre de 2026"
@@ -2594,7 +2594,7 @@ mod pruebas {
 
     #[test]
     fn etiqueta_cruzando_mes() {
-        let dias = crate::semana::semana(&datos(), fecha(2026, 11, 30));
+        let dias = semana::semana(&datos(), fecha(2026, 11, 30));
         assert_eq!(
             etiqueta_semana(fecha(2026, 11, 30), &dias),
             "30 noviembre – 4 diciembre de 2026"
@@ -2842,7 +2842,7 @@ mod pruebas {
         };
         assert_eq!(tarea_a_ui(&sin_materia, ahora).tono, TONO_SIN_MATERIA);
 
-        let bloque = crate::semana::Bloque {
+        let bloque = semana::Bloque {
             clase_id: "c-uno".into(),
             materia: "Cálculo".into(),
             inicio: NaiveTime::from_hms_opt(7, 0, 0).unwrap(),
@@ -2922,7 +2922,7 @@ mod pruebas {
     /// Una clase de otro día lleva el día delante; la de hoy no.
     #[test]
     fn clase_ui_lleva_el_dia_solo_si_no_es_hoy() {
-        let bloque = crate::semana::Bloque {
+        let bloque = semana::Bloque {
             clase_id: "c-uno".into(),
             materia: "Control".into(),
             inicio: NaiveTime::from_hms_opt(7, 0, 0).unwrap(),
@@ -2942,7 +2942,7 @@ mod pruebas {
     #[test]
     fn cuando_del_recordatorio() {
         let hoy = fecha(2026, 11, 25);
-        let recordatorio = |dia: NaiveDate| crate::semana::RecordatorioVisto {
+        let recordatorio = |dia: NaiveDate| semana::RecordatorioVisto {
             id: "r-uno".into(),
             texto: "Revisar Moodle".into(),
             fecha: dia,

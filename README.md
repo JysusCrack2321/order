@@ -84,17 +84,17 @@ Los `.desktop` (el del repo, `~/.local/share/applications/` y
 
 ```bash
 cd ~/apps/order
-cargo install --path . --locked     # queda en ~/.cargo/bin/order
+cargo install --path crates/order-escritorio --locked     # queda en ~/.cargo/bin/order
 ```
 
-Tras cambiar `ui/*.slint` o `src/*.rs` hay que repetir el `cargo install`
+Tras cambiar `crates/order-escritorio/ui/*.slint` o el código Rust hay que repetir el `cargo install`
 (el binario lleva los `.slint` y la fuente compilados dentro).
 
 Comprobaciones sin abrir ventana:
 
 ```bash
-cargo build          # sin warnings
-cargo test
+cargo build --workspace   # sin warnings
+cargo test --workspace
 ```
 
 ## Arranque
