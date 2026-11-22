@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -53,12 +52,18 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jysusman.order.datos.ObservadorCarpeta
 import com.jysusman.order.datos.PuenteOrderNativo
 import com.jysusman.order.datos.Repositorio
+import com.jysusman.order.ffi.TipoFechaFfi
 import com.jysusman.order.ui.BannersEstado
 import com.jysusman.order.ui.PantallaPermisoArchivos
 import com.jysusman.order.ui.abrirAjustesPermisoArchivos
 import com.jysusman.order.ui.dia.DiaPantalla
+import com.jysusman.order.ui.formularios.ContenedorFormularioSheet
+import com.jysusman.order.ui.formularios.FormularioActivo
 import com.jysusman.order.ui.inicio.InicioPantalla
 import com.jysusman.order.ui.pendientes.PendientesPantalla
+import com.jysusman.order.ui.selectores.SelectorFechaDialog
+import com.jysusman.order.ui.selectores.SelectorHoraDialog
+import com.jysusman.order.ui.selectores.SelectorMateriaDialog
 import com.jysusman.order.ui.semana.SemanaPantalla
 import com.jysusman.order.ui.theme.OrderTema
 import com.jysusman.order.ui.theme.OrderTheme
@@ -71,6 +76,15 @@ enum class Pestana(val titulo: String, val icono: ImageVector) {
     Dia("Día", Icons.Outlined.Today),
     Semana("Semana", Icons.Outlined.CalendarViewWeek),
     Pendientes("Pendientes", Icons.Outlined.CheckCircle),
+}
+
+private enum class SelectorFiltro {
+    Ninguno,
+    Materia,
+    Desde,
+    Hasta,
+    HoraDesde,
+    HoraHasta,
 }
 
 private const val PREFS_ORDER = "order_prefs"
@@ -109,6 +123,8 @@ private fun OrderApp(
 
     var permisoOk by remember { mutableStateOf(tienePermisoArchivos()) }
     var pestana by rememberSaveable { mutableIntStateOf(0) }
+    var formularioActivo by remember { mutableStateOf<FormularioActivo?>(null) }
+    var selectorFiltro by remember { mutableStateOf(SelectorFiltro.Ninguno) }
 
     // Recarga al volver a primer plano (vuelta de Ajustes del permiso o Syncthing).
     DisposableEffect(lifecycleOwner) {
@@ -191,7 +207,7 @@ private fun OrderApp(
                             color = OrderTema.TextoTenue,
                         )
                     }
-                    IconButton(onClick = { /* Tarea 5: abrir Ajustes */ }) {
+                    IconButton(onClick = { formularioActivo = FormularioActivo.Ajustes }) {
                         Icon(
                             imageVector = Icons.Outlined.Settings,
                             contentDescription = "Ajustes",
@@ -211,7 +227,7 @@ private fun OrderApp(
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { /* Tarea 5: nueva tarea */ },
+                onClick = { formularioActivo = FormularioActivo.Tarea(id = null) },
                 containerColor = OrderTema.AcentoTenue,
                 contentColor = OrderTema.Acento,
                 shape = RoundedCornerShape(OrderTema.RadioTarjeta),
@@ -289,9 +305,11 @@ private fun OrderApp(
             when (Pestana.entries[pestana]) {
                 Pestana.Inicio -> InicioPantalla(
                     vista = estado.inicio,
-                    onEditarClase = { },
-                    onEditarTarea = { },
-                    onEditarRecordatorio = { },
+                    onEditarClase = { id -> formularioActivo = FormularioActivo.Clase(id) },
+                    onEditarTarea = { id -> formularioActivo = FormularioActivo.Tarea(id) },
+                    onEditarRecordatorio = { id ->
+                        formularioActivo = FormularioActivo.Recordatorio(id, volverAjustes = false)
+                    },
                 )
 
                 Pestana.Dia -> DiaPantalla(
@@ -299,10 +317,12 @@ private fun OrderApp(
                     onAnterior = { scope.launch { repositorio.moverDia(-1) } },
                     onSiguiente = { scope.launch { repositorio.moverDia(1) } },
                     onIrHoy = { scope.launch { repositorio.irDiaHoy() } },
-                    onNuevaClase = { },
-                    onEditarClase = { },
-                    onEditarTarea = { },
-                    onEditarRecordatorio = { },
+                    onNuevaClase = { formularioActivo = FormularioActivo.Clase(null) },
+                    onEditarClase = { id -> formularioActivo = FormularioActivo.Clase(id) },
+                    onEditarTarea = { id -> formularioActivo = FormularioActivo.Tarea(id) },
+                    onEditarRecordatorio = { id ->
+                        formularioActivo = FormularioActivo.Recordatorio(id, volverAjustes = false)
+                    },
                 )
 
                 Pestana.Semana -> SemanaPantalla(
@@ -310,14 +330,14 @@ private fun OrderApp(
                     onAnterior = { scope.launch { repositorio.moverSemana(-7) } },
                     onSiguiente = { scope.launch { repositorio.moverSemana(7) } },
                     onIrHoy = { scope.launch { repositorio.irSemanaHoy() } },
-                    onNuevaClase = { },
-                    onEditarClase = { },
+                    onNuevaClase = { formularioActivo = FormularioActivo.Clase(null) },
+                    onEditarClase = { id -> formularioActivo = FormularioActivo.Clase(id) },
                 )
 
                 Pestana.Pendientes -> PendientesPantalla(
                     vista = estado.pendientes,
                     filtro = estado.filtro,
-                    onEditarTarea = { },
+                    onEditarTarea = { id -> formularioActivo = FormularioActivo.Tarea(id) },
                     onMarcarHecha = { id, hecha -> scope.launch { repositorio.marcarTarea(id, hecha) } },
                     onMostrarHechas = { mostrar ->
                         scope.launch {
@@ -329,14 +349,111 @@ private fun OrderApp(
                             repositorio.actualizarFiltro { it.copy(tipoFecha = tipo) }
                         }
                     },
-                    onElegirMateria = { },
-                    onElegirDesde = { },
-                    onElegirHasta = { },
-                    onElegirHoraDesde = { },
-                    onElegirHoraHasta = { },
+                    onElegirMateria = { selectorFiltro = SelectorFiltro.Materia },
+                    onElegirDesde = { selectorFiltro = SelectorFiltro.Desde },
+                    onElegirHasta = { selectorFiltro = SelectorFiltro.Hasta },
+                    onElegirHoraDesde = { selectorFiltro = SelectorFiltro.HoraDesde },
+                    onElegirHoraHasta = { selectorFiltro = SelectorFiltro.HoraHasta },
                     onQuitarFiltros = { scope.launch { repositorio.limpiarFiltros() } },
                 )
             }
         }
+    }
+
+    formularioActivo?.let { activo ->
+        ContenedorFormularioSheet(
+            formulario = activo,
+            repositorio = repositorio,
+            materias = estado.materias,
+            carpetaActual = estado.carpetaDatos,
+            alCambiarCarpeta = alCambiarCarpeta,
+            alAbrirFormulario = { formularioActivo = it },
+            alCerrar = { formularioActivo = null },
+        )
+    }
+
+    when (selectorFiltro) {
+        SelectorFiltro.Ninguno -> {}
+        SelectorFiltro.Materia -> SelectorMateriaDialog(
+            materias = estado.materias,
+            repositorio = repositorio,
+            tituloSinMateria = "Todas las materias",
+            onElegir = { materia ->
+                scope.launch {
+                    repositorio.actualizarFiltro {
+                        it.copy(materia = materia.ifBlank { null })
+                    }
+                }
+            },
+            onCerrar = { selectorFiltro = SelectorFiltro.Ninguno },
+        )
+
+        SelectorFiltro.Desde -> SelectorFechaDialog(
+            fechaInicialIso = estado.filtro.desdeIso.orEmpty(),
+            repositorio = repositorio,
+            onAceptar = { fecha ->
+                scope.launch {
+                    repositorio.actualizarFiltro {
+                        it.copy(desdeIso = fecha, tipoFecha = TipoFechaFfi.RANGO)
+                    }
+                }
+            },
+            onLimpiar = {
+                scope.launch {
+                    repositorio.actualizarFiltro { it.copy(desdeIso = null) }
+                }
+            },
+            onCerrar = { selectorFiltro = SelectorFiltro.Ninguno },
+        )
+
+        SelectorFiltro.Hasta -> SelectorFechaDialog(
+            fechaInicialIso = estado.filtro.hastaIso.orEmpty(),
+            repositorio = repositorio,
+            onAceptar = { fecha ->
+                scope.launch {
+                    repositorio.actualizarFiltro {
+                        it.copy(hastaIso = fecha, tipoFecha = TipoFechaFfi.RANGO)
+                    }
+                }
+            },
+            onLimpiar = {
+                scope.launch {
+                    repositorio.actualizarFiltro { it.copy(hastaIso = null) }
+                }
+            },
+            onCerrar = { selectorFiltro = SelectorFiltro.Ninguno },
+        )
+
+        SelectorFiltro.HoraDesde -> SelectorHoraDialog(
+            horaInicialTexto = estado.filtro.horaDesde.orEmpty(),
+            repositorio = repositorio,
+            onAceptar = { hora ->
+                scope.launch {
+                    repositorio.actualizarFiltro { it.copy(horaDesde = hora) }
+                }
+            },
+            onLimpiar = {
+                scope.launch {
+                    repositorio.actualizarFiltro { it.copy(horaDesde = null) }
+                }
+            },
+            onCerrar = { selectorFiltro = SelectorFiltro.Ninguno },
+        )
+
+        SelectorFiltro.HoraHasta -> SelectorHoraDialog(
+            horaInicialTexto = estado.filtro.horaHasta.orEmpty(),
+            repositorio = repositorio,
+            onAceptar = { hora ->
+                scope.launch {
+                    repositorio.actualizarFiltro { it.copy(horaHasta = hora) }
+                }
+            },
+            onLimpiar = {
+                scope.launch {
+                    repositorio.actualizarFiltro { it.copy(horaHasta = null) }
+                }
+            },
+            onCerrar = { selectorFiltro = SelectorFiltro.Ninguno },
+        )
     }
 }
