@@ -5,6 +5,7 @@
 //! y el OCR de imágenes corren en cada plataforma (Android o escritorio).
 
 use crate::agente::config::Proveedor;
+use crate::agente::maquetado;
 use pdf_extract::Document;
 use std::fmt;
 use std::panic::{self, AssertUnwindSafe};
@@ -134,6 +135,13 @@ pub fn extraer_texto_pdf(bytes: &[u8]) -> Result<Vec<String>, ErrorAdjunto> {
         asegurar_descifrado(&mut doc, "")?;
         if doc.get_pages().is_empty() {
             return Err(ErrorAdjunto::PdfDanado("el PDF no tiene páginas".into()));
+        }
+        if let Ok(Ok(paginas)) =
+            panic::catch_unwind(AssertUnwindSafe(|| maquetado::extraer_paginas(&doc)))
+        {
+            if paginas.iter().any(|p| !p.trim().is_empty()) {
+                return Ok(paginas.into_iter().map(|p| p.trim().to_string()).collect());
+            }
         }
         let paginas = pdf_extract::extract_text_from_mem_by_pages(bytes).map_err(|err| match err {
             pdf_extract::OutputError::PdfError(e) => mapear_error_lopdf("", &e),
