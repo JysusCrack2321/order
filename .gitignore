@@ -5,3 +5,4 @@ android/app/src/main/java/com/jysusman/order/ffi/order_ffi.kt
 android/.gradle/
 android/app/build/
 android/build/
+dist/
