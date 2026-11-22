@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=ORDER
-Comment=Horario, tareas y recordatorios del semestre
+Comment=Horario, tareas y recordatorios para organizarte
 Exec=/home/jysusman/.cargo/bin/order
 Icon=order
 Terminal=false
