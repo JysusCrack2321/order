@@ -81,7 +81,9 @@ import com.jysusman.order.ui.theme.OrderTema
 import com.jysusman.order.ui.theme.OrderTheme
 import com.jysusman.order.ui.tienePermisoAlarmaExacta
 import com.jysusman.order.ui.tienePermisoArchivos
+import com.jysusman.order.voz.Grabadora
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -153,6 +155,44 @@ private fun OrderApp(
     var pestana by rememberSaveable { mutableIntStateOf(0) }
     var formularioActivo by remember { mutableStateOf<FormularioActivo?>(null) }
     var selectorFiltro by remember { mutableStateOf(SelectorFiltro.Ninguno) }
+
+    val grabadora = remember { Grabadora() }
+    var grabandoVoz by remember { mutableStateOf(false) }
+    var tiempoGrabacion by remember { mutableStateOf("0:00") }
+
+    fun iniciarGrabacionVoz() {
+        grabadora.empezar(context)
+            .onSuccess {
+                grabandoVoz = true
+                tiempoGrabacion = "0:00"
+                repositorio.mostrarAvisoAgente("", esError = false)
+            }
+            .onFailure { err ->
+                grabandoVoz = false
+                repositorio.mostrarAvisoAgente(err.message ?: "No se pudo usar el micrófono.", esError = true)
+            }
+    }
+
+    val lanzadorMicrofono = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { concedido ->
+        if (concedido) {
+            iniciarGrabacionVoz()
+        } else {
+            repositorio.mostrarAvisoAgente("Permiso de micrófono denegado; no se puede grabar.", esError = true)
+        }
+    }
+
+    LaunchedEffect(grabandoVoz) {
+        while (grabandoVoz) {
+            tiempoGrabacion = Grabadora.formatoTiempo(grabadora.segundosTranscurridos())
+            delay(300)
+        }
+    }
+
+    DisposableEffect(grabadora) {
+        onDispose { grabadora.cancelar() }
+    }
 
     val lanzadorNotif = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -326,8 +366,24 @@ private fun OrderApp(
                 BarraAgente(
                     texto = estado.agenteTexto,
                     pensando = estado.agentePensando,
+                    transcribiendo = estado.agenteTranscribiendo,
+                    grabando = grabandoVoz,
+                    tiempoGrabacion = tiempoGrabacion,
                     aviso = estado.agenteAviso,
+                    avisoEsError = estado.agenteAvisoEsError,
                     alCambiarTexto = { repositorio.actualizarTextoAgente(it) },
+                    alGrabar = {
+                        if (grabandoVoz) {
+                            grabandoVoz = false
+                            tiempoGrabacion = ""
+                            val muestras = grabadora.detener()
+                            scope.launch { repositorio.transcribirAudio(muestras) }
+                        } else if (!Grabadora.tienePermisoMicrofono(context)) {
+                            lanzadorMicrofono.launch(Manifest.permission.RECORD_AUDIO)
+                        } else {
+                            iniciarGrabacionVoz()
+                        }
+                    },
                     alEnviar = { scope.launch { repositorio.enviarAlAgente() } },
                 )
                 val pie = estado.resumen?.pie ?: estado.inicio?.pie

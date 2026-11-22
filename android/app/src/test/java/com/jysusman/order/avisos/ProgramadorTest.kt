@@ -207,4 +207,6 @@ private class FakePuenteAvisos(
     override fun aplicarAccion(rutaDatos: String, accionId: String): ResumenArchivoFfi = throw UnsupportedOperationException()
     override fun descartarAccion(accionId: String) {}
     override fun aplicarTodas(rutaDatos: String, accionIds: List<String>): ResultadoAplicarTodasFfi = throw UnsupportedOperationException()
+    override fun wavDePcm16(muestras: List<Short>, frecuencia: UInt): ByteArray = ByteArray(0)
+    override fun transcribir(rutaConfig: String, wav: ByteArray): String = ""
 }

@@ -16,8 +16,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -34,17 +38,39 @@ import com.jysusman.order.ui.theme.OrderTema
 fun BarraAgente(
     texto: String,
     pensando: Boolean,
+    transcribiendo: Boolean = false,
+    grabando: Boolean = false,
+    tiempoGrabacion: String = "",
     aviso: String,
+    avisoEsError: Boolean = false,
     alCambiarTexto: (String) -> Unit,
+    alGrabar: () -> Unit = {},
     alEnviar: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val ocupado = pensando || transcribiendo
     Column(
         modifier = modifier
             .fillMaxWidth()
             .background(OrderTema.FondoPanel),
     ) {
         HorizontalDivider(color = OrderTema.Borde, thickness = OrderTema.Linea)
+        if (aviso.isNotBlank()) {
+            Text(
+                text = aviso,
+                fontSize = OrderTema.TamanoHora,
+                color = if (avisoEsError) OrderTema.TextoError else OrderTema.TextoSuave,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = OrderTema.EspacioMd,
+                        end = OrderTema.EspacioMd,
+                        top = OrderTema.EspacioXs,
+                    ),
+            )
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -72,9 +98,9 @@ fun BarraAgente(
             ) {
                 if (texto.isEmpty()) {
                     Text(
-                        text = aviso.ifBlank { "Pídele algo al agente…" },
+                        text = "Pídele algo al agente…",
                         fontSize = OrderTema.TamanoPequeno,
-                        color = if (aviso.isNotBlank()) OrderTema.TextoError else OrderTema.TextoTenue,
+                        color = OrderTema.TextoTenue,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -83,7 +109,7 @@ fun BarraAgente(
                     value = texto,
                     onValueChange = alCambiarTexto,
                     singleLine = true,
-                    enabled = !pensando,
+                    enabled = !ocupado,
                     textStyle = TextStyle(
                         fontFamily = OrderTema.FuenteTexto,
                         fontSize = OrderTema.TamanoPequeno,
@@ -93,6 +119,35 @@ fun BarraAgente(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { alEnviar() }),
                     modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(OrderTema.RadioPequeno))
+                    .background(if (grabando) OrderTema.FondoError else OrderTema.FondoCampo)
+                    .border(
+                        OrderTema.Linea,
+                        if (grabando) OrderTema.Vencida else OrderTema.BordeCampo,
+                        RoundedCornerShape(OrderTema.RadioPequeno),
+                    )
+                    .clickable(enabled = !ocupado, onClick = alGrabar),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (grabando) Icons.Outlined.Stop else Icons.Outlined.Mic,
+                    contentDescription = if (grabando) "Detener grabación" else "Grabar voz",
+                    tint = if (grabando) OrderTema.VencidaTexto else OrderTema.TextoSuave,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+
+            if (grabando && tiempoGrabacion.isNotBlank()) {
+                Text(
+                    text = tiempoGrabacion,
+                    fontSize = OrderTema.TamanoHora,
+                    color = OrderTema.VencidaTexto,
                 )
             }
 
@@ -119,7 +174,7 @@ fun BarraAgente(
                         .clip(RoundedCornerShape(OrderTema.Radio))
                         .background(OrderTema.AcentoTenue)
                         .border(OrderTema.Linea, OrderTema.AcentoSuave, RoundedCornerShape(OrderTema.Radio))
-                        .clickable(enabled = texto.isNotBlank(), onClick = alEnviar)
+                        .clickable(enabled = !ocupado && texto.isNotBlank(), onClick = alEnviar)
                         .padding(horizontal = OrderTema.EspacioMd),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -128,7 +183,7 @@ fun BarraAgente(
                         fontFamily = OrderTema.FuenteTitulos,
                         fontSize = OrderTema.TamanoPequeno,
                         letterSpacing = OrderTema.LetraNormal,
-                        color = if (texto.isNotBlank()) OrderTema.Acento else OrderTema.TextoTenue,
+                        color = if (!ocupado && texto.isNotBlank()) OrderTema.Acento else OrderTema.TextoTenue,
                     )
                 }
             }

@@ -134,6 +134,9 @@ interface PuenteOrder {
     fun aplicarAccion(rutaDatos: String, accionId: String): ResumenArchivoFfi
     fun descartarAccion(accionId: String)
     fun aplicarTodas(rutaDatos: String, accionIds: List<String>): ResultadoAplicarTodasFfi
+
+    fun wavDePcm16(muestras: List<Short>, frecuencia: UInt): ByteArray
+    fun transcribir(rutaConfig: String, wav: ByteArray): String
 }
 
 class PuenteOrderNativo : PuenteOrder {
@@ -323,4 +326,10 @@ class PuenteOrderNativo : PuenteOrder {
         rutaDatos: String,
         accionIds: List<String>,
     ): ResultadoAplicarTodasFfi = com.jysusman.order.ffi.aplicarTodas(rutaDatos, accionIds)
+
+    override fun wavDePcm16(muestras: List<Short>, frecuencia: UInt): ByteArray =
+        com.jysusman.order.ffi.wavDePcm16(muestras, frecuencia)
+
+    override fun transcribir(rutaConfig: String, wav: ByteArray): String =
+        com.jysusman.order.ffi.transcribir(rutaConfig, wav)
 }

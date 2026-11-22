@@ -60,7 +60,9 @@ data class EstadoOrder(
     val materias: List<MateriaConTonoFfi> = emptyList(),
     val agenteTexto: String = "",
     val agentePensando: Boolean = false,
+    val agenteTranscribiendo: Boolean = false,
     val agenteAviso: String = "",
+    val agenteAvisoEsError: Boolean = false,
     val agentePanelAbierto: Boolean = false,
     val agenteRespuesta: String = "",
     val agenteNota: String = "",
@@ -413,7 +415,63 @@ class Repositorio(
     // --- Agente ------------------------------------------------------------
 
     fun actualizarTextoAgente(texto: String) {
-        _estado.update { it.copy(agenteTexto = texto, agenteAviso = "") }
+        _estado.update { it.copy(agenteTexto = texto, agenteAviso = "", agenteAvisoEsError = false) }
+    }
+
+    fun mostrarAvisoAgente(mensaje: String, esError: Boolean = true) {
+        _estado.update { it.copy(agenteAviso = mensaje, agenteAvisoEsError = esError) }
+    }
+
+    suspend fun transcribirAudio(muestras: List<Short>, frecuencia: Int = 16_000) {
+        val minimoMuestras = (frecuencia * 0.4).toInt()
+        if (muestras.isEmpty() || muestras.size < minimoMuestras) {
+            mostrarAvisoAgente("La grabación quedó vacía; revisa el micrófono.", esError = true)
+            return
+        }
+        if (rutaConfigAgente.isBlank()) return
+
+        _estado.update {
+            it.copy(
+                agenteTranscribiendo = true,
+                agenteAviso = "transcribiendo…",
+                agenteAvisoEsError = false,
+            )
+        }
+
+        val res = withContext(dispatcherIo) {
+            runCatching {
+                val wav = puente.wavDePcm16(muestras, frecuencia.toUInt())
+                if (wav.isEmpty()) {
+                    throw IllegalStateException("La grabación quedó vacía; revisa el micrófono.")
+                }
+                puente.transcribir(rutaConfigAgente, wav)
+            }
+        }
+
+        res.onSuccess { transcripcion ->
+            _estado.update { actual ->
+                val previo = actual.agenteTexto.trim()
+                val combinado = if (previo.isEmpty()) {
+                    transcripcion
+                } else {
+                    "$previo $transcripcion"
+                }
+                actual.copy(
+                    agenteTranscribiendo = false,
+                    agenteTexto = combinado,
+                    agenteAviso = "",
+                    agenteAvisoEsError = false,
+                )
+            }
+        }.onFailure { err ->
+            _estado.update {
+                it.copy(
+                    agenteTranscribiendo = false,
+                    agenteAviso = "No se pudo transcribir — ${mensajeDeError(err)}",
+                    agenteAvisoEsError = true,
+                )
+            }
+        }
     }
 
     fun cerrarPanelAgente() {

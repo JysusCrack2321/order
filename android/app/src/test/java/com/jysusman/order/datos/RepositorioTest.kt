@@ -147,12 +147,43 @@ class RepositorioTest {
         assertTrue(repo.estado.value.agenteAcciones.isEmpty())
         assertTrue(!repo.estado.value.agentePanelAbierto)
     }
+
+    @Test
+    fun vozGrabacionVaciaNoEnviaYTranscripcionPasaAlCampo() = runTest {
+        val fake = FakePuenteOrder()
+        val repo = Repositorio(
+            puente = fake,
+            carpetaInicial = "/tmp/order-voz",
+            dispatcherIo = UnconfinedTestDispatcher(testScheduler),
+            asegurarCarpeta = {},
+            rutaConfigAgente = "/tmp/agente.toml",
+        )
+
+        // Grabación vacía o muy corta: mensaje legible y NO llama a transcribir.
+        repo.transcribirAudio(emptyList(), 16_000)
+        assertEquals(0, fake.llamadasTranscribir)
+        assertTrue(repo.estado.value.agenteAvisoEsError)
+        assertTrue(repo.estado.value.agenteAviso.contains("vacía"))
+
+        repo.transcribirAudio(List(1000) { 0 }, 16_000)
+        assertEquals(0, fake.llamadasTranscribir)
+
+        // Grabación válida: convierte a WAV y coloca texto en el campo respetando lo previo.
+        repo.actualizarTextoAgente("Por favor")
+        fake.transcripcionTexto = "agrega taller para el viernes"
+        repo.transcribirAudio(List(8000) { 100 }, 16_000)
+        assertEquals(1, fake.llamadasTranscribir)
+        assertEquals("Por favor agrega taller para el viernes", repo.estado.value.agenteTexto)
+        assertEquals("", repo.estado.value.agenteAviso)
+    }
 }
 
 private class FakePuenteOrder : PuenteOrder {
     var fallarAlCargar: ErrorFfi? = null
     var fallarAgente: ErrorFfi? = null
     var respuestaAgente: RespuestaAgenteFfi = RespuestaAgenteFfi("Listo.", emptyList(), null)
+    var llamadasTranscribir: Int = 0
+    var transcripcionTexto: String = "hola"
     var conflictos: List<ConflictoFfi> = emptyList()
     var advertencias: List<String> = emptyList()
     var ultimaRutaCargada: String = ""
@@ -368,4 +399,12 @@ private class FakePuenteOrder : PuenteOrder {
         accionIds: List<String>,
     ): ResultadoAplicarTodasFfi =
         ResultadoAplicarTodasFfi(accionIds.size.toUInt(), cargar(rutaDatos), null)
+
+    override fun wavDePcm16(muestras: List<Short>, frecuencia: UInt): ByteArray =
+        ByteArray(44 + muestras.size * 2)
+
+    override fun transcribir(rutaConfig: String, wav: ByteArray): String {
+        llamadasTranscribir++
+        return transcripcionTexto
+    }
 }
