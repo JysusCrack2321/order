@@ -7,6 +7,7 @@ import { ScrollView } from "std-widgets.slint";
 /// Una clase ya colocada en un día. `inicio` y `fin` son minutos desde la
 /// medianoche: la posición vertical se calcula aquí con las medidas del tema.
 export struct BloqueUI {
+    id: string,
     materia: string,
     lugar: string,
     hora: string,
@@ -86,6 +87,35 @@ component BotonHoy inherits Rectangle {
     }
 }
 
+/// Botón para crear una clase desde la vista Semana.
+component BotonNuevaClase inherits Rectangle {
+    callback clicked();
+
+    width: Tema.ancho-boton-clase;
+    height: Tema.ancho-boton-nav;
+    border-radius: Tema.radio-pequeno;
+    background: ta.has-hover ? Tema.acento-tenue : transparent;
+    border-width: Tema.linea;
+    border-color: ta.has-hover ? Tema.acento : Tema.acento-suave;
+
+    Text {
+        text: "+  Clase";
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-family: Tema.fuente-titulos;
+        font-size: Tema.tamano-pequeno;
+        letter-spacing: Tema.letra-normal;
+        color: ta.has-hover ? Tema.acento : Tema.texto-suave;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
 export component SemanaVista inherits Rectangle {
     in property <[DiaUI]> dias;
     in property <string> etiqueta;
@@ -101,6 +131,8 @@ export component SemanaVista inherits Rectangle {
     callback anterior();
     callback siguiente();
     callback ir-hoy();
+    callback nueva-clase();
+    callback editar-clase(string);
 
     background: transparent;
 
@@ -155,6 +187,10 @@ export component SemanaVista inherits Rectangle {
             }
 
             Rectangle { horizontal-stretch: 1; }
+
+            BotonNuevaClase {
+                clicked => { root.nueva-clase(); }
+            }
 
             BotonHoy {
                 clicked => { root.ir-hoy(); }
@@ -265,10 +301,15 @@ export component SemanaVista inherits Rectangle {
                                 width: parent.width - 2 * Tema.espacio-xs - Tema.trazo;
                                 height: (bloque.fin - bloque.inicio) * Tema.alto-minuto - Tema.trazo;
                                 border-radius: Tema.radio-pequeno;
-                                background: Tema.fondo-clase;
+                                background: bloque-ta.has-hover ? Tema.fondo-hover : Tema.fondo-clase;
                                 border-width: Tema.linea;
-                                border-color: Tema.borde-clase;
+                                border-color: bloque-ta.has-hover ? Tema.acento-suave : Tema.borde-clase;
                                 clip: true;
+
+                                bloque-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.editar-clase(bloque.id); }
+                                }
 
                                 Rectangle {
                                     x: 0;

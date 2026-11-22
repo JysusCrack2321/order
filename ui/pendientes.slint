@@ -1,10 +1,11 @@
 // Vista Pendientes: tareas sin hacer, de la que vence antes a la que vence
 // después. Las vencidas van resaltadas en terracota.
 //
-// La casilla es todavía un indicador visual: marcarla y editar la tarea llega
-// con los formularios (Tarea 7 del plan).
+// La casilla marca la tarea como hecha con un clic; pinchar el resto de la
+// fila abre el formulario de edición (Tarea 7 del plan).
 
 import { Tema } from "tema.slint";
+import { Casilla } from "formularios.slint";
 import { ScrollView } from "std-widgets.slint";
 
 export struct TareaUI {
@@ -18,6 +19,9 @@ export struct TareaUI {
 export component PendientesVista inherits Rectangle {
     in property <[TareaUI]> tareas;
     in property <string> resumen;
+
+    callback editar(string);
+    callback marcar(string);
 
     background: transparent;
 
@@ -55,6 +59,13 @@ export component PendientesVista inherits Rectangle {
                     height: Tema.alto-fila;
                     background: ta.has-hover ? Tema.fondo-hover : transparent;
 
+                    // Toda la fila abre el formulario; la casilla, encima,
+                    // solo marca la tarea (abajo está su TouchArea).
+                    ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.editar(tarea.id); }
+                    }
+
                     // Filo terracota en las vencidas.
                     if tarea.vencida : Rectangle {
                         x: 0;
@@ -72,13 +83,9 @@ export component PendientesVista inherits Rectangle {
                         spacing: Tema.espacio-md;
                         cross-axis-alignment: center;
 
-                        Rectangle {
-                            width: Tema.alto-check;
-                            height: Tema.alto-check;
-                            border-radius: Tema.radio-pequeno;
-                            border-width: Tema.linea;
-                            border-color: tarea.vencida ? Tema.vencida : Tema.borde-fuerte;
-                            background: transparent;
+                        Casilla {
+                            marcada: false;
+                            clicked => { root.marcar(tarea.id); }
                         }
 
                         VerticalLayout {
@@ -125,10 +132,6 @@ export component PendientesVista inherits Rectangle {
                         width: parent.width;
                         height: Tema.linea;
                         background: Tema.borde-suave;
-                    }
-
-                    ta := TouchArea {
-                        mouse-cursor: default;
                     }
                 }
 

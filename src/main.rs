@@ -17,6 +17,12 @@ fn main() -> Result<(), slint::PlatformError> {
 
     match almacen.cargar() {
         Ok(datos) => {
+            // Una vez al abrir: lo hecho hace más de 30 días pasa a
+            // historial.toml para que order.toml siga corto.
+            let datos = almacen.archivar().unwrap_or_else(|error| {
+                eprintln!("ORDER: no se pudo archivar: {error}");
+                datos
+            });
             // Las claves desconocidas no bloquean: el archivo se carga y solo
             // se avisa en amarillo. El texto se relee aparte porque `cargar`
             // devuelve los datos ya interpretados.

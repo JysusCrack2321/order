@@ -1,9 +1,11 @@
-// Ventana principal de ORDER: cabecera, pestañas, avisos y pie.
+// Ventana principal de ORDER: cabecera, pestañas, avisos, pie y formularios.
 // Los colores, tamaños y familias salen siempre de tema.slint.
 
 import { Tema } from "tema.slint";
 import { SemanaVista, DiaUI } from "semana.slint";
 import { PendientesVista, TareaUI } from "pendientes.slint";
+import { Marco, Campo, Chip, Casilla, Boton, Etiqueta, RecordatorioUI } from "formularios.slint";
+import { ScrollView } from "std-widgets.slint";
 
 component Pestana inherits Rectangle {
     in property <string> texto;
@@ -41,10 +43,12 @@ component Pestana inherits Rectangle {
     }
 }
 
-component BotonTarea inherits Rectangle {
+component BotonCabecera inherits Rectangle {
+    in property <string> texto;
+    in property <length> ancho: Tema.ancho-boton-tarea;
     callback clicked();
 
-    width: Tema.ancho-boton-tarea;
+    width: root.ancho;
     height: Tema.alto-boton;
     border-radius: Tema.radio;
     background: ta.has-hover ? Tema.acento-tenue : transparent;
@@ -56,7 +60,7 @@ component BotonTarea inherits Rectangle {
         height: parent.height;
         horizontal-alignment: center;
         vertical-alignment: center;
-        text: "+  Tarea";
+        text: root.texto;
         font-family: Tema.fuente-titulos;
         font-size: Tema.tamano-pequeno;
         letter-spacing: Tema.letra-normal;
@@ -142,153 +146,588 @@ export component AppWindow inherits Window {
 
     in property <[TareaUI]> tareas;
     in property <string> resumen-pendientes: "";
+    in property <[RecordatorioUI]> recordatorios;
+
+    // --- Estado del formulario abierto -----------------------------------
+    // 0 = ninguno · 1 = tarea · 2 = clase · 3 = ajustes · 4 = recordatorio
+    in-out property <int> formulario: 0;
+    in property <string> form-encabezado: "";
+    in property <string> form-sub: "";
+    in property <bool> form-edita: false;
+    in property <string> form-error: "";
+    // Campo marcado por la validación. El significado depende del formulario:
+    // tarea (1 título, 2 fecha, 3 hora), clase (1 materia, 2 inicio, 3 fin),
+    // recordatorio (1 texto, 2 hora, 4 días), ajustes (1/2 semestre, 3 hora
+    // del aviso, 4 horas antes).
+    in property <int> campo-mal: 0;
+    in-out property <bool> form-confirma: false;
+
+    // Campos de tarea y de clase (solo hay un formulario abierto a la vez).
+    in-out property <string> f-titulo: "";
+    in-out property <string> f-materia: "";
+    in-out property <string> f-fecha: "";
+    in-out property <string> f-hora: "";
+    in-out property <string> f-fin: "";
+    in-out property <string> f-lugar: "";
+    in-out property <int> f-dia: 0;
+    in-out property <bool> f-hecha: false;
+
+    // Campos de recordatorio.
+    in-out property <string> r-texto: "";
+    in-out property <string> r-hora: "";
+    in-out property <bool> r-lun: false;
+    in-out property <bool> r-mar: false;
+    in-out property <bool> r-mie: false;
+    in-out property <bool> r-jue: false;
+    in-out property <bool> r-vie: false;
+    in-out property <bool> r-sab: false;
+    in-out property <bool> r-dom: false;
+
+    // Campos de ajustes.
+    in-out property <string> a-inicio: "";
+    in-out property <string> a-fin: "";
+    in-out property <string> a-hora: "";
+    in-out property <string> a-horas: "";
+    in-out property <bool> a-sin-semestre: false;
 
     callback semana-anterior();
     callback semana-siguiente();
     callback ir-hoy();
     callback nueva-tarea();
+    callback abrir-ajustes();
+    callback editar-tarea(string);
+    callback marcar-hecha(string);
+    callback nueva-clase();
+    callback editar-clase(string);
+    callback nuevo-recordatorio();
+    callback editar-recordatorio(string);
+    callback guardar-formulario();
+    callback cancelar-formulario();
+    callback confirmar-borrado();
 
-    VerticalLayout {
+    Rectangle {
         width: parent.width;
         height: parent.height;
-        spacing: 0;
 
-        // --- Cabecera -----------------------------------------------------
-        Rectangle {
-            height: Tema.alto-cabecera;
-            background: Tema.fondo-panel;
-
-            HorizontalLayout {
-                width: parent.width;
-                height: parent.height;
-                padding-left: Tema.espacio-xl;
-                padding-right: Tema.espacio-xl;
-                spacing: Tema.espacio-md;
-                cross-axis-alignment: center;
-
-                VerticalLayout {
-                    alignment: center;
-                    spacing: Tema.separacion-linea;
-
-                    Text {
-                        text: "ORDER";
-                        font-family: Tema.fuente-titulos;
-                        font-size: Tema.tamano-titulo;
-                        font-weight: 700;
-                        letter-spacing: Tema.letra-titulo;
-                        color: Tema.texto;
-                    }
-
-                    Text {
-                        text: "horario · tareas";
-                        font-size: Tema.tamano-hora;
-                        letter-spacing: Tema.letra-normal;
-                        color: Tema.texto-tenue;
-                    }
-                }
-
-                Rectangle { horizontal-stretch: 1; }
-
-                HorizontalLayout {
-                    spacing: Tema.espacio-xs;
-                    cross-axis-alignment: center;
-
-                    Pestana {
-                        texto: "Semana";
-                        activa: root.pestana == 0;
-                        clicked => { root.pestana = 0; }
-                    }
-
-                    Pestana {
-                        texto: "Pendientes";
-                        activa: root.pestana == 1;
-                        clicked => { root.pestana = 1; }
-                    }
-                }
-
-                Rectangle { horizontal-stretch: 1; }
-
-                BotonTarea {
-                    clicked => { root.nueva-tarea(); }
-                }
-            }
-
-            Rectangle {
-                y: parent.height - Tema.linea;
-                width: parent.width;
-                height: Tema.linea;
-                background: Tema.borde;
-            }
-        }
-
-        // --- Avisos (no roban el foco ni bloquean la vista) ----------------
-        if root.error != "" : Banner {
-            titulo: root.error;
-            lineas: [];
-            fondo-color: Tema.fondo-error;
-            filo: Tema.borde-error;
-            tinta: Tema.texto-error;
-        }
-
-        if root.advertencias.length > 0 : Banner {
-            titulo: "Claves que ORDER no conoce (se ignoran):";
-            lineas: root.advertencias;
-            fondo-color: Tema.fondo-aviso;
-            filo: Tema.borde-aviso;
-            tinta: Tema.texto-aviso;
-        }
-
-        // --- Contenido ----------------------------------------------------
         VerticalLayout {
-            vertical-stretch: 1;
-            padding: Tema.espacio-lg;
+            width: parent.width;
+            height: parent.height;
             spacing: 0;
 
-            if root.pestana == 0 : SemanaVista {
-                vertical-stretch: 1;
-                dias: root.dias;
-                etiqueta: root.etiqueta-semana;
-                es-actual: root.es-semana-actual;
-                base: root.base-hora;
-                fin-hora: root.fin-hora;
-                etiquetas-hora: root.etiquetas-hora;
-                mostrar-ahora: root.mostrar-ahora;
-                ahora-min: root.ahora-min;
-                hay-tareas: root.hay-tareas;
+            // --- Cabecera -------------------------------------------------
+            Rectangle {
+                height: Tema.alto-cabecera;
+                background: Tema.fondo-panel;
 
-                anterior => { root.semana-anterior(); }
-                siguiente => { root.semana-siguiente(); }
-                ir-hoy => { root.ir-hoy(); }
+                HorizontalLayout {
+                    width: parent.width;
+                    height: parent.height;
+                    padding-left: Tema.espacio-xl;
+                    padding-right: Tema.espacio-xl;
+                    spacing: Tema.espacio-md;
+                    cross-axis-alignment: center;
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: Tema.separacion-linea;
+
+                        Text {
+                            text: "ORDER";
+                            font-family: Tema.fuente-titulos;
+                            font-size: Tema.tamano-titulo;
+                            font-weight: 700;
+                            letter-spacing: Tema.letra-titulo;
+                            color: Tema.texto;
+                        }
+
+                        Text {
+                            text: "horario · tareas";
+                            font-size: Tema.tamano-hora;
+                            letter-spacing: Tema.letra-normal;
+                            color: Tema.texto-tenue;
+                        }
+                    }
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    HorizontalLayout {
+                        spacing: Tema.espacio-xs;
+                        cross-axis-alignment: center;
+
+                        Pestana {
+                            texto: "Semana";
+                            activa: root.pestana == 0;
+                            clicked => { root.pestana = 0; }
+                        }
+
+                        Pestana {
+                            texto: "Pendientes";
+                            activa: root.pestana == 1;
+                            clicked => { root.pestana = 1; }
+                        }
+                    }
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    BotonCabecera {
+                        texto: "Ajustes";
+                        ancho: Tema.ancho-boton-ajustes;
+                        clicked => { root.abrir-ajustes(); }
+                    }
+
+                    BotonCabecera {
+                        texto: "+  Tarea";
+                        clicked => { root.nueva-tarea(); }
+                    }
+                }
+
+                Rectangle {
+                    y: parent.height - Tema.linea;
+                    width: parent.width;
+                    height: Tema.linea;
+                    background: Tema.borde;
+                }
             }
 
-            if root.pestana == 1 : PendientesVista {
+            // --- Avisos (no roban el foco ni bloquean la vista) ------------
+            if root.error != "" : Banner {
+                titulo: root.error;
+                lineas: [];
+                fondo-color: Tema.fondo-error;
+                filo: Tema.borde-error;
+                tinta: Tema.texto-error;
+            }
+
+            if root.advertencias.length > 0 : Banner {
+                titulo: "Claves que ORDER no conoce (se ignoran):";
+                lineas: root.advertencias;
+                fondo-color: Tema.fondo-aviso;
+                filo: Tema.borde-aviso;
+                tinta: Tema.texto-aviso;
+            }
+
+            // --- Contenido ------------------------------------------------
+            VerticalLayout {
                 vertical-stretch: 1;
-                tareas: root.tareas;
-                resumen: root.resumen-pendientes;
+                padding: Tema.espacio-lg;
+                spacing: 0;
+
+                if root.pestana == 0 : SemanaVista {
+                    vertical-stretch: 1;
+                    dias: root.dias;
+                    etiqueta: root.etiqueta-semana;
+                    es-actual: root.es-semana-actual;
+                    base: root.base-hora;
+                    fin-hora: root.fin-hora;
+                    etiquetas-hora: root.etiquetas-hora;
+                    mostrar-ahora: root.mostrar-ahora;
+                    ahora-min: root.ahora-min;
+                    hay-tareas: root.hay-tareas;
+
+                    anterior => { root.semana-anterior(); }
+                    siguiente => { root.semana-siguiente(); }
+                    ir-hoy => { root.ir-hoy(); }
+                    nueva-clase => { root.nueva-clase(); }
+                    editar-clase(id) => { root.editar-clase(id); }
+                }
+
+                if root.pestana == 1 : PendientesVista {
+                    vertical-stretch: 1;
+                    tareas: root.tareas;
+                    resumen: root.resumen-pendientes;
+
+                    editar(id) => { root.editar-tarea(id); }
+                    marcar(id) => { root.marcar-hecha(id); }
+                }
+            }
+
+            // --- Pie ------------------------------------------------------
+            Rectangle {
+                height: Tema.alto-pie;
+                background: Tema.fondo-panel;
+
+                Rectangle {
+                    y: 0;
+                    width: parent.width;
+                    height: Tema.linea;
+                    background: Tema.borde;
+                }
+
+                Text {
+                    x: Tema.espacio-lg;
+                    width: parent.width - 2 * Tema.espacio-lg;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    text: root.pie;
+                    font-size: Tema.tamano-pie;
+                    color: Tema.texto-suave;
+                    overflow: elide;
+                }
             }
         }
 
-        // --- Pie ----------------------------------------------------------
-        Rectangle {
-            height: Tema.alto-pie;
-            background: Tema.fondo-panel;
+        // -----------------------------------------------------------------
+        // Formularios: capa encima de la ventana, con velo que bloquea el
+        // fondo para que un clic perdido no cambie de semana o de pestaña.
+        // -----------------------------------------------------------------
+        if root.formulario != 0 : Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            background: Tema.fondo-velo;
 
-            Rectangle {
-                y: 0;
-                width: parent.width;
-                height: Tema.linea;
-                background: Tema.borde;
+            TouchArea {
+                clicked => { }
             }
 
-            Text {
-                x: Tema.espacio-lg;
-                width: parent.width - 2 * Tema.espacio-lg;
-                height: parent.height;
-                vertical-alignment: center;
-                text: root.pie;
-                font-size: Tema.tamano-pie;
-                color: Tema.texto-suave;
-                overflow: elide;
+            // --- Tarea ----------------------------------------------------
+            if root.formulario == 1 : Marco {
+                encabezado: root.form-encabezado;
+                sub: root.form-edita ? "Los cambios se guardan en order.toml." : "Se agrega al final de order.toml.";
+                alto-panel: Tema.alto-panel-tarea;
+                error: root.form-error;
+                confirma: root.form-confirma;
+                pregunta-confirma: "¿Borrar esta tarea del archivo?";
+                puede-borrar: root.form-edita;
+
+                guardar => { root.guardar-formulario(); }
+                cancelar => { root.cancelar-formulario(); }
+                pedir-borrar => { root.form-confirma = true; }
+                confirmar-borrado => { root.confirmar-borrado(); }
+                no-borrar => { root.form-confirma = false; }
+
+                VerticalLayout {
+                    spacing: Tema.espacio-md;
+
+                    Campo {
+                        etiqueta: "Título";
+                        texto <=> root.f-titulo;
+                        pista: "Taller 2";
+                        mal: root.campo-mal == 1;
+                    }
+
+                    Campo {
+                        etiqueta: "Materia (opcional)";
+                        texto <=> root.f-materia;
+                        pista: "Control";
+                    }
+
+                    HorizontalLayout {
+                        spacing: Tema.espacio-md;
+
+                        Campo {
+                            horizontal-stretch: 1;
+                            etiqueta: "Fecha de entrega";
+                            texto <=> root.f-fecha;
+                            pista: "2026-11-28";
+                            mal: root.campo-mal == 2;
+                        }
+
+                        Campo {
+                            width: Tema.ancho-campo-hora;
+                            etiqueta: "Hora";
+                            texto <=> root.f-hora;
+                            pista: "23:59";
+                            mal: root.campo-mal == 3;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Tema.espacio-sm;
+                        cross-axis-alignment: center;
+
+                        Casilla {
+                            marcada: root.f-hecha;
+                            clicked => { root.f-hecha = !root.f-hecha; }
+                        }
+
+                        Text {
+                            text: "Ya está hecha";
+                            font-size: Tema.tamano-pequeno;
+                            color: Tema.texto-suave;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            // --- Clase ----------------------------------------------------
+            if root.formulario == 2 : Marco {
+                encabezado: root.form-encabezado;
+                sub: "La clase se repite cada semana dentro del semestre.";
+                alto-panel: Tema.alto-panel-clase;
+                error: root.form-error;
+                confirma: root.form-confirma;
+                pregunta-confirma: "¿Borrar esta clase del archivo?";
+                puede-borrar: root.form-edita;
+
+                guardar => { root.guardar-formulario(); }
+                cancelar => { root.cancelar-formulario(); }
+                pedir-borrar => { root.form-confirma = true; }
+                confirmar-borrado => { root.confirmar-borrado(); }
+                no-borrar => { root.form-confirma = false; }
+
+                VerticalLayout {
+                    spacing: Tema.espacio-md;
+
+                    Campo {
+                        etiqueta: "Materia";
+                        texto <=> root.f-materia;
+                        pista: "Control";
+                        mal: root.campo-mal == 1;
+                    }
+
+                    VerticalLayout {
+                        spacing: Tema.espacio-xs;
+
+                        Etiqueta {
+                            text: "Día";
+                        }
+
+                        HorizontalLayout {
+                            spacing: Tema.espacio-xs;
+
+                            Chip { texto: "Lun"; activo: root.f-dia == 0; clicked => { root.f-dia = 0; } }
+                            Chip { texto: "Mar"; activo: root.f-dia == 1; clicked => { root.f-dia = 1; } }
+                            Chip { texto: "Mié"; activo: root.f-dia == 2; clicked => { root.f-dia = 2; } }
+                            Chip { texto: "Jue"; activo: root.f-dia == 3; clicked => { root.f-dia = 3; } }
+                            Chip { texto: "Vie"; activo: root.f-dia == 4; clicked => { root.f-dia = 4; } }
+                            Chip { texto: "Sáb"; activo: root.f-dia == 5; clicked => { root.f-dia = 5; } }
+                            Chip { texto: "Dom"; activo: root.f-dia == 6; clicked => { root.f-dia = 6; } }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Tema.espacio-md;
+
+                        Campo {
+                            horizontal-stretch: 1;
+                            etiqueta: "Inicio";
+                            texto <=> root.f-hora;
+                            pista: "07:00";
+                            mal: root.campo-mal == 2;
+                        }
+
+                        Campo {
+                            horizontal-stretch: 1;
+                            etiqueta: "Fin";
+                            texto <=> root.f-fin;
+                            pista: "09:00";
+                            mal: root.campo-mal == 3;
+                        }
+                    }
+
+                    Campo {
+                        etiqueta: "Lugar (opcional)";
+                        texto <=> root.f-lugar;
+                        pista: "453-201";
+                    }
+                }
+            }
+
+            // --- Ajustes --------------------------------------------------
+            if root.formulario == 3 : Marco {
+                encabezado: "Ajustes";
+                sub: "Semestre, avisos y recordatorios fijos.";
+                alto-panel: Tema.alto-panel-ajustes;
+                ancho-panel: Tema.ancho-formulario-ancho;
+                error: root.form-error;
+                confirma: false;
+                puede-borrar: false;
+
+                guardar => { root.guardar-formulario(); }
+                cancelar => { root.cancelar-formulario(); }
+                pedir-borrar => { }
+                confirmar-borrado => { }
+                no-borrar => { }
+
+                VerticalLayout {
+                    spacing: Tema.espacio-md;
+
+                    HorizontalLayout {
+                        spacing: Tema.espacio-sm;
+                        cross-axis-alignment: center;
+
+                        Casilla {
+                            marcada: root.a-sin-semestre;
+                            clicked => { root.a-sin-semestre = !root.a-sin-semestre; }
+                        }
+
+                        Text {
+                            text: "Sin semestre (las clases valen todo el año)";
+                            font-size: Tema.tamano-pequeno;
+                            color: Tema.texto-suave;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Tema.espacio-md;
+
+                        Campo {
+                            horizontal-stretch: 1;
+                            etiqueta: "Inicio del semestre";
+                            texto <=> root.a-inicio;
+                            pista: "2026-08-03";
+                            mal: root.campo-mal == 1;
+                            apagado: root.a-sin-semestre;
+                        }
+
+                        Campo {
+                            horizontal-stretch: 1;
+                            etiqueta: "Fin del semestre";
+                            texto <=> root.a-fin;
+                            pista: "2026-12-05";
+                            mal: root.campo-mal == 2;
+                            apagado: root.a-sin-semestre;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Tema.espacio-md;
+
+                        Campo {
+                            horizontal-stretch: 1;
+                            etiqueta: "Aviso del día antes";
+                            texto <=> root.a-hora;
+                            pista: "20:00";
+                            mal: root.campo-mal == 3;
+                        }
+
+                        Campo {
+                            horizontal-stretch: 1;
+                            etiqueta: "Horas antes de vencer";
+                            texto <=> root.a-horas;
+                            pista: "3";
+                            mal: root.campo-mal == 4;
+                        }
+                    }
+
+                    Etiqueta {
+                        text: "RECORDATORIOS";
+                    }
+
+                    ScrollView {
+                        height: Tema.alto-lista-recordatorios;
+
+                        VerticalLayout {
+                            spacing: 0;
+
+                            for recordatorio in root.recordatorios : Rectangle {
+                                height: Tema.alto-fila-compacta;
+                                background: fila-ta.has-hover ? Tema.fondo-hover : transparent;
+
+                                fila-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.editar-recordatorio(recordatorio.id); }
+                                }
+
+                                HorizontalLayout {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    padding-left: Tema.espacio-sm;
+                                    padding-right: Tema.espacio-sm;
+                                    spacing: Tema.espacio-md;
+                                    cross-axis-alignment: center;
+
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        text: recordatorio.texto;
+                                        font-size: Tema.tamano-pequeno;
+                                        color: Tema.texto;
+                                        overflow: elide;
+                                    }
+
+                                    Text {
+                                        text: recordatorio.dias + " · " + recordatorio.hora;
+                                        font-size: Tema.tamano-hora;
+                                        color: Tema.texto-suave;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                Rectangle {
+                                    y: parent.height - Tema.linea;
+                                    width: parent.width;
+                                    height: Tema.linea;
+                                    background: Tema.borde-suave;
+                                }
+                            }
+
+                            if root.recordatorios.length == 0 : Text {
+                                height: Tema.alto-fila-compacta;
+                                vertical-alignment: center;
+                                text: "Sin recordatorios.";
+                                font-size: Tema.tamano-pequeno;
+                                color: Tema.texto-tenue;
+                            }
+                        }
+                    }
+
+                    Boton {
+                        texto: "Agregar recordatorio";
+                        width: Tema.ancho-boton-largo;
+                        clicked => { root.nuevo-recordatorio(); }
+                    }
+                }
+            }
+
+            // --- Recordatorio ---------------------------------------------
+            if root.formulario == 4 : Marco {
+                encabezado: root.form-encabezado;
+                sub: "Se avisa a esa hora los días marcados.";
+                alto-panel: Tema.alto-panel-recordatorio;
+                error: root.form-error;
+                confirma: root.form-confirma;
+                pregunta-confirma: "¿Borrar este recordatorio del archivo?";
+                puede-borrar: root.form-edita;
+
+                guardar => { root.guardar-formulario(); }
+                cancelar => { root.cancelar-formulario(); }
+                pedir-borrar => { root.form-confirma = true; }
+                confirmar-borrado => { root.confirmar-borrado(); }
+                no-borrar => { root.form-confirma = false; }
+
+                VerticalLayout {
+                    spacing: Tema.espacio-md;
+
+                    Campo {
+                        etiqueta: "Texto";
+                        texto <=> root.r-texto;
+                        pista: "Revisar Moodle";
+                        mal: root.campo-mal == 1;
+                    }
+
+                    VerticalLayout {
+                        spacing: Tema.espacio-xs;
+
+                        Etiqueta {
+                            text: "Días";
+                            mal: root.campo-mal == 4;
+                        }
+
+                        HorizontalLayout {
+                            spacing: Tema.espacio-xs;
+
+                            Chip { texto: "Lun"; activo: root.r-lun; clicked => { root.r-lun = !root.r-lun; } }
+                            Chip { texto: "Mar"; activo: root.r-mar; clicked => { root.r-mar = !root.r-mar; } }
+                            Chip { texto: "Mié"; activo: root.r-mie; clicked => { root.r-mie = !root.r-mie; } }
+                            Chip { texto: "Jue"; activo: root.r-jue; clicked => { root.r-jue = !root.r-jue; } }
+                            Chip { texto: "Vie"; activo: root.r-vie; clicked => { root.r-vie = !root.r-vie; } }
+                            Chip { texto: "Sáb"; activo: root.r-sab; clicked => { root.r-sab = !root.r-sab; } }
+                            Chip { texto: "Dom"; activo: root.r-dom; clicked => { root.r-dom = !root.r-dom; } }
+                        }
+                    }
+
+                    Campo {
+                        width: Tema.ancho-campo-hora;
+                        etiqueta: "Hora";
+                        texto <=> root.r-hora;
+                        pista: "18:00";
+                        mal: root.campo-mal == 2;
+                    }
+                }
             }
         }
     }

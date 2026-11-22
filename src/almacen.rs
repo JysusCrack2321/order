@@ -11,6 +11,7 @@
 //!    disco está roto, no se toca en absoluto.
 
 use crate::modelo::{self, Datos, ErrorDatos};
+use crate::ops;
 use chrono::Local;
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
@@ -18,7 +19,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-use toml_edit::{value, DocumentMut, Item, Value};
+use toml_edit::{DocumentMut, Item, Value, value};
 
 /// Lo que se copia en el primer arranque.
 const EJEMPLO: &str = include_str!("../ejemplo.toml");
@@ -34,7 +35,19 @@ pub struct Almacen {
 
 impl Almacen {
     /// `~/.config/order/order.toml`.
+    ///
+    /// Si existe la variable de entorno `ORDER_ARCHIVO`, su valor reemplaza esa
+    /// ruta: sirve para probar a mano con una copia sin tocar el archivo real
+    /// del usuario (`ORDER_ARCHIVO=/tmp/copia.toml cargo run`). También mueve
+    /// el historial, que vive junto al archivo elegido.
     pub fn por_defecto() -> Almacen {
+        if let Some(ruta) = std::env::var_os("ORDER_ARCHIVO") {
+            if !ruta.is_empty() {
+                return Almacen {
+                    ruta: PathBuf::from(ruta),
+                };
+            }
+        }
         let base = dirs::config_dir()
             .or_else(dirs::home_dir)
             .unwrap_or_else(|| PathBuf::from("."));
@@ -88,6 +101,43 @@ impl Almacen {
         let nuevo = doc.to_string();
         let datos = modelo::parsear(&nuevo)?; // valida antes de tocar el disco
         self.escribir_atomico(&nuevo)?;
+        Ok(datos)
+    }
+
+    /// El historial, junto al archivo principal (`historial.toml`).
+    pub fn historial(&self) -> Almacen {
+        Almacen {
+            ruta: self.ruta.with_file_name("historial.toml"),
+        }
+    }
+
+    /// Mueve a `historial.toml` las tareas hechas hace más de 30 días. Se llama
+    /// una vez al arrancar; si no hay nada que mover, no toca ningún archivo.
+    pub fn archivar(&self) -> Result<Datos, ErrorDatos> {
+        let hoy = Local::now().date_naive();
+        let datos = modelo::parsear(&self.leer()?)?;
+        if !ops::hay_que_archivar(&datos, hoy) {
+            return Ok(datos);
+        }
+
+        let historial = self.historial();
+        let mut doc_historial = if historial.ruta.exists() {
+            historial
+                .leer()?
+                .parse::<DocumentMut>()
+                .map_err(|e| ErrorDatos {
+                    linea: None,
+                    mensaje: format!("{} no es TOML válido: {e}", historial.ruta.display()),
+                })?
+        } else {
+            DocumentMut::new()
+        };
+
+        let datos = self.modificar(|doc| {
+            ops::archivar_hechas(doc, &mut doc_historial, hoy);
+            Ok(())
+        })?;
+        historial.escribir_atomico(&doc_historial.to_string())?;
         Ok(datos)
     }
 
@@ -358,5 +408,69 @@ hecha = false
 
         let leido = fs::read_to_string(&almacen.ruta).expect("leer el archivo");
         assert!(leido.contains(&id), "el id debe quedar en disco:\n{leido}");
+    }
+
+    /// El historial se escribe junto al archivo y solo se lleva lo viejo.
+    #[test]
+    fn archiva_a_historial() {
+        let (_dir, almacen) = temporal();
+        fs::write(
+            &almacen.ruta,
+            "\
+# mi nota
+[[tarea]]
+id = \"t-vieja\"
+titulo = \"De octubre\"
+vence = \"2026-10-05T23:59\"
+hecha = true
+hecha_en = \"2026-09-20\"
+
+[[tarea]]
+id = \"t-nueva\"
+titulo = \"Sin hacer\"
+vence = \"2026-12-01T23:59\"
+hecha = false
+",
+        )
+        .expect("escribir el archivo con una tarea vieja");
+
+        let datos = almacen.archivar().expect("archivar");
+        assert!(
+            !datos.tareas.iter().any(|t| t.id == "t-vieja"),
+            "la tarea vieja sale de order.toml"
+        );
+        assert!(
+            datos.tareas.iter().any(|t| t.id == "t-nueva"),
+            "la pendiente se queda"
+        );
+
+        let principal = fs::read_to_string(&almacen.ruta).expect("leer el archivo");
+        assert!(
+            principal.contains("# mi nota"),
+            "los comentarios sobreviven:\n{principal}"
+        );
+
+        let historial = fs::read_to_string(almacen.historial().ruta).expect("leer el historial");
+        assert!(historial.contains("t-vieja"), "historial:\n{historial}");
+    }
+
+    /// Sin tareas viejas no se reescribe nada (el historial no aparece).
+    #[test]
+    fn no_archiva_si_no_hace_falta() {
+        let (_dir, almacen) = temporal();
+        almacen.cargar().expect("crear desde el ejemplo");
+        let antes = fs::read_to_string(&almacen.ruta).expect("leer el archivo");
+
+        almacen.archivar().expect("archivar sin nada que mover");
+
+        assert_eq!(
+            fs::read_to_string(&almacen.ruta).expect("leer el archivo"),
+            antes,
+            "el archivo no cambia"
+        );
+        assert!(
+            !almacen.historial().ruta.exists(),
+            "no se crea historial vacío"
+        );
     }
 }

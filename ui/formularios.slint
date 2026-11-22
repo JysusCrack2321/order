@@ -1,0 +1,314 @@
+// Piezas de los formularios de edición (Tarea 7).
+// ---------------------------------------------------------------------------
+// Todo el color, el tamaño y la tipografía salen de tema.slint: aquí no hay
+// ningún valor escrito a mano. Estas piezas se combinan desde app.slint, que
+// es quien tiene el estado del formulario abierto.
+
+import { Tema } from "tema.slint";
+
+/// Un recordatorio tal como lo pinta la lista de ajustes.
+export struct RecordatorioUI {
+    id: string,
+    texto: string,
+    dias: string,
+    hora: string,
+}
+
+/// Casilla de verificación del estilo de la app (cuadro con un ✓ dorado).
+export component Casilla inherits Rectangle {
+    in-out property <bool> marcada: false;
+    callback clicked();
+
+    width: Tema.alto-check;
+    height: Tema.alto-check;
+    border-radius: Tema.radio-pequeno;
+    border-width: Tema.linea;
+    border-color: root.marcada ? Tema.acento : (ta.has-hover ? Tema.acento-suave : Tema.borde-fuerte);
+    background: root.marcada ? Tema.acento-tenue : Tema.fondo-campo;
+
+    Text {
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: "✓";
+        font-size: Tema.tamano-pequeno;
+        color: Tema.acento;
+        visible: root.marcada;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// Botón de los formularios: principal (oro), peligro (terracota) o neutro.
+export component Boton inherits Rectangle {
+    in property <string> texto;
+    in property <bool> principal: false;
+    in property <bool> peligro: false;
+    callback clicked();
+
+    width: Tema.ancho-boton-form;
+    height: Tema.alto-boton;
+    border-radius: Tema.radio;
+    border-width: Tema.linea;
+    border-color: root.peligro
+        ? (ta.has-hover ? Tema.vencida : Tema.borde-error)
+        : (root.principal || ta.has-hover ? Tema.acento-suave : Tema.borde);
+    background: root.peligro
+        ? (ta.has-hover ? Tema.fondo-error : transparent)
+        : (root.principal
+            ? (ta.has-hover ? Tema.acento-suave : Tema.acento-tenue)
+            : (ta.has-hover ? Tema.fondo-hover : transparent));
+
+    Text {
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: root.texto;
+        font-family: root.principal ? Tema.fuente-titulos : Tema.fuente-texto;
+        font-size: Tema.tamano-pequeno;
+        letter-spacing: Tema.letra-normal;
+        color: root.peligro
+            ? Tema.vencida-texto
+            : (root.principal ? (ta.has-hover ? Tema.texto : Tema.acento) : Tema.texto-suave);
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// Etiqueta pequeña en mayúsculas sobre cada campo.
+export component Etiqueta inherits Text {
+    in property <bool> mal: false;
+    in property <bool> apagada: false;
+
+    font-size: Tema.tamano-pequeno;
+    letter-spacing: Tema.letra-normal;
+    vertical-alignment: center;
+    color: root.mal ? Tema.texto-error : (root.apagada ? Tema.texto-tenue : Tema.texto-suave);
+}
+
+/// Campo de texto con etiqueta arriba y recuadro del tema.
+export component Campo inherits VerticalLayout {
+    in property <string> etiqueta: "";
+    in-out property <string> texto;
+    in property <string> pista: "";
+    in property <bool> mal: false;
+    in property <bool> apagado: false;
+
+    spacing: Tema.espacio-xs;
+
+    Etiqueta {
+        text: root.etiqueta;
+        mal: root.mal;
+        apagada: root.apagado;
+    }
+
+    Rectangle {
+        height: Tema.alto-campo;
+        border-radius: Tema.radio-pequeno;
+        background: root.apagado ? Tema.fondo-panel : Tema.fondo-campo;
+        border-width: Tema.linea;
+        border-color: root.mal ? Tema.vencida : (entrada.has-focus ? Tema.acento-suave : Tema.borde-campo);
+
+        entrada := TextInput {
+            x: Tema.espacio-sm;
+            width: parent.width - 2 * Tema.espacio-sm;
+            height: parent.height;
+            vertical-alignment: center;
+            text <=> root.texto;
+            color: Tema.texto;
+            font-size: Tema.tamano-pequeno;
+            enabled: !root.apagado;
+        }
+
+        // Pista mientras el campo está vacío (TextInput no la trae en Slint 1.19).
+        if root.texto == "" && !entrada.has-focus : Text {
+            x: Tema.espacio-sm;
+            width: parent.width - 2 * Tema.espacio-sm;
+            height: parent.height;
+            vertical-alignment: center;
+            text: root.pista;
+            color: Tema.texto-tenue;
+            font-size: Tema.tamano-pequeno;
+            overflow: elide;
+        }
+    }
+}
+
+/// Ficha seleccionable (día de la semana, opción corta).
+export component Chip inherits Rectangle {
+    in property <string> texto;
+    in property <bool> activo: false;
+    callback clicked();
+
+    width: Tema.ancho-chip;
+    height: Tema.alto-chip;
+    border-radius: Tema.radio-pequeno;
+    border-width: Tema.linea;
+    border-color: root.activo ? Tema.acento : (ta.has-hover ? Tema.acento-suave : Tema.borde);
+    background: root.activo ? Tema.acento-tenue : (ta.has-hover ? Tema.fondo-hover : Tema.fondo-campo);
+
+    Text {
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: root.texto;
+        font-family: Tema.fuente-titulos;
+        font-size: Tema.tamano-hora;
+        letter-spacing: Tema.letra-normal;
+        color: root.activo ? Tema.acento : Tema.texto-suave;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// Marco del formulario: panel oscuro con encabezado, contenido, aviso de
+/// error y botones. El contenido se pasa como hijos (`@children`).
+export component Marco inherits Rectangle {
+    in property <string> encabezado: "";
+    in property <string> sub: "";
+    in property <length> alto-panel: Tema.alto-panel-tarea;
+    in property <length> ancho-panel: Tema.ancho-formulario;
+    in property <string> error: "";
+    in property <bool> confirma: false;
+    in property <string> pregunta-confirma: "¿Borrar esto?";
+    in property <bool> puede-borrar: false;
+    /// Texto del botón principal ("Guardar" por defecto).
+    in property <string> texto-guardar: "Guardar";
+
+    callback guardar();
+    callback cancelar();
+    callback pedir-borrar();
+    callback confirmar-borrado();
+    callback no-borrar();
+
+    background: transparent;
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.ancho-panel;
+        height: root.alto-panel;
+        background: Tema.fondo-panel;
+        border-radius: Tema.radio;
+        border-width: Tema.linea;
+        border-color: Tema.borde-fuerte;
+
+
+        VerticalLayout {
+            x: Tema.espacio-lg;
+            y: Tema.espacio-lg;
+            width: parent.width - 2 * Tema.espacio-lg;
+            height: parent.height - 2 * Tema.espacio-lg;
+            spacing: Tema.espacio-md;
+
+            VerticalLayout {
+                spacing: Tema.espacio-xs;
+
+                Text {
+                    text: root.encabezado;
+                    font-family: Tema.fuente-titulos;
+                    font-size: Tema.tamano-semana;
+                    font-weight: 700;
+                    letter-spacing: Tema.letra-normal;
+                    color: Tema.texto;
+                    overflow: elide;
+                }
+
+                if root.sub != "" : Text {
+                    text: root.sub;
+                    font-size: Tema.tamano-hora;
+                    color: Tema.texto-tenue;
+                    overflow: elide;
+                }
+            }
+
+            // Errores de validación del propio formulario (no del archivo).
+            if root.error != "" : Rectangle {
+                height: Tema.alto-campo;
+                border-radius: Tema.radio-pequeno;
+                background: Tema.fondo-error;
+                border-width: Tema.linea;
+                border-color: Tema.borde-error;
+
+                Text {
+                    x: Tema.espacio-sm;
+                    width: parent.width - 2 * Tema.espacio-sm;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    text: root.error;
+                    font-size: Tema.tamano-pequeno;
+                    color: Tema.texto-error;
+                    overflow: elide;
+                }
+            }
+
+            @children
+
+            Rectangle { vertical-stretch: 1; }
+
+            if root.confirma : VerticalLayout {
+                spacing: Tema.espacio-sm;
+
+                Text {
+                    text: root.pregunta-confirma;
+                    font-size: Tema.tamano-pequeno;
+                    color: Tema.vencida-texto;
+                    overflow: elide;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Tema.espacio-sm;
+
+                    Boton {
+                        texto: "Sí, borrar";
+                        peligro: true;
+                        width: Tema.ancho-boton-form + Tema.espacio-lg;
+                        clicked => { root.confirmar-borrado(); }
+                    }
+
+                    Boton {
+                        texto: "No";
+                        clicked => { root.no-borrar(); }
+                    }
+                }
+            }
+
+            if !root.confirma : HorizontalLayout {
+                alignment: end;
+                spacing: Tema.espacio-sm;
+
+                if root.puede-borrar : Boton {
+                    texto: "Borrar";
+                    peligro: true;
+                    clicked => { root.pedir-borrar(); }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                Boton {
+                    texto: "Cancelar";
+                    clicked => { root.cancelar(); }
+                }
+
+                Boton {
+                    texto: root.texto-guardar;
+                    principal: true;
+                    clicked => { root.guardar(); }
+                }
+            }
+        }
+    }
+}

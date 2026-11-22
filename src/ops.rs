@@ -11,7 +11,8 @@
 
 use crate::almacen::nuevo_id;
 use crate::modelo::{
-    Ajustes, Clase, Dia, FORMATO_FECHA, FORMATO_FECHA_HORA, FORMATO_HORA, Recordatorio, Semestre,
+    Ajustes, Clase, Datos, Dia, FORMATO_FECHA, FORMATO_FECHA_HORA, FORMATO_HORA, Recordatorio,
+    Semestre,
 };
 use chrono::{NaiveDate, NaiveDateTime};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
@@ -65,6 +66,16 @@ pub fn borrar_tarea(doc: &mut DocumentMut, id: &str) -> Result<(), String> {
     borrar_por_id(doc, "tarea", "la tarea", id)
 }
 
+/// ¿Hay alguna tarea hecha hace más de 30 días que toque archivar? Sirve para
+/// no reescribir el archivo al arrancar cuando no hace falta.
+pub fn hay_que_archivar(datos: &Datos, hoy: NaiveDate) -> bool {
+    datos.tareas.iter().any(|t| {
+        t.hecha
+            && t.hecha_en
+                .is_some_and(|fecha| (hoy - fecha).num_days() > 30)
+    })
+}
+
 /// Mueve a `historial` las tareas hechas hace más de 30 días y devuelve cuántas
 /// movió. Las hechas sin `hecha_en` se quedan: no hay forma de saber su edad.
 pub fn archivar_hechas(
@@ -89,8 +100,44 @@ pub fn archivar_hechas(
             .is_some_and(|tabla| hecha_hace_mas_de(tabla, hoy, 30));
         if vieja {
             // `remove` no devuelve la tabla: se copia antes de quitarla.
-            if let Some(tabla) = tareas.get(i).cloned() {
+            if let Some(mut tabla) = tareas.get(i).cloned() {
+                // El comentario que va encima de la tabla es decoración suya:
+                // se queda en `order.toml` (encima de la siguiente tarea) para
+                // no perder las notas de sección, y la tarea viaja al historial
+                // con un salto de línea limpio.
+                let prefijo = tabla
+                    .decor()
+                    .prefix()
+                    .and_then(|prefijo| prefijo.as_str())
+                    .unwrap_or_default()
+                    .to_string();
                 tareas.remove(i);
+                if !prefijo.trim().is_empty() {
+                    if let Some(siguiente) = tareas.get_mut(i) {
+                        let actual = siguiente
+                            .decor()
+                            .prefix()
+                            .and_then(|p| p.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        siguiente
+                            .decor_mut()
+                            .set_prefix(format!("{prefijo}{actual}"));
+                    } else if i > 0 {
+                        if let Some(anterior) = tareas.get_mut(i - 1) {
+                            let actual = anterior
+                                .decor()
+                                .suffix()
+                                .and_then(|p| p.as_str())
+                                .unwrap_or_default()
+                                .to_string();
+                            anterior
+                                .decor_mut()
+                                .set_suffix(format!("{actual}{prefijo}"));
+                        }
+                    }
+                }
+                tabla.decor_mut().set_prefix("\n");
                 destino.push(tabla);
                 archivadas += 1;
             }

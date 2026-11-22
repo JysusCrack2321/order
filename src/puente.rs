@@ -4,8 +4,18 @@
 //! traduce a los modelos que dibuja la interfaz y se conectan los botones.
 //! El estado de la ventana es de un solo hilo: Slint corre el bucle de eventos
 //! en el hilo principal y estas funciones se llaman desde ahí.
+//!
+//! Todas las escrituras pasan por `Almacen::modificar` y las operaciones de
+//! `ops`: si el archivo está roto o el cambio no se puede releer, no se escribe
+//! nada y el error sale en el banner rojo mientras el formulario sigue abierto
+//! con lo que el usuario había escrito.
 
-use crate::modelo::{Ajustes, Datos, Dia, ErrorDatos, Recordatorio};
+use crate::almacen::Almacen;
+use crate::modelo::{
+    self, Ajustes, Clase, Datos, Dia, ErrorDatos, FORMATO_FECHA, FORMATO_HORA, Recordatorio,
+    Semestre, Tarea,
+};
+use crate::ops::{self, NuevaTarea};
 use crate::semana;
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Timelike, Weekday};
 use slint::{ModelRc, SharedString, VecModel, Weak};
@@ -30,7 +40,29 @@ const MESES_LARGOS: [&str; 12] = [
     "noviembre",
     "diciembre",
 ];
-const DIAS: [&str; 7] = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+
+/// Los días en el mismo orden que las fichas del formulario (lun → dom).
+const DIAS_SEMANA: [Dia; 7] = [
+    Dia::Lun,
+    Dia::Mar,
+    Dia::Mie,
+    Dia::Jue,
+    Dia::Vie,
+    Dia::Sab,
+    Dia::Dom,
+];
+
+/// Qué formulario está abierto y sobre qué elemento trabaja. El `id` vacío
+/// significa "crear"; los campos escritos viven en las propiedades de la
+/// ventana, no aquí.
+#[derive(Clone, PartialEq)]
+enum Edicion {
+    Ninguna,
+    Tarea(String),
+    Clase(String),
+    Recordatorio(String),
+    Ajustes,
+}
 
 /// Lo que la ventana necesita en cada refresco.
 struct Estado {
@@ -39,6 +71,7 @@ struct Estado {
     lunes: NaiveDate,
     error: Option<String>,
     advertencias: Vec<String>,
+    edicion: Edicion,
 }
 
 impl Estado {
@@ -48,6 +81,7 @@ impl Estado {
             lunes: semana::lunes_de(Local::now().date_naive()),
             error: None,
             advertencias: Vec::new(),
+            edicion: Edicion::Ninguna,
         }
     }
 }
@@ -69,6 +103,7 @@ struct Vista {
     ahora_min: i32,
     hay_tareas: bool,
     tareas: Vec<TareaUI>,
+    recordatorios: Vec<RecordatorioUI>,
     resumen: String,
     pie: String,
     error: SharedString,
@@ -158,6 +193,85 @@ fn conectar(ui: &AppWindow) {
         con_estado(|estado| estado.lunes = semana::lunes_de(hoy));
         actualizar(&ui);
     });
+
+    // --- Tareas ----------------------------------------------------------
+    let debil = ui.as_weak();
+    ui.on_nueva_tarea(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        abrir_tarea(&ui, None);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_editar_tarea(move |id: SharedString| {
+        let Some(ui) = debil.upgrade() else { return };
+        match tarea_por_id(&id) {
+            Some(tarea) => abrir_tarea(&ui, Some(&tarea)),
+            None => aviso(&ui, "Esa tarea ya no está en el archivo."),
+        }
+    });
+
+    let debil = ui.as_weak();
+    ui.on_marcar_hecha(move |id: SharedString| {
+        let Some(ui) = debil.upgrade() else { return };
+        marcar(&ui, &id);
+    });
+
+    // --- Clases ----------------------------------------------------------
+    let debil = ui.as_weak();
+    ui.on_nueva_clase(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        abrir_clase(&ui, None);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_editar_clase(move |id: SharedString| {
+        let Some(ui) = debil.upgrade() else { return };
+        match clase_por_id(&id) {
+            Some(clase) => abrir_clase(&ui, Some(&clase)),
+            None => aviso(&ui, "Esa clase ya no está en el archivo."),
+        }
+    });
+
+    // --- Ajustes y recordatorios -----------------------------------------
+    let debil = ui.as_weak();
+    ui.on_abrir_ajustes(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        abrir_ajustes(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_nuevo_recordatorio(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        abrir_recordatorio(&ui, None);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_editar_recordatorio(move |id: SharedString| {
+        let Some(ui) = debil.upgrade() else { return };
+        match recordatorio_por_id(&id) {
+            Some(recordatorio) => abrir_recordatorio(&ui, Some(&recordatorio)),
+            None => aviso(&ui, "Ese recordatorio ya no está en el archivo."),
+        }
+    });
+
+    // --- Formularios -----------------------------------------------------
+    let debil = ui.as_weak();
+    ui.on_guardar_formulario(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        guardar(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_cancelar_formulario(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        cancelar(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_confirmar_borrado(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        borrar(&ui);
+    });
 }
 
 fn mover(debil: &Weak<AppWindow>, delta_dias: i64) {
@@ -171,6 +285,433 @@ fn mover(debil: &Weak<AppWindow>, delta_dias: i64) {
         };
     });
     actualizar(&ui);
+}
+
+// ---------------------------------------------------------------------------
+// Formularios: abrir
+// ---------------------------------------------------------------------------
+
+fn abrir_tarea(ui: &AppWindow, tarea: Option<&Tarea>) {
+    let (id, titulo, materia, fecha, hora, hecha) = match tarea {
+        Some(t) => (
+            t.id.clone(),
+            t.titulo.clone(),
+            t.materia.clone().unwrap_or_default(),
+            t.vence.format(FORMATO_FECHA).to_string(),
+            t.vence.format(FORMATO_HORA).to_string(),
+            t.hecha,
+        ),
+        None => (
+            String::new(),
+            String::new(),
+            String::new(),
+            (Local::now().date_naive() + TimeDelta::days(7))
+                .format(FORMATO_FECHA)
+                .to_string(),
+            "23:59".to_string(),
+            false,
+        ),
+    };
+
+    con_estado(|estado| estado.edicion = Edicion::Tarea(id));
+    ui.set_form_encabezado(
+        if tarea.is_some() {
+            "Editar tarea"
+        } else {
+            "Nueva tarea"
+        }
+        .into(),
+    );
+    ui.set_form_edita(tarea.is_some());
+    ui.set_f_titulo(titulo.into());
+    ui.set_f_materia(materia.into());
+    ui.set_f_fecha(fecha.into());
+    ui.set_f_hora(hora.into());
+    ui.set_f_hecha(hecha);
+    abrir_panel(ui, 1);
+}
+
+fn abrir_clase(ui: &AppWindow, clase: Option<&Clase>) {
+    let (id, materia, dia, inicio, fin, lugar) = match clase {
+        Some(c) => (
+            c.id.clone(),
+            c.materia.clone(),
+            c.dia,
+            c.inicio,
+            c.fin,
+            c.lugar.clone().unwrap_or_default(),
+        ),
+        None => (
+            String::new(),
+            String::new(),
+            Dia::Lun,
+            hora(7, 0),
+            hora(9, 0),
+            String::new(),
+        ),
+    };
+
+    con_estado(|estado| estado.edicion = Edicion::Clase(id));
+    ui.set_form_encabezado(
+        if clase.is_some() {
+            "Editar clase"
+        } else {
+            "Nueva clase"
+        }
+        .into(),
+    );
+    ui.set_form_edita(clase.is_some());
+    ui.set_f_materia(materia.into());
+    ui.set_f_dia(indice_dia(dia));
+    ui.set_f_hora(inicio.format(FORMATO_HORA).to_string().into());
+    ui.set_f_fin(fin.format(FORMATO_HORA).to_string().into());
+    ui.set_f_lugar(lugar.into());
+    abrir_panel(ui, 2);
+}
+
+fn abrir_ajustes(ui: &AppWindow) {
+    let datos = con_estado(|estado| estado.datos.clone()).unwrap_or_else(datos_vacios);
+    let hoy = Local::now().date_naive();
+    let (inicio, fin) = match &datos.semestre {
+        Some(semestre) => (semestre.inicio, semestre.fin),
+        None => (hoy, hoy + TimeDelta::days(120)),
+    };
+
+    con_estado(|estado| estado.edicion = Edicion::Ajustes);
+    ui.set_form_encabezado("Ajustes".into());
+    ui.set_form_edita(false);
+    ui.set_a_sin_semestre(datos.semestre.is_none());
+    ui.set_a_inicio(inicio.format(FORMATO_FECHA).to_string().into());
+    ui.set_a_fin(fin.format(FORMATO_FECHA).to_string().into());
+    ui.set_a_hora(
+        datos
+            .ajustes
+            .aviso_dia_antes
+            .format(FORMATO_HORA)
+            .to_string()
+            .into(),
+    );
+    ui.set_a_horas(datos.ajustes.aviso_horas_antes.to_string().into());
+    abrir_panel(ui, 3);
+}
+
+fn abrir_recordatorio(ui: &AppWindow, recordatorio: Option<&Recordatorio>) {
+    let (id, texto, dias, hora) = match recordatorio {
+        Some(r) => (r.id.clone(), r.texto.clone(), r.dias.clone(), r.hora),
+        None => (String::new(), String::new(), Vec::new(), hora(18, 0)),
+    };
+
+    con_estado(|estado| estado.edicion = Edicion::Recordatorio(id));
+    ui.set_form_encabezado(
+        if recordatorio.is_some() {
+            "Editar recordatorio"
+        } else {
+            "Nuevo recordatorio"
+        }
+        .into(),
+    );
+    ui.set_form_edita(recordatorio.is_some());
+    ui.set_r_texto(texto.into());
+    ui.set_r_hora(hora.format(FORMATO_HORA).to_string().into());
+    poner_dias(ui, &dias);
+    abrir_panel(ui, 4);
+}
+
+/// Deja el panel listo para escribir: sin error ni confirmación pendientes.
+fn abrir_panel(ui: &AppWindow, cual: i32) {
+    ui.set_form_error("".into());
+    ui.set_campo_mal(0);
+    ui.set_form_confirma(false);
+    ui.set_formulario(cual);
+    actualizar(ui);
+}
+
+fn cancelar(ui: &AppWindow) {
+    let edicion = con_estado(|estado| estado.edicion.clone());
+    ui.set_form_confirma(false);
+    ui.set_form_error("".into());
+    ui.set_campo_mal(0);
+    if matches!(edicion, Edicion::Recordatorio(_)) {
+        // El recordatorio se edita desde los ajustes: al salir se vuelve allí.
+        abrir_ajustes(ui);
+    } else {
+        con_estado(|estado| estado.edicion = Edicion::Ninguna);
+        ui.set_formulario(0);
+        actualizar(ui);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Formularios: guardar
+// ---------------------------------------------------------------------------
+
+/// Reparte el guardado según el formulario abierto.
+fn guardar(ui: &AppWindow) {
+    match con_estado(|estado| estado.edicion.clone()) {
+        Edicion::Tarea(_) => guardar_tarea(ui),
+        Edicion::Clase(_) => guardar_clase(ui),
+        Edicion::Recordatorio(_) => guardar_recordatorio(ui),
+        Edicion::Ajustes => guardar_ajustes(ui),
+        Edicion::Ninguna => {}
+    }
+}
+
+fn guardar_tarea(ui: &AppWindow) {
+    let titulo = ui.get_f_titulo().trim().to_string();
+    if titulo.is_empty() {
+        falta(ui, 1, "El título no puede quedar vacío.");
+        return;
+    }
+    let Some(fecha) = interpretar_fecha(&ui.get_f_fecha()) else {
+        falta(ui, 2, "La fecha de entrega debe ir como 2026-11-28.");
+        return;
+    };
+    let Some(hora) = interpretar_hora(&ui.get_f_hora()) else {
+        falta(ui, 3, "La hora de entrega debe ir como 23:59.");
+        return;
+    };
+
+    let nueva = NuevaTarea {
+        titulo,
+        materia: opcional(&ui.get_f_materia()),
+        vence: fecha.and_time(hora),
+    };
+    let hecha = ui.get_f_hecha();
+    let edicion = con_estado(|estado| estado.edicion.clone());
+    let hoy = Local::now().date_naive();
+
+    let resultado = almacen().modificar(|doc| match &edicion {
+        Edicion::Tarea(id) if !id.is_empty() => {
+            // `editar_tarea` no toca `hecha`: se compara con lo que hay en el
+            // disco recién leído y solo se marca si de verdad cambió.
+            let antes = modelo::parsear(&doc.to_string())
+                .ok()
+                .and_then(|datos| datos.tareas.into_iter().find(|t| &t.id == id))
+                .map(|t| t.hecha);
+            ops::editar_tarea(doc, id, &nueva)?;
+            if antes.is_some_and(|antes| antes != hecha) {
+                ops::marcar_tarea(doc, id, hecha, hoy)?;
+            }
+            Ok(())
+        }
+        // Crear siempre por `ops::agregar_tarea` (el futuro cuadro del agente
+        // usará la misma función).
+        _ => ops::agregar_tarea(doc, &nueva).map(|_| ()),
+    });
+
+    terminar(ui, resultado, false);
+}
+
+fn guardar_clase(ui: &AppWindow) {
+    let materia = ui.get_f_materia().trim().to_string();
+    if materia.is_empty() {
+        falta(ui, 1, "La materia no puede quedar vacía.");
+        return;
+    }
+    let Some(inicio) = interpretar_hora(&ui.get_f_hora()) else {
+        falta(ui, 2, "La hora de inicio debe ir como 07:00.");
+        return;
+    };
+    let Some(fin) = interpretar_hora(&ui.get_f_fin()) else {
+        falta(ui, 3, "La hora de fin debe ir como 09:00.");
+        return;
+    };
+    if fin <= inicio {
+        falta(ui, 3, "La hora de fin debe ser posterior a la de inicio.");
+        return;
+    }
+
+    let id = match con_estado(|estado| estado.edicion.clone()) {
+        Edicion::Clase(id) => id,
+        _ => String::new(),
+    };
+    let clase = Clase {
+        id,
+        materia,
+        dia: DIAS_SEMANA[(ui.get_f_dia().clamp(0, 6)) as usize],
+        inicio,
+        fin,
+        lugar: opcional(&ui.get_f_lugar()),
+    };
+
+    let resultado = almacen().modificar(|doc| ops::guardar_clase(doc, &clase));
+    terminar(ui, resultado, false);
+}
+
+fn guardar_recordatorio(ui: &AppWindow) {
+    let texto = ui.get_r_texto().trim().to_string();
+    if texto.is_empty() {
+        falta(ui, 1, "El texto del recordatorio no puede quedar vacío.");
+        return;
+    }
+    let Some(hora) = interpretar_hora(&ui.get_r_hora()) else {
+        falta(ui, 2, "La hora debe ir como 18:00.");
+        return;
+    };
+    let dias = dias_elegidos(ui);
+    if dias.is_empty() {
+        falta(ui, 4, "Marca al menos un día para el recordatorio.");
+        return;
+    }
+
+    let id = match con_estado(|estado| estado.edicion.clone()) {
+        Edicion::Recordatorio(id) => id,
+        _ => String::new(),
+    };
+    let recordatorio = Recordatorio {
+        id,
+        texto,
+        dias,
+        hora,
+    };
+
+    let resultado = almacen().modificar(|doc| ops::guardar_recordatorio(doc, &recordatorio));
+    // Al guardar se vuelve a los ajustes, que es de donde se abrió.
+    terminar(ui, resultado, true);
+}
+
+fn guardar_ajustes(ui: &AppWindow) {
+    let mut semestre = None;
+    if !ui.get_a_sin_semestre() {
+        let Some(inicio) = interpretar_fecha(&ui.get_a_inicio()) else {
+            falta(ui, 1, "El inicio del semestre debe ir como 2026-08-03.");
+            return;
+        };
+        let Some(fin) = interpretar_fecha(&ui.get_a_fin()) else {
+            falta(ui, 2, "El fin del semestre debe ir como 2026-12-05.");
+            return;
+        };
+        if fin < inicio {
+            falta(ui, 2, "El fin del semestre debe ser posterior al inicio.");
+            return;
+        }
+        semestre = Some(Semestre { inicio, fin });
+    }
+
+    let Some(aviso) = interpretar_hora(&ui.get_a_hora()) else {
+        falta(ui, 3, "La hora del aviso debe ir como 20:00.");
+        return;
+    };
+    let horas = ui
+        .get_a_horas()
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|horas| (1..=168).contains(horas));
+    let Some(aviso_horas_antes) = horas else {
+        falta(
+            ui,
+            4,
+            "Las horas de aviso deben ser un número entre 1 y 168.",
+        );
+        return;
+    };
+
+    let ajustes = Ajustes {
+        aviso_dia_antes: aviso,
+        aviso_horas_antes,
+    };
+    let resultado = almacen().modificar(|doc| {
+        ops::guardar_ajustes(doc, &ajustes)?;
+        ops::guardar_semestre(doc, semestre.as_ref())
+    });
+    terminar(ui, resultado, false);
+}
+
+/// Cierra el formulario con los datos que devolvió `modificar`. Si el guardado
+/// falló, el error va al banner rojo y no se toca lo escrito.
+fn terminar(ui: &AppWindow, resultado: Result<Datos, ErrorDatos>, volver_ajustes: bool) {
+    match resultado {
+        Ok(datos) => {
+            con_estado(|estado| {
+                estado.datos = Some(datos);
+                estado.error = None;
+                estado.edicion = Edicion::Ninguna;
+            });
+            ui.set_form_confirma(false);
+            ui.set_form_error("".into());
+            ui.set_campo_mal(0);
+            ui.set_formulario(0);
+            actualizar(ui);
+            if volver_ajustes {
+                abrir_ajustes(ui);
+            }
+        }
+        Err(error) => {
+            con_estado(|estado| {
+                estado.error = Some(format!("No se pudo guardar — {error}"));
+            });
+            ui.set_form_confirma(false);
+            actualizar(ui);
+        }
+    }
+}
+
+/// Mensaje dentro del formulario, con el campo marcado.
+fn falta(ui: &AppWindow, campo: i32, mensaje: &str) {
+    ui.set_campo_mal(campo);
+    ui.set_form_error(mensaje.into());
+}
+
+/// Aviso breve en el banner rojo (el elemento ya no existe en el archivo).
+fn aviso(ui: &AppWindow, mensaje: &str) {
+    con_estado(|estado| estado.error = Some(mensaje.to_string()));
+    actualizar(ui);
+}
+
+// ---------------------------------------------------------------------------
+// Borrar y marcar
+// ---------------------------------------------------------------------------
+
+fn borrar(ui: &AppWindow) {
+    let edicion = con_estado(|estado| estado.edicion.clone());
+    let resultado = almacen().modificar(|doc| match &edicion {
+        Edicion::Tarea(id) => ops::borrar_tarea(doc, id),
+        Edicion::Clase(id) => ops::borrar_clase(doc, id),
+        Edicion::Recordatorio(id) => ops::borrar_recordatorio(doc, id),
+        _ => Err("no hay nada que borrar".to_string()),
+    });
+
+    ui.set_form_confirma(false);
+    match resultado {
+        Ok(datos) => {
+            let volver_ajustes = matches!(edicion, Edicion::Recordatorio(_));
+            con_estado(|estado| {
+                estado.datos = Some(datos);
+                estado.error = None;
+                estado.edicion = Edicion::Ninguna;
+            });
+            ui.set_formulario(0);
+            actualizar(ui);
+            if volver_ajustes {
+                abrir_ajustes(ui);
+            }
+        }
+        Err(error) => {
+            con_estado(|estado| {
+                estado.error = Some(format!("No se pudo borrar — {error}"));
+            });
+            actualizar(ui);
+        }
+    }
+}
+
+/// La casilla de Pendientes: marca la tarea como hecha hoy.
+fn marcar(ui: &AppWindow, id: &str) {
+    let hoy = Local::now().date_naive();
+    let resultado = almacen().modificar(|doc| ops::marcar_tarea(doc, id, true, hoy));
+    match resultado {
+        Ok(datos) => {
+            con_estado(|estado| {
+                estado.datos = Some(datos);
+                estado.error = None;
+            });
+        }
+        Err(error) => {
+            con_estado(|estado| estado.error = Some(format!("No se pudo marcar — {error}")));
+        }
+    }
+    actualizar(ui);
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +738,7 @@ fn actualizar(ui: &AppWindow) {
     ui.set_ahora_min(vista.ahora_min);
     ui.set_hay_tareas(vista.hay_tareas);
     ui.set_tareas(ModelRc::new(VecModel::from(vista.tareas)));
+    ui.set_recordatorios(ModelRc::new(VecModel::from(vista.recordatorios)));
     ui.set_resumen_pendientes(vista.resumen.into());
     ui.set_pie(vista.pie.into());
     ui.set_error(vista.error);
@@ -262,6 +804,7 @@ fn construir_vista() -> Vista {
             resumen: resumen(&tareas),
             pie: pie(datos, tareas.len(), ahora),
             tareas,
+            recordatorios: recordatorios_ui(datos),
             error: estado.error.clone().unwrap_or_default().into(),
             advertencias: estado
                 .advertencias
@@ -299,6 +842,7 @@ fn dia_ui(dia: &semana::DiaVista) -> DiaUI {
             dia.bloques
                 .iter()
                 .map(|bloque| BloqueUI {
+                    id: bloque.clase_id.clone().into(),
                     materia: bloque.materia.clone().into(),
                     lugar: bloque.lugar.clone().unwrap_or_default().into(),
                     hora: format!(
@@ -317,6 +861,19 @@ fn dia_ui(dia: &semana::DiaVista) -> DiaUI {
     }
 }
 
+fn recordatorios_ui(datos: &Datos) -> Vec<RecordatorioUI> {
+    datos
+        .recordatorios
+        .iter()
+        .map(|recordatorio| RecordatorioUI {
+            id: recordatorio.id.clone().into(),
+            texto: recordatorio.texto.clone().into(),
+            dias: dias_texto(&recordatorio.dias).into(),
+            hora: recordatorio.hora.format("%H:%M").to_string().into(),
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Textos y cálculos pequeños
 // ---------------------------------------------------------------------------
@@ -325,8 +882,31 @@ fn minutos(hora: NaiveTime) -> i32 {
     hora.hour() as i32 * 60 + hora.minute() as i32
 }
 
+fn hora(h: u32, m: u32) -> NaiveTime {
+    NaiveTime::from_hms_opt(h, m, 0).unwrap_or_default()
+}
+
 fn nombre_dia(fecha: NaiveDate) -> &'static str {
-    DIAS[fecha.weekday().num_days_from_monday() as usize]
+    texto_dia(dia_de(fecha.weekday()))
+}
+
+fn texto_dia(dia: Dia) -> &'static str {
+    match dia {
+        Dia::Lun => "Lun",
+        Dia::Mar => "Mar",
+        Dia::Mie => "Mié",
+        Dia::Jue => "Jue",
+        Dia::Vie => "Vie",
+        Dia::Sab => "Sáb",
+        Dia::Dom => "Dom",
+    }
+}
+
+fn dias_texto(dias: &[Dia]) -> String {
+    dias.iter()
+        .map(|dia| texto_dia(*dia))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn fecha_corta(fecha: NaiveDate) -> String {
@@ -430,6 +1010,87 @@ fn dia_de(dia: Weekday) -> Dia {
     }
 }
 
+fn indice_dia(dia: Dia) -> i32 {
+    match dia {
+        Dia::Lun => 0,
+        Dia::Mar => 1,
+        Dia::Mie => 2,
+        Dia::Jue => 3,
+        Dia::Vie => 4,
+        Dia::Sab => 5,
+        Dia::Dom => 6,
+    }
+}
+
+/// Los siete días marcados en el formulario de recordatorio.
+fn dias_elegidos(ui: &AppWindow) -> Vec<Dia> {
+    let marcas = [
+        ui.get_r_lun(),
+        ui.get_r_mar(),
+        ui.get_r_mie(),
+        ui.get_r_jue(),
+        ui.get_r_vie(),
+        ui.get_r_sab(),
+        ui.get_r_dom(),
+    ];
+    DIAS_SEMANA
+        .iter()
+        .zip(marcas)
+        .filter(|(_, marcado)| *marcado)
+        .map(|(dia, _)| *dia)
+        .collect()
+}
+
+fn poner_dias(ui: &AppWindow, dias: &[Dia]) {
+    ui.set_r_lun(dias.contains(&Dia::Lun));
+    ui.set_r_mar(dias.contains(&Dia::Mar));
+    ui.set_r_mie(dias.contains(&Dia::Mie));
+    ui.set_r_jue(dias.contains(&Dia::Jue));
+    ui.set_r_vie(dias.contains(&Dia::Vie));
+    ui.set_r_sab(dias.contains(&Dia::Sab));
+    ui.set_r_dom(dias.contains(&Dia::Dom));
+}
+
+/// Texto del campo, o `None` si quedó vacío (para los campos opcionales).
+fn opcional(texto: &str) -> Option<String> {
+    let texto = texto.trim();
+    if texto.is_empty() {
+        None
+    } else {
+        Some(texto.to_string())
+    }
+}
+
+fn interpretar_fecha(texto: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(texto.trim(), FORMATO_FECHA).ok()
+}
+
+fn interpretar_hora(texto: &str) -> Option<NaiveTime> {
+    NaiveTime::parse_from_str(texto.trim(), FORMATO_HORA).ok()
+}
+
+fn almacen() -> Almacen {
+    Almacen::por_defecto()
+}
+
+fn tarea_por_id(id: &str) -> Option<Tarea> {
+    let datos = con_estado(|estado| estado.datos.clone())?;
+    datos.tareas.into_iter().find(|tarea| tarea.id == id)
+}
+
+fn clase_por_id(id: &str) -> Option<Clase> {
+    let datos = con_estado(|estado| estado.datos.clone())?;
+    datos.clases.into_iter().find(|clase| clase.id == id)
+}
+
+fn recordatorio_por_id(id: &str) -> Option<Recordatorio> {
+    let datos = con_estado(|estado| estado.datos.clone())?;
+    datos
+        .recordatorios
+        .into_iter()
+        .find(|recordatorio| recordatorio.id == id)
+}
+
 fn con_estado<F, R>(f: F) -> R
 where
     F: FnOnce(&mut Estado) -> R,
@@ -517,5 +1178,35 @@ mod pruebas {
             pie(&datos(), 1, momento(2026, 11, 20, 10, 0)),
             "Hoy: 1 tarea pendiente"
         );
+    }
+
+    /// Los formularios solo aceptan los formatos del archivo.
+    #[test]
+    fn solo_acepta_los_formatos_del_archivo() {
+        assert_eq!(interpretar_fecha("2026-11-28"), Some(fecha(2026, 11, 28)));
+        assert_eq!(interpretar_fecha(" 2026-11-28 "), Some(fecha(2026, 11, 28)));
+        assert_eq!(interpretar_fecha("28/11/2026"), None);
+        assert_eq!(interpretar_fecha(""), None);
+
+        assert_eq!(
+            interpretar_hora("23:59"),
+            Some(NaiveTime::from_hms_opt(23, 59, 0).unwrap())
+        );
+        assert_eq!(interpretar_hora("25:00"), None);
+        assert_eq!(interpretar_hora("7"), None);
+    }
+
+    #[test]
+    fn dias_del_recordatorio_en_orden() {
+        assert_eq!(dias_texto(&[Dia::Lun, Dia::Mie, Dia::Dom]), "Lun, Mié, Dom");
+        assert_eq!(indice_dia(Dia::Lun), 0);
+        assert_eq!(indice_dia(Dia::Dom), 6);
+    }
+
+    /// Un campo vacío no se guarda como cadena vacía en el TOML.
+    #[test]
+    fn campos_opcionales_vacios_son_none() {
+        assert_eq!(opcional("   "), None);
+        assert_eq!(opcional(" Control "), Some("Control".to_string()));
     }
 }
