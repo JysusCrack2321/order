@@ -12,20 +12,39 @@
 
 use crate::agente::acciones;
 use crate::agente::adjuntos::{self, Adjunto, ContenidoAdjunto, ErrorAdjunto};
-use crate::agente::config::{AgenteConfig, Proveedor};
+use crate::agente::config::{self, AgenteConfig, Proveedor, textos_conexion_agente};
 use crate::agente::conversacion::{Conversacion, PROMPT_COMPACTACION};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::{Value, json};
 use std::fmt;
+use std::path::Path;
 use std::time::Duration;
 
 /// Tiempo máximo de una petición (el diseño pide 60 s).
 pub const ESPERA: Duration = Duration::from_secs(60);
+/// Tiempo máximo al comprobar la clave al conectar.
+pub const ESPERA_VALIDACION: Duration = Duration::from_secs(15);
 /// Versión de la API de Claude que usa ORDER.
 pub const VERSION_ANTHROPIC: &str = "2026-10-21";
 /// Tope de tokens de la respuesta de Claude.
 pub const MAX_TOKENS: u32 = 4096;
+
+/// Resultado remoto al comprobar una clave del agente.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EstadoConexion {
+    Conectado,
+    ClaveInvalida,
+    SinInternet,
+}
+
+/// Resultado de conectar la clave de Gemini y guardarla en `agente.toml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultadoConexion {
+    pub estado: EstadoConexion,
+    pub mensaje: String,
+    pub guardada: bool,
+}
 
 /// Fallo al hablar con el modelo, ya con un mensaje que se le puede enseñar
 /// al usuario.
@@ -188,6 +207,137 @@ fn validar_config_basica(config: &AgenteConfig) -> Result<(), ErrorAgente> {
         ));
     }
     Ok(())
+}
+
+/// Valida la clave contra el endpoint `/models` del proveedor.
+/// Nunca imprime la clave.
+pub fn validar_clave_remota(config: &AgenteConfig) -> EstadoConexion {
+    if config.url_base.trim().is_empty() || config.api_key.trim().is_empty() {
+        return EstadoConexion::ClaveInvalida;
+    }
+
+    let agente = ureq::Agent::config_builder()
+        .timeout_global(Some(ESPERA_VALIDACION))
+        .http_status_as_error(false)
+        .build()
+        .new_agent();
+
+    let (url, cabeceras): (String, Vec<(&str, String)>) = match config.proveedor {
+        Proveedor::Claude => (
+            endpoint_modelos_claude(&config.url_base),
+            vec![
+                ("x-api-key", config.api_key.trim().to_string()),
+                ("anthropic-version", VERSION_ANTHROPIC.to_string()),
+            ],
+        ),
+        _ => (
+            endpoint_modelos_openai(&config.url_base),
+            vec![("Authorization", format!("Bearer {}", config.api_key.trim()))],
+        ),
+    };
+
+    let mut peticion = agente.get(&url).header("accept", "application/json");
+    for (nombre, valor) in &cabeceras {
+        peticion = peticion.header(*nombre, valor.as_str());
+    }
+    let Ok(mut respuesta) = peticion.call() else {
+        return EstadoConexion::SinInternet;
+    };
+    let estado = respuesta.status().as_u16();
+    let cuerpo = respuesta.body_mut().read_to_string().unwrap_or_default();
+    clasificar_respuesta_validacion(estado, &cuerpo)
+}
+
+fn clasificar_respuesta_validacion(estado: u16, cuerpo: &str) -> EstadoConexion {
+    match estado {
+        200..=299 | 429 => EstadoConexion::Conectado,
+        401 | 403 => EstadoConexion::ClaveInvalida,
+        400 if es_error_clave_en_cuerpo(cuerpo) => EstadoConexion::ClaveInvalida,
+        _ => EstadoConexion::SinInternet,
+    }
+}
+
+fn es_error_clave_en_cuerpo(texto: &str) -> bool {
+    let lower = texto.to_lowercase();
+    [
+        "api_key",
+        "api key",
+        "apikey",
+        "clave",
+        "invalid_api_key",
+        "permission_denied",
+        "unauthenticated",
+    ]
+    .iter()
+    .any(|patron| lower.contains(patron))
+}
+
+/// Guarda la clave de Gemini en `agente.toml` (conservando voz y límite de
+/// contexto) y la valida contra la API. Si falla por red, la clave se guarda
+/// igual.
+pub fn conectar_gemini(ruta_config: &Path, api_key: &str) -> Result<ResultadoConexion, String> {
+    let textos = textos_conexion_agente();
+    let limpia = api_key.trim();
+    if limpia.is_empty() {
+        return Err(textos.clave_vacia);
+    }
+    let mut cfg = config::cargar_de(ruta_config).con_proveedor(Proveedor::Gemini);
+    cfg.api_key = limpia.to_string();
+    conectar_con_config(ruta_config, cfg)
+}
+
+/// Valida y guarda una configuración concreta del agente.
+/// Si la validación falla por red, guarda igual; si la clave es inválida, no la guarda.
+pub fn conectar_con_config(
+    ruta_config: &Path,
+    mut cfg: AgenteConfig,
+) -> Result<ResultadoConexion, String> {
+    let textos = textos_conexion_agente();
+    cfg.api_key = cfg.api_key.trim().to_string();
+    if cfg.api_key.is_empty() {
+        return Err(textos.clave_vacia);
+    }
+
+    let estado = validar_clave_remota(&cfg);
+    match estado {
+        EstadoConexion::Conectado => {
+            config::guardar_en(ruta_config, &cfg)?;
+            Ok(ResultadoConexion {
+                estado,
+                mensaje: textos.conectado,
+                guardada: true,
+            })
+        }
+        EstadoConexion::SinInternet => {
+            config::guardar_en(ruta_config, &cfg)?;
+            Ok(ResultadoConexion {
+                estado,
+                mensaje: textos.sin_internet,
+                guardada: true,
+            })
+        }
+        EstadoConexion::ClaveInvalida => Ok(ResultadoConexion {
+            estado,
+            mensaje: textos.clave_invalida,
+            guardada: false,
+        }),
+    }
+}
+
+fn endpoint_modelos_openai(url_base: &str) -> String {
+    let base = url_base.trim().trim_end_matches('/');
+    let base = base.strip_suffix("/chat/completions").unwrap_or(base);
+    format!("{base}/models")
+}
+
+fn endpoint_modelos_claude(url_base: &str) -> String {
+    let base = url_base.trim().trim_end_matches('/');
+    let base = base.strip_suffix("/messages").unwrap_or(base);
+    if base.ends_with("/v1") {
+        format!("{base}/models")
+    } else {
+        format!("{base}/v1/models")
+    }
 }
 
 fn agente_http() -> ureq::Agent {
@@ -1020,5 +1170,88 @@ mod pruebas {
             "context length exceeded".into()
         )));
         assert!(!es_error_contexto_largo(&ErrorAgente::Limite));
+    }
+
+    fn servidor_validacion(status: u16, cuerpo: &str) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let cuerpo = cuerpo.to_string();
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{cuerpo}",
+                    cuerpo.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[test]
+    fn conectar_con_config_valida_y_maneja_red() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ruta = dir.path().join("agente.toml");
+
+        // Clave vacía falla sin guardar ni tocar red.
+        assert!(conectar_gemini(&ruta, "   ").is_err());
+        assert!(!ruta.exists());
+
+        // 401 -> ClaveInvalida, no guarda.
+        let (url_401, h_401) = servidor_validacion(401, "{}");
+        let mut cfg_401 = AgenteConfig::default().con_proveedor(Proveedor::Gemini);
+        cfg_401.url_base = url_401;
+        cfg_401.api_key = "AIzaMala12345".into();
+        let res_401 = conectar_con_config(&ruta, cfg_401).expect("res 401");
+        let _ = h_401.join();
+        assert_eq!(res_401.estado, EstadoConexion::ClaveInvalida);
+        assert_eq!(res_401.mensaje, "Esa clave no funciona; cópiala otra vez.");
+        assert!(!res_401.guardada);
+        assert!(!ruta.exists());
+
+        // 400 con API_KEY_INVALID de Gemini -> ClaveInvalida.
+        let (url_400, h_400) =
+            servidor_validacion(400, r#"{"error":{"message":"API key not valid."}}"#);
+        let mut cfg_400 = AgenteConfig::default().con_proveedor(Proveedor::Gemini);
+        cfg_400.url_base = url_400;
+        cfg_400.api_key = "AIzaMala40012".into();
+        let res_400 = conectar_con_config(&ruta, cfg_400).expect("res 400");
+        let _ = h_400.join();
+        assert_eq!(res_400.estado, EstadoConexion::ClaveInvalida);
+        assert!(!res_400.guardada);
+
+        // 200 -> Conectado y guarda en agente.toml.
+        let (url_200, h_200) = servidor_validacion(200, r#"{"data":[]}"#);
+        let mut cfg_200 = AgenteConfig::default().con_proveedor(Proveedor::Gemini);
+        cfg_200.url_base = url_200;
+        cfg_200.api_key = "  AIzaBuena12345  ".into();
+        let res_200 = conectar_con_config(&ruta, cfg_200).expect("res 200");
+        let _ = h_200.join();
+        assert_eq!(res_200.estado, EstadoConexion::Conectado);
+        assert_eq!(res_200.mensaje, "Listo, el agente está conectado.");
+        assert!(res_200.guardada);
+        let leida = config::cargar_de(&ruta);
+        assert_eq!(leida.proveedor, Proveedor::Gemini);
+        assert_eq!(leida.api_key, "AIzaBuena12345");
+
+        // Error de red (puerto cerrado) -> SinInternet, pero guarda igual.
+        let listener_cerrado = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let puerto_cerrado = listener_cerrado.local_addr().expect("addr").port();
+        drop(listener_cerrado);
+        let ruta_red = dir.path().join("agente_red.toml");
+        let mut cfg_red = AgenteConfig::default().con_proveedor(Proveedor::Gemini);
+        cfg_red.url_base = format!("http://127.0.0.1:{puerto_cerrado}");
+        cfg_red.api_key = "AIzaOffline12345".into();
+        let res_red = conectar_con_config(&ruta_red, cfg_red).expect("res red");
+        assert_eq!(res_red.estado, EstadoConexion::SinInternet);
+        assert_eq!(res_red.mensaje, "Sin internet; inténtalo luego.");
+        assert!(res_red.guardada);
+        assert_eq!(config::cargar_de(&ruta_red).api_key, "AIzaOffline12345");
     }
 }

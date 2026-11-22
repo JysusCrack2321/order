@@ -423,7 +423,7 @@ mod pruebas {
         assert_eq!(err.mensaje, "Falta la API key");
 
         // Campos vacíos = valores por defecto del proveedor elegido.
-        let agente = validar_agente(1, "", "", "clave", 0, "", "", "").unwrap();
+        let agente = validar_agente(0, "", "", "clave", 0, "", "", "").unwrap();
         assert_eq!(agente.proveedor, Proveedor::Gemini);
         assert_eq!(
             agente.url_base,

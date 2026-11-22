@@ -30,15 +30,15 @@ pub enum Proveedor {
 
 impl Default for Proveedor {
     fn default() -> Self {
-        Proveedor::DeepSeek
+        Proveedor::Gemini
     }
 }
 
 impl Proveedor {
     /// Los cuatro proveedores en el orden de las fichas de Ajustes.
     pub const TODOS: [Proveedor; 4] = [
-        Proveedor::DeepSeek,
         Proveedor::Gemini,
+        Proveedor::DeepSeek,
         Proveedor::Claude,
         Proveedor::OpenAICompatible,
     ];
@@ -46,8 +46,8 @@ impl Proveedor {
     /// Código de la ficha en Ajustes (el orden de `TODOS`).
     pub fn codigo(self) -> i32 {
         match self {
-            Proveedor::DeepSeek => 0,
-            Proveedor::Gemini => 1,
+            Proveedor::Gemini => 0,
+            Proveedor::DeepSeek => 1,
             Proveedor::Claude => 2,
             Proveedor::OpenAICompatible => 3,
         }
@@ -56,7 +56,15 @@ impl Proveedor {
     pub fn de_codigo(codigo: i32) -> Proveedor {
         *Proveedor::TODOS
             .get(codigo.max(0) as usize)
-            .unwrap_or(&Proveedor::DeepSeek)
+            .unwrap_or(&Proveedor::Gemini)
+    }
+
+    /// Etiqueta corta de la ficha (solo Gemini muestra «Gratis»).
+    pub fn etiqueta(self) -> Option<&'static str> {
+        match self {
+            Proveedor::Gemini => Some("Gratis"),
+            _ => None,
+        }
     }
 
     /// Nombre de la ficha. El proveedor compatible es "Otro": ahí el usuario
@@ -337,6 +345,67 @@ pub fn guardar_en(ruta: &Path, config: &AgenteConfig) -> Result<(), String> {
     })
 }
 
+/// Comprueba si un texto parece una clave de Gemini / Google AI Studio
+/// (empieza por `AIza`, sin espacios ni saltos de línea).
+pub fn parece_clave_gemini(texto: &str) -> bool {
+    let limpio = texto.trim();
+    limpio.starts_with("AIza")
+        && limpio.len() >= 10
+        && limpio
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Textos compartidos entre escritorio y Android para la tarjeta de conexión guiada.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextosConexionAgente {
+    pub titulo: String,
+    pub paso_1: String,
+    pub paso_2: String,
+    pub paso_3: String,
+    pub boton_abrir_studio: String,
+    pub url_studio: String,
+    pub boton_pegar: String,
+    pub etiqueta_clave: String,
+    pub pista_clave: String,
+    pub boton_conectar: String,
+    pub conectando: String,
+    pub enlace_otro_proveedor: String,
+    pub portapapeles_invalido: String,
+    pub clave_vacia: String,
+    pub oferta_portapapeles: String,
+    pub conectado: String,
+    pub clave_invalida: String,
+    pub sin_internet: String,
+}
+
+/// Textos en español de la tarjeta «Conecta el agente gratis».
+pub fn textos_conexion_agente() -> TextosConexionAgente {
+    TextosConexionAgente {
+        titulo: "Conecta el agente gratis".to_string(),
+        paso_1: "1. Toca Abrir Google AI Studio y entra con tu cuenta de Google.".to_string(),
+        paso_2: "2. Toca Create API key y copia la clave.".to_string(),
+        paso_3: "3. Vuelve aquí y toca Pegar clave.".to_string(),
+        boton_abrir_studio: "Abrir Google AI Studio".to_string(),
+        url_studio: Proveedor::Gemini
+            .url_clave()
+            .unwrap_or("https://aistudio.google.com/apikey")
+            .to_string(),
+        boton_pegar: "Pegar clave".to_string(),
+        etiqueta_clave: "API key".to_string(),
+        pista_clave: "AIza…".to_string(),
+        boton_conectar: "Conectar".to_string(),
+        conectando: "Conectando…".to_string(),
+        enlace_otro_proveedor: "Usar otro proveedor".to_string(),
+        portapapeles_invalido: "Lo que copiaste no parece una clave de Google.".to_string(),
+        clave_vacia: "Pega o escribe tu clave de Google.".to_string(),
+        oferta_portapapeles: "¿Usar la clave que copiaste?".to_string(),
+        conectado: "Listo, el agente está conectado.".to_string(),
+        clave_invalida: "Esa clave no funciona; cópiala otra vez.".to_string(),
+        sin_internet: "Sin internet; inténtalo luego.".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod pruebas {
     use super::*;
@@ -350,12 +419,19 @@ mod pruebas {
     #[test]
     fn valores_por_defecto() {
         let config = AgenteConfig::default();
-        assert_eq!(config.proveedor, Proveedor::DeepSeek);
-        assert_eq!(config.url_base, "https://api.deepseek.com");
-        assert_eq!(config.modelo, "deepseek-v4-flash");
+        assert_eq!(config.proveedor, Proveedor::Gemini);
+        assert_eq!(
+            config.url_base,
+            "https://generativelanguage.googleapis.com/v1beta/openai"
+        );
+        assert_eq!(config.modelo, "gemini-flash-latest");
         assert!(!config.lista(), "sin clave no está listo");
         assert_eq!(config.voz.url_base, "https://api.openai.com/v1");
         assert_eq!(config.voz.modelo, "whisper-1");
+
+        let deepseek = AgenteConfig::default().con_proveedor(Proveedor::DeepSeek);
+        assert_eq!(deepseek.url_base, "https://api.deepseek.com");
+        assert_eq!(deepseek.modelo, "deepseek-v4-flash");
 
         let claude = AgenteConfig::default().con_proveedor(Proveedor::Claude);
         assert_eq!(claude.url_base, "https://api.anthropic.com");
@@ -365,12 +441,12 @@ mod pruebas {
     #[test]
     fn archivo_incompleto_usa_defectos() {
         let (_dir, ruta) = temporal();
-        std::fs::write(&ruta, "api_key = \"sk-prueba\"\n").expect("escribir");
+        std::fs::write(&ruta, "api_key = \"AIzaPrueba12345\"\n").expect("escribir");
 
         let config = cargar_de(&ruta);
-        assert_eq!(config.api_key, "sk-prueba");
-        assert_eq!(config.proveedor, Proveedor::DeepSeek);
-        assert_eq!(config.modelo, "deepseek-v4-flash");
+        assert_eq!(config.api_key, "AIzaPrueba12345");
+        assert_eq!(config.proveedor, Proveedor::Gemini);
+        assert_eq!(config.modelo, "gemini-flash-latest");
         assert!(config.lista());
 
         // Con la sección de voz escrita a medias.
@@ -385,6 +461,26 @@ mod pruebas {
         assert_eq!(config.url_base, "http://localhost:1234/v1");
         assert_eq!(config.voz.modelo, "whisper-large-v3-turbo");
         assert_eq!(config.voz.url_base, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn toml_viejo_con_deepseek_se_respeta() {
+        let (_dir, ruta) = temporal();
+        std::fs::write(
+            &ruta,
+            "proveedor = \"deepseek\"\n\
+             url_base = \"https://api.deepseek.com\"\n\
+             modelo = \"deepseek-v4-flash\"\n\
+             api_key = \"sk-antigua-deepseek\"\n",
+        )
+        .expect("escribir");
+
+        let config = cargar_de(&ruta);
+        assert_eq!(config.proveedor, Proveedor::DeepSeek);
+        assert_eq!(config.url_base, "https://api.deepseek.com");
+        assert_eq!(config.modelo, "deepseek-v4-flash");
+        assert_eq!(config.api_key, "sk-antigua-deepseek");
+        assert!(config.lista());
     }
 
     #[test]
@@ -480,10 +576,38 @@ mod pruebas {
 
     #[test]
     fn codigos_de_las_fichas() {
+        assert_eq!(
+            Proveedor::TODOS,
+            [
+                Proveedor::Gemini,
+                Proveedor::DeepSeek,
+                Proveedor::Claude,
+                Proveedor::OpenAICompatible,
+            ]
+        );
         for proveedor in Proveedor::TODOS {
             assert_eq!(Proveedor::de_codigo(proveedor.codigo()), proveedor);
         }
-        assert_eq!(Proveedor::de_codigo(99), Proveedor::DeepSeek);
+        assert_eq!(Proveedor::de_codigo(99), Proveedor::Gemini);
+        assert_eq!(Proveedor::Gemini.etiqueta(), Some("Gratis"));
+        assert_eq!(Proveedor::DeepSeek.etiqueta(), None);
+        assert_eq!(Proveedor::Claude.etiqueta(), None);
+        assert_eq!(Proveedor::OpenAICompatible.etiqueta(), None);
+    }
+
+    #[test]
+    fn parece_clave_gemini_valida_y_rechaza() {
+        assert!(parece_clave_gemini("AIzaSyPruebaDeClave123456"));
+        assert!(parece_clave_gemini("  AIzaSyPrueba-De_Clave123 \n"));
+        assert!(!parece_clave_gemini(""));
+        assert!(!parece_clave_gemini("AIza"));
+        assert!(!parece_clave_gemini("sk-1234567890abcdef"));
+        assert!(!parece_clave_gemini("AIza con espacios largos"));
+        assert!(!parece_clave_gemini("hola mundo"));
+
+        let textos = textos_conexion_agente();
+        assert_eq!(textos.titulo, "Conecta el agente gratis");
+        assert_eq!(textos.url_studio, "https://aistudio.google.com/apikey");
     }
 
     /// Cada ficha trae su URL base, su modelo y la página de la clave; "Otro"

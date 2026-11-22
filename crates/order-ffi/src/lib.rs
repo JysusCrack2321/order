@@ -8,7 +8,7 @@
 use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Timelike};
 use order_core::agente::acciones::{self, Accion};
 use order_core::agente::adjuntos::{self, Adjunto, ContenidoAdjunto};
-use order_core::agente::cliente;
+use order_core::agente::cliente::{self, EstadoConexion};
 use order_core::agente::config::{self, AgenteConfig, Proveedor, VozProveedor};
 use order_core::agente::contexto;
 use order_core::agente::conversacion::Conversacion;
@@ -415,6 +415,53 @@ pub struct ProveedorInfoFfi {
     pub url_base: String,
     pub modelo: String,
     pub url_clave: Option<String>,
+    pub etiqueta: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct TextosConexionAgenteFfi {
+    pub titulo: String,
+    pub paso_1: String,
+    pub paso_2: String,
+    pub paso_3: String,
+    pub boton_abrir_studio: String,
+    pub url_studio: String,
+    pub boton_pegar: String,
+    pub etiqueta_clave: String,
+    pub pista_clave: String,
+    pub boton_conectar: String,
+    pub conectando: String,
+    pub enlace_otro_proveedor: String,
+    pub portapapeles_invalido: String,
+    pub clave_vacia: String,
+    pub oferta_portapapeles: String,
+    pub conectado: String,
+    pub clave_invalida: String,
+    pub sin_internet: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum EstadoConexionFfi {
+    Conectado,
+    ClaveInvalida,
+    SinInternet,
+}
+
+impl From<EstadoConexion> for EstadoConexionFfi {
+    fn from(estado: EstadoConexion) -> Self {
+        match estado {
+            EstadoConexion::Conectado => EstadoConexionFfi::Conectado,
+            EstadoConexion::ClaveInvalida => EstadoConexionFfi::ClaveInvalida,
+            EstadoConexion::SinInternet => EstadoConexionFfi::SinInternet,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ResultadoConexionFfi {
+    pub estado: EstadoConexionFfi,
+    pub mensaje: String,
+    pub guardada: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -1282,9 +1329,59 @@ pub fn proveedores_agente() -> Vec<ProveedorInfoFfi> {
                 url_base: url_base.to_string(),
                 modelo: modelo.to_string(),
                 url_clave: p.url_clave().map(str::to_string),
+                etiqueta: p.etiqueta().map(str::to_string),
             }
         })
         .collect()
+}
+
+#[uniffi::export]
+pub fn textos_conexion_agente() -> TextosConexionAgenteFfi {
+    let t = config::textos_conexion_agente();
+    TextosConexionAgenteFfi {
+        titulo: t.titulo,
+        paso_1: t.paso_1,
+        paso_2: t.paso_2,
+        paso_3: t.paso_3,
+        boton_abrir_studio: t.boton_abrir_studio,
+        url_studio: t.url_studio,
+        boton_pegar: t.boton_pegar,
+        etiqueta_clave: t.etiqueta_clave,
+        pista_clave: t.pista_clave,
+        boton_conectar: t.boton_conectar,
+        conectando: t.conectando,
+        enlace_otro_proveedor: t.enlace_otro_proveedor,
+        portapapeles_invalido: t.portapapeles_invalido,
+        clave_vacia: t.clave_vacia,
+        oferta_portapapeles: t.oferta_portapapeles,
+        conectado: t.conectado,
+        clave_invalida: t.clave_invalida,
+        sin_internet: t.sin_internet,
+    }
+}
+
+#[uniffi::export]
+pub fn parece_clave_gemini(texto: String) -> bool {
+    config::parece_clave_gemini(&texto)
+}
+
+#[uniffi::export]
+pub fn agente_tiene_clave(ruta_config: String) -> bool {
+    config::cargar_de(Path::new(&ruta_config)).lista()
+}
+
+#[uniffi::export]
+pub fn conectar_gemini(
+    ruta_config: String,
+    api_key: String,
+) -> Result<ResultadoConexionFfi, ErrorFfi> {
+    let res = cliente::conectar_gemini(Path::new(&ruta_config), &api_key)
+        .map_err(|mensaje| ErrorFfi::Operacion { mensaje })?;
+    Ok(ResultadoConexionFfi {
+        estado: EstadoConexionFfi::from(res.estado),
+        mensaje: res.mensaje,
+        guardada: res.guardada,
+    })
 }
 
 #[uniffi::export]
@@ -2552,9 +2649,19 @@ hora = "18:00"
 
         let provs = proveedores_agente();
         assert_eq!(provs.len(), 4);
-        assert_eq!(provs[0].nombre, "DeepSeek");
+        assert_eq!(provs[0].nombre, "Gemini");
+        assert_eq!(provs[0].etiqueta.as_deref(), Some("Gratis"));
+        assert_eq!(provs[1].nombre, "DeepSeek");
+        assert!(provs[1].etiqueta.is_none());
         assert!(provs[0].url_clave.is_some());
         assert!(provs[3].url_clave.is_none());
+
+        assert!(!agente_tiene_clave(ruta_cfg.clone()));
+        assert!(parece_clave_gemini("AIzaSyPrueba123456".into()));
+        assert!(!parece_clave_gemini("texto cualquiera".into()));
+        let textos = textos_conexion_agente();
+        assert_eq!(textos.titulo, "Conecta el agente gratis");
+        assert!(conectar_gemini(ruta_cfg.clone(), "  ".into()).is_err());
 
         let voz_provs = proveedores_voz();
         assert_eq!(voz_provs.len(), 2);
