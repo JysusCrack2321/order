@@ -261,11 +261,15 @@ pub fn validar_agente(
     let (v_url_defecto, v_modelo_defecto) = v_proveedor.por_defecto();
     let voz = Voz {
         proveedor: v_proveedor,
-        url_base: valor_o(v_url, v_url_defecto),
+        url_base: if v_proveedor == VozProveedor::Local {
+            v_url.trim().to_string()
+        } else {
+            valor_o(v_url, v_url_defecto)
+        },
         modelo: valor_o(v_modelo, v_modelo_defecto),
         api_key: v_key.trim().to_string(),
     };
-    if !url_http(&voz.url_base) {
+    if v_proveedor != VozProveedor::Local && !url_http(&voz.url_base) {
         return Err(error(
             3,
             "La URL de la voz debe empezar por https:// o http://.",
@@ -446,6 +450,13 @@ mod pruebas {
             err.mensaje,
             "La URL de la voz debe empezar por https:// o http://."
         );
+
+        // "Este PC (gratis)" (código 2) no requiere URL ni clave de voz.
+        let local = validar_agente(0, "", "", "clave", 2, "", "", "").unwrap();
+        assert_eq!(local.voz.proveedor, VozProveedor::Local);
+        assert_eq!(local.voz.modelo, "ggml-small.bin");
+        assert!(local.voz.url_base.is_empty());
+        assert!(local.voz.lista());
     }
 
     #[test]

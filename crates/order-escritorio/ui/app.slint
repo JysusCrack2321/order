@@ -341,12 +341,19 @@ export component AppWindow inherits Window {
     in-out property <bool> a-ver-key: false;
     in-out property <bool> a-ve-imagenes: false;
     in-out property <string> a-limite-contexto: "";
-    // Ajustes → Agente → Voz (fichas 0–1: OpenAI y Groq).
-    in-out property <int> a-voz-proveedor: 0;
+    // Ajustes → Agente → Voz (2 = Este PC (gratis), 0 = OpenAI, 1 = Groq).
+    in-out property <int> a-voz-proveedor: 2;
     in-out property <string> v-url: "";
     in-out property <string> v-modelo: "";
     in-out property <string> v-key: "";
     in-out property <bool> v-ver-key: false;
+    in-out property <bool> a-voz-modelo-listo: false;
+    // Diálogo de descarga del modelo de voz local (~470 MB).
+    in-out property <bool> descarga-voz-abierta: false;
+    in-out property <bool> descarga-voz-en-curso: false;
+    in property <float> descarga-voz-progreso: 0.0;
+    in property <string> descarga-voz-estado: "";
+    in property <string> descarga-voz-error: "";
     // Sección "Avanzado": URL y modelo a mano. Cerrada salvo con "Otro".
     in-out property <bool> a-avanzado: false;
 
@@ -475,6 +482,9 @@ export component AppWindow inherits Window {
     callback alternar-clave();
     callback grabar-voz();
     callback alternar-clave-voz();
+    callback descarga-voz-abrir();
+    callback descarga-voz-iniciar();
+    callback descarga-voz-cancelar();
     callback conflicto-quedar-actual();
     callback conflicto-usar-otra();
 
@@ -1302,11 +1312,18 @@ export component AppWindow inherits Window {
                             spacing: Tema.espacio-xs;
 
                             Etiqueta {
-                                text: "Voz (Whisper por API)";
+                                text: "Voz";
                             }
 
                             HorizontalLayout {
                                 spacing: Tema.espacio-xs;
+
+                                Chip {
+                                    texto: "Este PC (gratis)";
+                                    ancho: Tema.ancho-ficha-voz-local;
+                                    activo: root.a-voz-proveedor == 2;
+                                    clicked => { root.elegir-voz-proveedor(2); }
+                                }
 
                                 Chip {
                                     texto: "OpenAI";
@@ -1324,13 +1341,45 @@ export component AppWindow inherits Window {
                             }
                         }
 
-                        Boton {
+                        if root.a-voz-proveedor == 2 : VerticalLayout {
+                            spacing: Tema.espacio-xs;
+
+                            Text {
+                                text: "Transcribe en tu equipo (whisper.cpp, idioma español), sin clave ni costo.";
+                                wrap: word-wrap;
+                                font-size: Tema.tamano-hora;
+                                color: Tema.texto-tenue;
+                            }
+
+                            HorizontalLayout {
+                                spacing: Tema.espacio-sm;
+                                cross-axis-alignment: center;
+
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: root.a-voz-modelo-listo
+                                        ? "Modelo listo (~/.local/share/order/modelos/ggml-small.bin)."
+                                        : "Falta el modelo de voz (~470 MB).";
+                                    wrap: word-wrap;
+                                    font-size: Tema.tamano-hora;
+                                    color: root.a-voz-modelo-listo ? Tema.texto-suave : Tema.texto-aviso;
+                                }
+
+                                if !root.a-voz-modelo-listo : Boton {
+                                    texto: "Descargar modelo";
+                                    width: Tema.ancho-boton-largo;
+                                    clicked => { root.descarga-voz-abrir(); }
+                                }
+                            }
+                        }
+
+                        if root.a-voz-proveedor != 2 : Boton {
                             texto: "Conseguir mi API key";
                             width: Tema.ancho-boton-largo;
                             clicked => { root.conseguir-clave-voz(root.a-voz-proveedor); }
                         }
 
-                        CampoClave {
+                        if root.a-voz-proveedor != 2 : CampoClave {
                             etiqueta: "API key";
                             texto <=> root.v-key;
                             pista: root.a-voz-proveedor == 1 ? "gsk_…" : "sk-…";
@@ -1338,7 +1387,7 @@ export component AppWindow inherits Window {
                             alternar => { root.alternar-clave-voz(); }
                         }
 
-                        Text {
+                        if root.a-voz-proveedor != 2 : Text {
                             text: "Pega aquí la clave que te da el proveedor.";
                             wrap: word-wrap;
                             font-size: Tema.tamano-hora;
@@ -1381,14 +1430,14 @@ export component AppWindow inherits Window {
                                 mal: root.campo-mal == 2;
                             }
 
-                            Campo {
+                            if root.a-voz-proveedor != 2 : Campo {
                                 etiqueta: "URL base de la voz";
                                 texto <=> root.v-url;
                                 pista: "https://…";
                                 mal: root.campo-mal == 3;
                             }
 
-                            Campo {
+                            if root.a-voz-proveedor != 2 : Campo {
                                 etiqueta: "Modelo de la voz";
                                 texto <=> root.v-modelo;
                                 pista: "modelo";
@@ -1874,6 +1923,126 @@ export component AppWindow inherits Window {
             aceptar => { root.selector-aceptar(); }
             escribir => { root.selector-escribir(); }
             materia(valor) => { root.selector-materia(valor); }
+        }
+
+        // -----------------------------------------------------------------
+        // Descarga del modelo de voz local (~470 MB).
+        // -----------------------------------------------------------------
+        if root.descarga-voz-abierta : Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            background: Tema.fondo-velo;
+
+            TouchArea {
+                clicked => { }
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: Tema.ancho-dialogo-descarga;
+                height: Tema.alto-dialogo-descarga;
+                background: Tema.fondo-panel;
+                border-radius: Tema.radio;
+                border-width: Tema.linea;
+                border-color: Tema.borde-fuerte;
+
+                VerticalLayout {
+                    x: Tema.espacio-lg;
+                    y: Tema.espacio-lg;
+                    width: parent.width - 2 * Tema.espacio-lg;
+                    height: parent.height - 2 * Tema.espacio-lg;
+                    spacing: Tema.espacio-md;
+
+                    VerticalLayout {
+                        spacing: Tema.espacio-xs;
+
+                        Text {
+                            text: "Descargar modelo de voz (≈470 MB)";
+                            font-family: Tema.fuente-titulos;
+                            font-size: Tema.tamano-semana;
+                            font-weight: 700;
+                            letter-spacing: Tema.letra-normal;
+                            color: Tema.texto;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: "Se guarda en ~/.local/share/order/modelos/ggml-small.bin para transcribir en local en español.";
+                            font-size: Tema.tamano-hora;
+                            color: Tema.texto-tenue;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    if root.descarga-voz-error != "" : Rectangle {
+                        height: Tema.alto-campo;
+                        border-radius: Tema.radio-pequeno;
+                        background: Tema.fondo-error;
+                        border-width: Tema.linea;
+                        border-color: Tema.borde-error;
+
+                        Text {
+                            x: Tema.espacio-sm;
+                            width: parent.width - 2 * Tema.espacio-sm;
+                            height: parent.height;
+                            vertical-alignment: center;
+                            text: root.descarga-voz-error;
+                            font-size: Tema.tamano-pequeno;
+                            color: Tema.texto-error;
+                            overflow: elide;
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: Tema.espacio-xs;
+
+                        Rectangle {
+                            height: Tema.alto-barra-progreso;
+                            border-radius: Tema.radio-pequeno;
+                            background: Tema.fondo-campo;
+                            border-width: Tema.linea;
+                            border-color: Tema.borde-campo;
+                            clip: true;
+
+                            Rectangle {
+                                x: 0;
+                                y: 0;
+                                width: parent.width * clamp(root.descarga-voz-progreso, 0, 1);
+                                height: parent.height;
+                                background: Tema.acento;
+                            }
+                        }
+
+                        if root.descarga-voz-estado != "" : Text {
+                            text: root.descarga-voz-estado;
+                            font-size: Tema.tamano-hora;
+                            color: Tema.texto-suave;
+                            overflow: elide;
+                        }
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: Tema.espacio-sm;
+
+                        Boton {
+                            texto: "Cancelar";
+                            clicked => { root.descarga-voz-cancelar(); }
+                        }
+
+                        if !root.descarga-voz-en-curso : Boton {
+                            texto: root.descarga-voz-error != "" ? "Reintentar" : "Descargar";
+                            principal: true;
+                            clicked => { root.descarga-voz-iniciar(); }
+                        }
+                    }
+                }
+            }
         }
     }
 }

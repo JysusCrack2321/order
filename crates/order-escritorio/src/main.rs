@@ -4,6 +4,7 @@ mod adjuntos;
 mod grabacion;
 mod puente;
 mod sistema;
+mod voz_local;
 
 use order_core::almacen::Almacen;
 use order_core::{conflictos, modelo};

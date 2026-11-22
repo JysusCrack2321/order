@@ -12,6 +12,7 @@
 
 use crate::adjuntos;
 use crate::grabacion::{self, Grabacion};
+use crate::voz_local;
 use order_core::agente::acciones::{self, Accion};
 use order_core::agente::adjuntos::{self as core_adjuntos, Adjunto, MAX_ADJUNTOS};
 use order_core::agente::cliente::{self, ErrorAgente, EstadoConexion};
@@ -45,7 +46,11 @@ use order_p2p::InfoDispositivo;
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Timelike};
 use slint::{ModelRc, SharedString, VecModel, Weak};
 use std::cell::RefCell;
-use std::time::Duration;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, Instant};
 
 slint::include_modules!();
 
@@ -142,6 +147,9 @@ struct Estado {
     conexion_conectando: bool,
     conexion_estado_texto: String,
     conexion_estado_error: bool,
+    /// Cancelación activa de descarga del modelo de voz local.
+    descarga_voz_cancelar: Option<Arc<AtomicBool>>,
+    descarga_voz_en_curso: bool,
     // --- Moodle ---------------------------------------------------------
     moodle: EstadoMoodle,
     moodle_ocupado: bool,
@@ -182,7 +190,7 @@ impl Estado {
             seleccion: None,
             filtro: Filtro::default(),
             volver_ajustes: false,
-            agente: config::cargar(),
+            agente: config::cargar_escritorio(),
             acciones: Vec::new(),
             respuesta: String::new(),
             nota: String::new(),
@@ -200,6 +208,8 @@ impl Estado {
             conexion_conectando: false,
             conexion_estado_texto: String::new(),
             conexion_estado_error: false,
+            descarga_voz_cancelar: None,
+            descarga_voz_en_curso: false,
             moodle: moodle::config::estado_de(&moodle::config::ruta()),
             moodle_ocupado: false,
             moodle_aviso: String::new(),
@@ -374,7 +384,7 @@ pub fn recargar(datos: &Datos) {
         estado.datos = Some(datos.clone());
         estado.error = None;
         // Las claves también pueden cambiar desde fuera.
-        estado.agente = config::cargar();
+        estado.agente = config::cargar_escritorio();
     });
     actualizar_si_existe();
 }
@@ -949,10 +959,15 @@ fn conectar(ui: &AppWindow) {
         let Some(ui) = debil.upgrade() else { return };
         let proveedor = VozProveedor::de_codigo(codigo);
         let voz = con_estado(|estado| estado.agente.voz.clone()).con_proveedor(proveedor);
+        let listo = voz::modelo_local_disponible(&voz::ruta_modelo_local());
         ui.set_a_voz_proveedor(proveedor.codigo());
         ui.set_v_url(voz.url_base.into());
         ui.set_v_modelo(voz.modelo.into());
+        ui.set_a_voz_modelo_listo(listo);
         ui.set_campo_mal(0);
+        if proveedor == VozProveedor::Local && !listo {
+            abrir_dialogo_descarga_voz(&ui);
+        }
     });
 
     let debil = ui.as_weak();
@@ -967,8 +982,29 @@ fn conectar(ui: &AppWindow) {
     let debil = ui.as_weak();
     ui.on_conseguir_clave_voz(move |codigo: i32| {
         let Some(ui) = debil.upgrade() else { return };
-        crate::sistema::abrir_en_navegador(VozProveedor::de_codigo(codigo).url_clave());
+        let url = VozProveedor::de_codigo(codigo).url_clave();
+        if !url.is_empty() {
+            crate::sistema::abrir_en_navegador(url);
+        }
         ui.set_campo_mal(0);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_descarga_voz_abrir(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        abrir_dialogo_descarga_voz(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_descarga_voz_iniciar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        iniciar_descarga_voz(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_descarga_voz_cancelar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        cancelar_descarga_voz(&ui);
     });
 
     let debil = ui.as_weak();
@@ -1503,6 +1539,7 @@ fn abrir_agente(ui: &AppWindow) {
     ui.set_v_modelo(agente.voz.modelo.into());
     ui.set_v_key(agente.voz.api_key.into());
     ui.set_v_ver_key(false);
+    ui.set_a_voz_modelo_listo(voz::modelo_local_disponible(&voz::ruta_modelo_local()));
     // Avanzado arranca cerrado; con "Otro" se abre porque ahí hace falta.
     ui.set_a_avanzado(agente.proveedor == Proveedor::OpenAICompatible);
     ui.set_campo_mal(0);
@@ -2384,7 +2421,9 @@ fn conectar_gemini_panel(ui: &AppWindow) {
     let debil = ui.as_weak();
     std::thread::spawn(move || {
         let ruta = config::ruta();
-        let resultado = cliente::conectar_gemini(&ruta, &clave);
+        let mut base = config::cargar_escritorio_de(&ruta).con_proveedor(Proveedor::Gemini);
+        base.api_key = clave.trim().to_string();
+        let resultado = cliente::conectar_con_config(&ruta, base);
         let _ = slint::invoke_from_event_loop(move || {
             let Some(ui) = debil.upgrade() else { return };
             let mut reenviar = false;
@@ -2393,7 +2432,7 @@ fn conectar_gemini_panel(ui: &AppWindow) {
                 match resultado {
                     Ok(res) => {
                         if res.guardada {
-                            estado.agente = config::cargar();
+                            estado.agente = config::cargar_escritorio();
                         }
                         match res.estado {
                             EstadoConexion::Conectado => {
@@ -2762,6 +2801,17 @@ fn grabar_voz(ui: &AppWindow) {
         return;
     }
 
+    let config_voz = con_estado(|estado| estado.agente.voz.clone());
+    if config_voz.proveedor == VozProveedor::Local {
+        if !voz::modelo_local_disponible(&voz::ruta_modelo_local()) {
+            abrir_dialogo_descarga_voz(ui);
+            return;
+        }
+    } else if !config_voz.lista() {
+        mostrar_error_voz(ui, voz::MSG_FALTA_CLAVE_VOZ);
+        return;
+    }
+
     match grabacion::empezar() {
         Ok(grabacion) => {
             // Reloj del indicador rojo mientras se graba.
@@ -2790,11 +2840,11 @@ fn grabar_voz(ui: &AppWindow) {
             ui.set_agente_tiempo("0:00".into());
             actualizar(ui);
         }
-        Err(mensaje) => aviso(ui, &format!("No se pudo usar el micrófono — {mensaje}")),
+        Err(mensaje) => mostrar_error_voz(ui, &format!("No se pudo usar el micrófono — {mensaje}")),
     }
 }
 
-/// Detiene la grabación, arma el WAV y lanza la transcripción en un hilo.
+/// Detiene la grabación y lanza la transcripción (local o por API) en un hilo.
 fn detener_y_transcribir(ui: &AppWindow) {
     let Some(grabacion) = con_estado(|estado| estado.grabacion.take()) else {
         return;
@@ -2809,33 +2859,58 @@ fn detener_y_transcribir(ui: &AppWindow) {
 
     let (muestras, tasa, canales) = grabacion.detener();
     let segundos = muestras.len() as f32 / canales.max(1) as f32 / tasa.max(1) as f32;
-    if segundos < 0.4 {
-        aviso(ui, "La grabación quedó vacía; revisa el micrófono.");
+    let hay_algo = muestras.iter().any(|&s| s.abs() >= 1e-6);
+    if segundos < 0.4 || !hay_algo {
+        mostrar_error_voz(ui, voz::MSG_GRABACION_VACIA);
+        return;
+    }
+
+    let config_voz = con_estado(|estado| estado.agente.voz.clone());
+    if config_voz.proveedor == VozProveedor::Local {
+        let ruta_modelo = voz::ruta_modelo_local();
+        if !voz::modelo_local_disponible(&ruta_modelo) {
+            abrir_dialogo_descarga_voz(ui);
+            return;
+        }
+        con_estado(|estado| {
+            estado.pensando = true;
+            estado.pensando_texto = "transcribiendo…".to_string();
+            estado.aviso = "transcribiendo…".to_string();
+        });
+        actualizar(ui);
+        let debil = ui.as_weak();
+        std::thread::spawn(move || {
+            let salida = voz_local::transcribir_local(&ruta_modelo, &muestras, tasa, canales);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = debil.upgrade() {
+                    recibir_transcripcion(&ui, salida);
+                }
+            });
+        });
+        return;
+    }
+
+    if !config_voz.lista() {
+        mostrar_error_voz(ui, voz::MSG_FALTA_CLAVE_VOZ);
         return;
     }
     let wav = match grabacion::a_wav(&muestras, tasa, canales) {
         Ok(wav) => wav,
         Err(mensaje) => {
-            aviso(ui, &format!("No se pudo preparar el audio — {mensaje}"));
+            mostrar_error_voz(ui, &format!("No se pudo preparar el audio — {mensaje}"));
             return;
         }
     };
 
-    let config_voz = con_estado(|estado| estado.agente.voz.clone());
-    if !config_voz.lista() {
-        con_estado(|estado| {
-            estado.error =
-                Some("La voz no tiene clave: Ajustes → Agente → Voz.".to_string());
-        });
-        actualizar(ui);
-        return;
-    }
-
-    con_estado(|estado| estado.aviso = "transcribiendo…".to_string());
+    con_estado(|estado| {
+        estado.pensando = true;
+        estado.pensando_texto = "transcribiendo…".to_string();
+        estado.aviso = "transcribiendo…".to_string();
+    });
     actualizar(ui);
     let debil = ui.as_weak();
     std::thread::spawn(move || {
-        let salida = voz::transcribir(&config_voz, &wav);
+        let salida = voz::transcribir(&config_voz, &wav).map_err(|e| voz::mensaje_error_voz(&e));
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = debil.upgrade() {
                 recibir_transcripcion(&ui, salida);
@@ -2844,27 +2919,148 @@ fn detener_y_transcribir(ui: &AppWindow) {
     });
 }
 
-fn recibir_transcripcion(ui: &AppWindow, salida: Result<String, ErrorAgente>) {
+fn recibir_transcripcion(ui: &AppWindow, salida: Result<String, String>) {
     match salida {
         Ok(texto) => {
+            let limpio = texto.trim();
+            if limpio.is_empty() {
+                mostrar_error_voz(ui, voz::MSG_GRABACION_VACIA);
+                return;
+            }
             // Se respeta lo que el usuario ya hubiera escrito.
             let actual = ui.get_agente_texto().trim().to_string();
             let nuevo = if actual.is_empty() {
-                texto
+                limpio.to_string()
             } else {
-                format!("{actual} {texto}")
+                format!("{actual} {limpio}")
             };
             ui.set_agente_texto(nuevo.into());
-            con_estado(|estado| estado.aviso.clear());
-        }
-        Err(error) => {
             con_estado(|estado| {
+                estado.pensando = false;
+                estado.pensando_texto = "pensando…".to_string();
                 estado.aviso.clear();
-                estado.error = Some(format!("No se pudo transcribir — {error}"));
             });
+            actualizar(ui);
+        }
+        Err(mensaje) => {
+            mostrar_error_voz(ui, &mensaje);
         }
     }
+}
+
+fn mostrar_error_voz(ui: &AppWindow, mensaje: &str) {
+    con_estado(|estado| {
+        estado.pensando = false;
+        estado.pensando_texto = "pensando…".to_string();
+        estado.aviso.clear();
+        estado.panel = true;
+        estado.respuesta = mensaje.to_string();
+        estado.acciones.clear();
+        estado.nota.clear();
+    });
     actualizar(ui);
+}
+
+fn abrir_dialogo_descarga_voz(ui: &AppWindow) {
+    if con_estado(|estado| estado.descarga_voz_en_curso) {
+        ui.set_descarga_voz_abierta(true);
+        return;
+    }
+    ui.set_descarga_voz_progreso(0.0);
+    ui.set_descarga_voz_estado("Listo para descargar (~470 MB).".into());
+    ui.set_descarga_voz_error("".into());
+    ui.set_descarga_voz_en_curso(false);
+    ui.set_descarga_voz_abierta(true);
+}
+
+fn iniciar_descarga_voz(ui: &AppWindow) {
+    if con_estado(|estado| estado.descarga_voz_en_curso) {
+        return;
+    }
+    let cancelar = Arc::new(AtomicBool::new(false));
+    con_estado(|estado| {
+        estado.descarga_voz_cancelar = Some(Arc::clone(&cancelar));
+        estado.descarga_voz_en_curso = true;
+    });
+    ui.set_descarga_voz_en_curso(true);
+    ui.set_descarga_voz_error("".into());
+    ui.set_descarga_voz_progreso(0.0);
+    ui.set_descarga_voz_estado("Conectando…".into());
+
+    let debil = ui.as_weak();
+    std::thread::spawn(move || {
+        let destino = voz::ruta_modelo_local();
+        let mut ultimo_aviso = Instant::now() - Duration::from_secs(1);
+        let resultado = voz::descargar_modelo(
+            voz::URL_MODELO_LOCAL,
+            &destino,
+            &cancelar,
+            |descargados, total| {
+                let terminado = total.is_some_and(|t| descargados >= t);
+                if !terminado && ultimo_aviso.elapsed() < Duration::from_millis(120) {
+                    return;
+                }
+                ultimo_aviso = Instant::now();
+                let debil_prog = debil.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(ui) = debil_prog.upgrade() else { return };
+                    let (fraccion, texto) = match total {
+                        Some(t) if t > 0 => {
+                            let pct = (descargados as f64 / t as f64).clamp(0.0, 1.0) as f32;
+                            let mb_hecho = descargados as f64 / (1024.0 * 1024.0);
+                            let mb_total = t as f64 / (1024.0 * 1024.0);
+                            (pct, format!("{mb_hecho:.0} MB / {mb_total:.0} MB"))
+                        }
+                        _ => {
+                            let mb_hecho = descargados as f64 / (1024.0 * 1024.0);
+                            (0.0, format!("{mb_hecho:.1} MB descargados…"))
+                        }
+                    };
+                    ui.set_descarga_voz_progreso(fraccion);
+                    ui.set_descarga_voz_estado(texto.into());
+                });
+            },
+        );
+
+        let cancelada = cancelar.load(Ordering::Relaxed);
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = debil.upgrade() else { return };
+            con_estado(|estado| {
+                estado.descarga_voz_en_curso = false;
+                estado.descarga_voz_cancelar = None;
+            });
+            ui.set_descarga_voz_en_curso(false);
+            match resultado {
+                Ok(()) => {
+                    ui.set_a_voz_modelo_listo(true);
+                    ui.set_descarga_voz_abierta(false);
+                    ui.set_descarga_voz_progreso(1.0);
+                    ui.set_descarga_voz_estado("".into());
+                    con_estado(|estado| {
+                        estado.aviso = "Modelo de voz listo.".to_string();
+                    });
+                    actualizar(&ui);
+                }
+                Err(_) if cancelada => {
+                    ui.set_descarga_voz_abierta(false);
+                }
+                Err(mensaje) => {
+                    ui.set_descarga_voz_error(mensaje.into());
+                }
+            }
+        });
+    });
+}
+
+fn cancelar_descarga_voz(ui: &AppWindow) {
+    con_estado(|estado| {
+        if let Some(flag) = estado.descarga_voz_cancelar.take() {
+            flag.store(true, Ordering::Relaxed);
+        }
+        estado.descarga_voz_en_curso = false;
+    });
+    ui.set_descarga_voz_en_curso(false);
+    ui.set_descarga_voz_abierta(false);
 }
 
 // ---------------------------------------------------------------------------

@@ -103,13 +103,15 @@ impl Proveedor {
     }
 }
 
-/// Proveedor de la transcripción (Whisper por API).
+/// Proveedor de la transcripción (local en PC o Whisper por API).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VozProveedor {
     #[serde(rename = "openai", alias = "OpenAI")]
     OpenAI,
     #[serde(rename = "groq", alias = "Groq")]
     Groq,
+    #[serde(rename = "local", alias = "Local", alias = "este_pc", alias = "pc")]
+    Local,
 }
 
 impl Default for VozProveedor {
@@ -119,26 +121,36 @@ impl Default for VozProveedor {
 }
 
 impl VozProveedor {
-    /// Las dos fichas en el orden de Ajustes.
+    /// Las dos fichas remotas (usadas en Android / FFI).
     pub const TODOS: [VozProveedor; 2] = [VozProveedor::OpenAI, VozProveedor::Groq];
+    /// Las tres fichas en escritorio: "Este PC (gratis)" primero.
+    pub const TODOS_ESCRITORIO: [VozProveedor; 3] = [
+        VozProveedor::Local,
+        VozProveedor::OpenAI,
+        VozProveedor::Groq,
+    ];
 
     pub fn codigo(self) -> i32 {
         match self {
             VozProveedor::OpenAI => 0,
             VozProveedor::Groq => 1,
+            VozProveedor::Local => 2,
         }
     }
 
     pub fn de_codigo(codigo: i32) -> VozProveedor {
-        *VozProveedor::TODOS
-            .get(codigo.max(0) as usize)
-            .unwrap_or(&VozProveedor::OpenAI)
+        match codigo {
+            1 => VozProveedor::Groq,
+            2 => VozProveedor::Local,
+            _ => VozProveedor::OpenAI,
+        }
     }
 
     pub fn nombre(self) -> &'static str {
         match self {
             VozProveedor::OpenAI => "OpenAI",
             VozProveedor::Groq => "Groq",
+            VozProveedor::Local => "Este PC (gratis)",
         }
     }
 
@@ -147,14 +159,16 @@ impl VozProveedor {
         match self {
             VozProveedor::OpenAI => ("https://api.openai.com/v1", "whisper-1"),
             VozProveedor::Groq => ("https://api.groq.com/openai/v1", "whisper-large-v3-turbo"),
+            VozProveedor::Local => ("", crate::agente::voz::NOMBRE_MODELO_LOCAL),
         }
     }
 
-    /// Página donde se pide la clave de la voz.
+    /// Página donde se pide la clave de la voz (vacía para local).
     pub fn url_clave(self) -> &'static str {
         match self {
             VozProveedor::OpenAI => "https://platform.openai.com/api-keys",
             VozProveedor::Groq => "https://console.groq.com/keys",
+            VozProveedor::Local => "",
         }
     }
 }
@@ -182,6 +196,17 @@ impl Default for Voz {
 }
 
 impl Voz {
+    /// Voz local en este PC (whisper.cpp, gratis y sin clave).
+    pub fn local() -> Voz {
+        let (url_base, modelo) = VozProveedor::Local.por_defecto();
+        Voz {
+            proveedor: VozProveedor::Local,
+            url_base: url_base.to_string(),
+            modelo: modelo.to_string(),
+            api_key: String::new(),
+        }
+    }
+
     /// Cambia de proveedor y pone su URL y su modelo por defecto.
     pub fn con_proveedor(mut self, proveedor: VozProveedor) -> Voz {
         let (url_base, modelo) = proveedor.por_defecto();
@@ -191,10 +216,15 @@ impl Voz {
         self
     }
 
-    /// ¿Se puede transcribir? URL y modelo siempre tienen valor por defecto,
-    /// así que en la práctica depende de la clave.
+    /// ¿Se puede transcribir? En local no requiere clave ni URL; por API
+    /// depende de la clave y la URL base.
     pub fn lista(&self) -> bool {
-        !self.api_key.trim().is_empty() && !self.url_base.trim().is_empty()
+        match self.proveedor {
+            VozProveedor::Local => true,
+            VozProveedor::OpenAI | VozProveedor::Groq => {
+                !self.api_key.trim().is_empty() && !self.url_base.trim().is_empty()
+            }
+        }
     }
 }
 
@@ -235,6 +265,14 @@ impl Default for AgenteConfig {
 }
 
 impl AgenteConfig {
+    /// Configuración por defecto en escritorio: voz local gratuita ("Este PC (gratis)").
+    pub fn por_defecto_escritorio() -> Self {
+        AgenteConfig {
+            voz: Voz::local(),
+            ..AgenteConfig::default()
+        }
+    }
+
     /// ¿Hay clave para hablar con el modelo?
     pub fn lista(&self) -> bool {
         !self.api_key.trim().is_empty()
@@ -291,6 +329,29 @@ pub fn cargar_de(ruta: &Path) -> AgenteConfig {
         .ok()
         .and_then(|texto| toml::from_str::<AgenteConfig>(&texto).ok())
         .unwrap_or_default()
+}
+
+/// Lee la configuración para escritorio: en instalaciones nuevas (o si el TOML
+/// no define `[voz]`) deja la voz en `"Este PC (gratis)"`.
+pub fn cargar_escritorio() -> AgenteConfig {
+    cargar_escritorio_de(&ruta())
+}
+
+/// Lee la configuración para escritorio desde una ruta concreta.
+pub fn cargar_escritorio_de(ruta: &Path) -> AgenteConfig {
+    let Ok(texto) = std::fs::read_to_string(ruta) else {
+        return AgenteConfig::por_defecto_escritorio();
+    };
+    let Ok(mut cfg) = toml::from_str::<AgenteConfig>(&texto) else {
+        return AgenteConfig::por_defecto_escritorio();
+    };
+    let tiene_voz = toml::from_str::<toml::Table>(&texto)
+        .map(|tabla| tabla.contains_key("voz"))
+        .unwrap_or(false);
+    if !tiene_voz {
+        cfg.voz = Voz::local();
+    }
+    cfg
 }
 
 /// Escribe la configuración con permisos `600`.
@@ -660,5 +721,35 @@ mod pruebas {
             VozProveedor::Groq.url_clave(),
             "https://console.groq.com/keys"
         );
+    }
+
+    #[test]
+    fn la_ficha_local_de_escritorio_es_primera_y_por_defecto() {
+        assert_eq!(
+            VozProveedor::TODOS_ESCRITORIO,
+            [VozProveedor::Local, VozProveedor::OpenAI, VozProveedor::Groq]
+        );
+        assert_eq!(VozProveedor::Local.nombre(), "Este PC (gratis)");
+        assert_eq!(VozProveedor::Local.codigo(), 2);
+        assert_eq!(VozProveedor::de_codigo(2), VozProveedor::Local);
+        assert!(Voz::local().lista());
+
+        // Instalación nueva de escritorio (sin archivo) usa "Este PC (gratis)".
+        let (_dir, ruta) = temporal();
+        let nuevo = cargar_escritorio_de(&ruta);
+        assert_eq!(nuevo.voz.proveedor, VozProveedor::Local);
+        assert_eq!(nuevo.voz.modelo, "ggml-small.bin");
+        assert!(nuevo.voz.lista());
+
+        // Archivo viejo de escritorio con OpenAI explícito lo respeta (y sin clave no está listo).
+        std::fs::write(&ruta, "[voz]\nproveedor = \"openai\"\napi_key = \"\"\n").expect("escribir");
+        let existente = cargar_escritorio_de(&ruta);
+        assert_eq!(existente.voz.proveedor, VozProveedor::OpenAI);
+        assert!(!existente.voz.lista());
+
+        // Archivo sin sección [voz] en escritorio pasa a "Este PC (gratis)".
+        std::fs::write(&ruta, "api_key = \"AIzaPrueba12345\"\n").expect("escribir");
+        let sin_voz = cargar_escritorio_de(&ruta);
+        assert_eq!(sin_voz.voz.proveedor, VozProveedor::Local);
     }
 }
