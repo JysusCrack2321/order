@@ -984,6 +984,7 @@ export component AppWindow inherits Window {
                 error: root.form-error;
                 confirma: false;
                 puede-borrar: false;
+                estirar-contenido: true;
 
                 guardar => { root.guardar-formulario(); }
                 cancelar => { root.cancelar-formulario(); }
@@ -992,6 +993,7 @@ export component AppWindow inherits Window {
                 no-borrar => { }
 
                 VerticalLayout {
+                    vertical-stretch: 1;
                     spacing: Tema.espacio-md;
 
                     HorizontalLayout {
@@ -1064,7 +1066,8 @@ export component AppWindow inherits Window {
                     }
 
                     ScrollView {
-                        height: Tema.alto-lista-recordatorios;
+                        vertical-stretch: 1;
+                        min-height: Tema.alto-lista-recordatorios;
 
                         VerticalLayout {
                             spacing: 0;
@@ -1227,6 +1230,7 @@ export component AppWindow inherits Window {
                 error: root.form-error;
                 confirma: false;
                 puede-borrar: false;
+                estirar-contenido: true;
 
                 guardar => { root.guardar-formulario(); }
                 cancelar => { root.cancelar-formulario(); }
@@ -1236,6 +1240,7 @@ export component AppWindow inherits Window {
 
                 ScrollView {
                     vertical-stretch: 1;
+                    min-height: 0px;
 
                     VerticalLayout {
                         spacing: Tema.espacio-md;
@@ -1481,6 +1486,7 @@ export component AppWindow inherits Window {
                 error: root.form-error;
                 confirma: false;
                 puede-borrar: false;
+                estirar-contenido: true;
                 texto-cancelar: "Volver";
                 texto-guardar: (!root.moodle-conectado || root.moodle-requiere-reingreso)
                     ? (root.moodle-ocupado ? "Conectando…" : "Conectar")
@@ -1499,8 +1505,12 @@ export component AppWindow inherits Window {
                 confirmar-borrado => { }
                 no-borrar => { }
 
-                VerticalLayout {
-                    spacing: Tema.espacio-md;
+                ScrollView {
+                    vertical-stretch: 1;
+                    min-height: 0px;
+
+                    VerticalLayout {
+                        spacing: Tema.espacio-md;
 
                     if root.moodle-conectado : Text {
                         text: root.moodle-estado-texto;
@@ -1553,6 +1563,7 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
+                }
             }
 
             // --- Calendarios iCal -----------------------------------------
@@ -1564,6 +1575,7 @@ export component AppWindow inherits Window {
                 error: root.form-error;
                 confirma: false;
                 puede-borrar: false;
+                estirar-contenido: true;
                 texto-cancelar: "Volver";
                 texto-guardar: root.ical-ocupado ? "Agregando…" : "Agregar calendario";
                 mostrar-guardar: !root.ical-ocupado;
@@ -1575,10 +1587,12 @@ export component AppWindow inherits Window {
                 no-borrar => { }
 
                 VerticalLayout {
+                    vertical-stretch: 1;
                     spacing: Tema.espacio-sm;
 
                     ScrollView {
-                        height: Tema.alto-lista-calendarios;
+                        vertical-stretch: 1;
+                        min-height: Tema.alto-lista-calendarios;
 
                         VerticalLayout {
                             spacing: 0;
@@ -1698,6 +1712,7 @@ export component AppWindow inherits Window {
                 error: root.form-error;
                 confirma: false;
                 puede-borrar: false;
+                estirar-contenido: true;
                 texto-cancelar: "Volver";
                 texto-guardar: root.p2p-ocupado ? "Sincronizando…" : "Sincronizar ahora";
                 mostrar-guardar: !root.p2p-ocupado && !root.p2p-mostrando-qr;
@@ -1710,6 +1725,7 @@ export component AppWindow inherits Window {
 
                 ScrollView {
                     vertical-stretch: 1;
+                    min-height: 0px;
 
                     VerticalLayout {
                         spacing: Tema.espacio-md;

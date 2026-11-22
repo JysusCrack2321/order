@@ -355,6 +355,8 @@ export component Marco inherits Rectangle {
     in property <string> texto-cancelar: "Cancelar";
     /// Muestra u oculta el botón principal.
     in property <bool> mostrar-guardar: true;
+    /// Si es true, el contenido hijo ocupa todo el alto disponible (p. ej. ScrollView).
+    in property <bool> estirar-contenido: false;
 
     callback guardar();
     callback cancelar();
@@ -383,6 +385,7 @@ export component Marco inherits Rectangle {
             spacing: Tema.espacio-md;
 
             VerticalLayout {
+                vertical-stretch: 0;
                 spacing: Tema.espacio-xs;
 
                 Text {
@@ -405,6 +408,7 @@ export component Marco inherits Rectangle {
 
             // Errores de validación del propio formulario (no del archivo).
             if root.error != "" : Rectangle {
+                vertical-stretch: 0;
                 height: Tema.alto-campo;
                 border-radius: Tema.radio-pequeno;
                 background: Tema.fondo-error;
@@ -425,9 +429,10 @@ export component Marco inherits Rectangle {
 
             @children
 
-            Rectangle { vertical-stretch: 1; }
+            if !root.estirar-contenido : Rectangle { vertical-stretch: 1; }
 
             if root.confirma : VerticalLayout {
+                vertical-stretch: 0;
                 spacing: Tema.espacio-sm;
 
                 Text {
@@ -456,6 +461,7 @@ export component Marco inherits Rectangle {
             }
 
             if !root.confirma : HorizontalLayout {
+                vertical-stretch: 0;
                 alignment: end;
                 spacing: Tema.espacio-sm;
 
