@@ -229,8 +229,6 @@ export component CampoBoton inherits VerticalLayout {
 }
 
 /// Campo de una clave: se muestra tapada y el botón de al lado la descubre.
-/// Slint 1.19 no trae `echo-mode`, así que el texto oculto se dibuja como
-/// puntos y el campo real solo aparece cuando se pide verlo.
 export component CampoClave inherits VerticalLayout {
     in property <string> etiqueta: "";
     in-out property <string> texto;
@@ -258,7 +256,7 @@ export component CampoClave inherits VerticalLayout {
             border-width: Tema.linea;
             border-color: root.mal ? Tema.vencida : Tema.borde-campo;
 
-            if root.ver : TextInput {
+            TextInput {
                 x: Tema.espacio-sm;
                 width: parent.width - 2 * Tema.espacio-sm;
                 height: parent.height;
@@ -267,15 +265,16 @@ export component CampoClave inherits VerticalLayout {
                 color: Tema.texto;
                 font-size: Tema.tamano-pequeno;
                 single-line: true;
+                input-type: root.ver ? InputType.text : InputType.password;
             }
 
-            if !root.ver : Text {
+            if root.texto == "" : Text {
                 x: Tema.espacio-sm;
                 width: parent.width - 2 * Tema.espacio-sm;
                 height: parent.height;
                 vertical-alignment: center;
-                text: root.texto == "" ? root.pista : "••••••••••";
-                color: root.texto == "" ? Tema.texto-tenue : Tema.texto-suave;
+                text: root.pista;
+                color: Tema.texto-tenue;
                 font-size: Tema.tamano-pequeno;
                 overflow: elide;
             }
