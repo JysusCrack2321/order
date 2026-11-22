@@ -135,6 +135,11 @@ tener el menú Abrir/Salir. En niri con DMS funciona sin nada extra.
 
 El agente usa **Gemini** por defecto (gratis con clave de Google AI Studio) y abre una guía paso a paso para conectarlo al primer uso si aún no hay clave.
 
+### Voz
+
+- **Escritorio**: usa **«Este PC (gratis)»** por defecto, que transcribe en español en local con `whisper.cpp` (`whisper-rs`) y el modelo `ggml-small.bin` en `~/.local/share/order/modelos/ggml-small.bin` (se descarga la primera vez con barra de progreso y se libera de memoria tras 10 minutos sin uso). También se pueden elegir **OpenAI** o **Groq** en **Ajustes → Agente**.
+- **Android**: usa **«Android (gratis)»** (reconocimiento del sistema `es-CO`) por defecto, o OpenAI/Groq con clave.
+
 Cada petición al agente se arma en este orden:
 
 1. **Agenda actual** (`Datos actuales de ORDER`).
