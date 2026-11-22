@@ -6,6 +6,8 @@ mod almacen;
 mod modelo;
 #[allow(dead_code)] // las operaciones se usan desde los formularios (Tarea 7)
 mod ops;
+#[allow(dead_code)] // la semana la dibuja la ventana (Tarea 6)
+mod semana;
 
 fn main() {
     println!("ORDER");
