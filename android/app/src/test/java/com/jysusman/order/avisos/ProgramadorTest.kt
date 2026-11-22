@@ -1,6 +1,7 @@
 package com.jysusman.order.avisos
 
 import com.jysusman.order.datos.PuenteOrder
+import com.jysusman.order.ffi.AdjuntoFfi
 import com.jysusman.order.ffi.AgenteConfigFfi
 import com.jysusman.order.ffi.AjustesFormFfi
 import com.jysusman.order.ffi.AnioMesFfi
@@ -14,6 +15,7 @@ import com.jysusman.order.ffi.DiaVistaFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
+import com.jysusman.order.ffi.LimitesAdjuntosFfi
 import com.jysusman.order.ffi.MateriaConTonoFfi
 import com.jysusman.order.ffi.PendientesVistaFfi
 import com.jysusman.order.ffi.ProveedorInfoFfi
@@ -202,8 +204,12 @@ private class FakePuenteAvisos(
     override fun proveedoresAgente(): List<ProveedorInfoFfi> = emptyList()
     override fun proveedoresVoz(): List<VozProveedorInfoFfi> = emptyList()
     override fun leerAgenteConfig(rutaConfig: String): AgenteConfigFfi = throw UnsupportedOperationException()
-    override fun guardarAgenteConfig(rutaConfig: String, proveedor: Int, url: String, modelo: String, apiKey: String, vozProveedor: Int, vozUrl: String, vozModelo: String, vozKey: String): AgenteConfigFfi = throw UnsupportedOperationException()
-    override fun enviarAlAgente(rutaDatos: String, rutaConfig: String, texto: String): RespuestaAgenteFfi = throw UnsupportedOperationException()
+    override fun guardarAgenteConfig(rutaConfig: String, proveedor: Int, url: String, modelo: String, apiKey: String, veImagenes: Boolean, vozProveedor: Int, vozUrl: String, vozModelo: String, vozKey: String): AgenteConfigFfi = throw UnsupportedOperationException()
+    override fun agenteVeImagenes(rutaConfig: String): Boolean = false
+    override fun textoDePdf(bytes: ByteArray): List<String> = emptyList()
+    override fun paginasSinTexto(paginas: List<String>): List<UInt> = emptyList()
+    override fun limitesAdjuntos(): LimitesAdjuntosFfi = throw UnsupportedOperationException()
+    override fun enviarAlAgente(rutaDatos: String, rutaConfig: String, texto: String, adjuntos: List<AdjuntoFfi>): RespuestaAgenteFfi = throw UnsupportedOperationException()
     override fun aplicarAccion(rutaDatos: String, accionId: String): ResumenArchivoFfi = throw UnsupportedOperationException()
     override fun descartarAccion(accionId: String) {}
     override fun aplicarTodas(rutaDatos: String, accionIds: List<String>): ResultadoAplicarTodasFfi = throw UnsupportedOperationException()

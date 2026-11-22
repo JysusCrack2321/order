@@ -1,5 +1,9 @@
 package com.jysusman.order.datos
 
+import com.jysusman.order.agente.AdjuntoPendiente
+import com.jysusman.order.agente.FuenteAdjunto
+import com.jysusman.order.agente.PreparadorAdjuntos
+import com.jysusman.order.agente.ProcesadorPlataforma
 import com.jysusman.order.ffi.AccionVistaFfi
 import com.jysusman.order.ffi.AgenteConfigFfi
 import com.jysusman.order.ffi.AjustesFormFfi
@@ -61,6 +65,8 @@ data class EstadoOrder(
     val agenteTexto: String = "",
     val agentePensando: Boolean = false,
     val agenteTranscribiendo: Boolean = false,
+    val agenteLeyendoArchivo: Boolean = false,
+    val agenteAdjuntos: List<AdjuntoPendiente> = emptyList(),
     val agenteAviso: String = "",
     val agenteAvisoEsError: Boolean = false,
     val agentePanelAbierto: Boolean = false,
@@ -82,8 +88,10 @@ class Repositorio(
     private val rutaRegistroAvisos: String = "",
     private val rutaConfigAgente: String = "",
     private val onDatosActualizados: () -> Unit = {},
+    procesadorAdjuntos: ProcesadorPlataforma? = null,
 ) {
     private val mutex = Mutex()
+    private val preparadorAdjuntos = procesadorAdjuntos?.let { PreparadorAdjuntos(puente, it) }
 
     private val carpetaInicialLimpia = carpetaInicial?.trim()?.trimEnd('/').orEmpty()
 
@@ -485,10 +493,68 @@ class Repositorio(
         }
     }
 
+    suspend fun adjuntar(fuente: FuenteAdjunto) {
+        adjuntarDesde { fuente }
+    }
+
+    suspend fun adjuntarDesde(leerFuente: suspend () -> FuenteAdjunto) {
+        val preparador = preparadorAdjuntos ?: return
+        val actual = _estado.value
+        if (actual.agenteLeyendoArchivo || actual.agentePensando) return
+        if (rutaConfigAgente.isBlank()) return
+
+        _estado.update {
+            it.copy(
+                agenteLeyendoArchivo = true,
+                agenteAviso = "leyendo archivo…",
+                agenteAvisoEsError = false,
+            )
+        }
+
+        val res = withContext(dispatcherIo) {
+            runCatching {
+                val fuente = leerFuente()
+                preparador.preparar(rutaConfigAgente, fuente, actual.agenteAdjuntos.size)
+            }
+        }
+
+        res.onSuccess { resultado ->
+            _estado.update { estado ->
+                estado.copy(
+                    agenteLeyendoArchivo = false,
+                    agenteAdjuntos = estado.agenteAdjuntos + resultado.adjunto,
+                    agenteAviso = resultado.aviso.orEmpty(),
+                    agenteAvisoEsError = false,
+                )
+            }
+        }.onFailure { err ->
+            _estado.update { estado ->
+                estado.copy(
+                    agenteLeyendoArchivo = false,
+                    agenteAviso = mensajeDeError(err),
+                    agenteAvisoEsError = true,
+                )
+            }
+        }
+    }
+
+    fun quitarAdjunto(id: String) {
+        _estado.update { estado ->
+            estado.copy(
+                agenteAdjuntos = estado.agenteAdjuntos.filterNot { it.id == id },
+                agenteAviso = "",
+                agenteAvisoEsError = false,
+            )
+        }
+    }
+
+    suspend fun limitesAdjuntos() = withContext(dispatcherIo) { puente.limitesAdjuntos() }
+
     suspend fun enviarAlAgente() {
         val actual = _estado.value
         val pregunta = actual.agenteTexto.trim()
-        if (pregunta.isEmpty() || actual.agentePensando) return
+        val adjuntosFfi = actual.agenteAdjuntos.map { it.adjuntoFfi }
+        if ((pregunta.isEmpty() && adjuntosFfi.isEmpty()) || actual.agentePensando || actual.agenteLeyendoArchivo) return
         if (rutaConfigAgente.isBlank() || actual.rutaArchivo.isBlank()) return
 
         _estado.update {
@@ -503,7 +569,9 @@ class Repositorio(
         }
 
         val res = withContext(dispatcherIo) {
-            runCatching { puente.enviarAlAgente(actual.rutaArchivo, rutaConfigAgente, pregunta) }
+            runCatching {
+                puente.enviarAlAgente(actual.rutaArchivo, rutaConfigAgente, pregunta, adjuntosFfi)
+            }
         }
 
         res.onSuccess { resp ->
@@ -515,6 +583,7 @@ class Repositorio(
                     agenteAcciones = resp.acciones,
                     agenteNota = resp.nota.orEmpty(),
                     agenteTexto = if (resp.nota == null) "" else it.agenteTexto,
+                    agenteAdjuntos = if (resp.nota == null) emptyList() else it.agenteAdjuntos,
                 )
             }
         }.onFailure { err ->
@@ -657,6 +726,7 @@ class Repositorio(
         url: String,
         modelo: String,
         apiKey: String,
+        veImagenes: Boolean,
         vozProveedor: Int,
         vozUrl: String,
         vozModelo: String,
@@ -670,6 +740,7 @@ class Repositorio(
                     url,
                     modelo,
                     apiKey,
+                    veImagenes,
                     vozProveedor,
                     vozUrl,
                     vozModelo,

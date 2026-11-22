@@ -1,6 +1,7 @@
 package com.jysusman.order.datos
 
 import com.jysusman.order.ffi.AccionVistaFfi
+import com.jysusman.order.ffi.AdjuntoFfi
 import com.jysusman.order.ffi.AgenteConfigFfi
 import com.jysusman.order.ffi.AjustesFormFfi
 import com.jysusman.order.ffi.AnioMesFfi
@@ -14,6 +15,7 @@ import com.jysusman.order.ffi.DiaVistaFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
+import com.jysusman.order.ffi.LimitesAdjuntosFfi
 import com.jysusman.order.ffi.MateriaConTonoFfi
 import com.jysusman.order.ffi.PendientesVistaFfi
 import com.jysusman.order.ffi.ProveedorInfoFfi
@@ -124,13 +126,24 @@ interface PuenteOrder {
         url: String,
         modelo: String,
         apiKey: String,
+        veImagenes: Boolean,
         vozProveedor: Int,
         vozUrl: String,
         vozModelo: String,
         vozKey: String,
     ): AgenteConfigFfi
 
-    fun enviarAlAgente(rutaDatos: String, rutaConfig: String, texto: String): RespuestaAgenteFfi
+    fun agenteVeImagenes(rutaConfig: String): Boolean
+    fun textoDePdf(bytes: ByteArray): List<String>
+    fun paginasSinTexto(paginas: List<String>): List<UInt>
+    fun limitesAdjuntos(): LimitesAdjuntosFfi
+
+    fun enviarAlAgente(
+        rutaDatos: String,
+        rutaConfig: String,
+        texto: String,
+        adjuntos: List<AdjuntoFfi>,
+    ): RespuestaAgenteFfi
     fun aplicarAccion(rutaDatos: String, accionId: String): ResumenArchivoFfi
     fun descartarAccion(accionId: String)
     fun aplicarTodas(rutaDatos: String, accionIds: List<String>): ResultadoAplicarTodasFfi
@@ -294,6 +307,7 @@ class PuenteOrderNativo : PuenteOrder {
         url: String,
         modelo: String,
         apiKey: String,
+        veImagenes: Boolean,
         vozProveedor: Int,
         vozUrl: String,
         vozModelo: String,
@@ -304,17 +318,32 @@ class PuenteOrderNativo : PuenteOrder {
         url,
         modelo,
         apiKey,
+        veImagenes,
         vozProveedor,
         vozUrl,
         vozModelo,
         vozKey,
     )
 
+    override fun agenteVeImagenes(rutaConfig: String): Boolean =
+        com.jysusman.order.ffi.agenteVeImagenes(rutaConfig)
+
+    override fun textoDePdf(bytes: ByteArray): List<String> =
+        com.jysusman.order.ffi.textoDePdf(bytes)
+
+    override fun paginasSinTexto(paginas: List<String>): List<UInt> =
+        com.jysusman.order.ffi.paginasSinTexto(paginas)
+
+    override fun limitesAdjuntos(): LimitesAdjuntosFfi =
+        com.jysusman.order.ffi.limitesAdjuntos()
+
     override fun enviarAlAgente(
         rutaDatos: String,
         rutaConfig: String,
         texto: String,
-    ): RespuestaAgenteFfi = com.jysusman.order.ffi.enviarAlAgente(rutaDatos, rutaConfig, texto)
+        adjuntos: List<AdjuntoFfi>,
+    ): RespuestaAgenteFfi =
+        com.jysusman.order.ffi.enviarAlAgente(rutaDatos, rutaConfig, texto, adjuntos)
 
     override fun aplicarAccion(rutaDatos: String, accionId: String): ResumenArchivoFfi =
         com.jysusman.order.ffi.aplicarAccion(rutaDatos, accionId)

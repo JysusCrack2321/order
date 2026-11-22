@@ -22,6 +22,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -68,6 +70,7 @@ fun HojaAjustesAgente(
     var modelo by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
     var verKey by remember { mutableStateOf(false) }
+    var veImagenes by remember { mutableStateOf(false) }
 
     var vozProveedor by remember { mutableIntStateOf(0) }
     var vozUrlBase by remember { mutableStateOf("") }
@@ -87,6 +90,7 @@ fun HojaAjustesAgente(
             urlBase = cfg.urlBase
             modelo = cfg.modelo
             apiKey = cfg.apiKey
+            veImagenes = cfg.veImagenes
             vozProveedor = cfg.vozProveedor
             vozUrlBase = cfg.vozUrlBase
             vozModelo = cfg.vozModelo
@@ -293,6 +297,31 @@ fun HojaAjustesAgente(
                 pista = "modelo",
                 mal = campoMal == 4,
             )
+            if (proveedorActual?.urlClave == null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { veImagenes = !veImagenes }
+                        .padding(vertical = OrderTema.EspacioXs),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(OrderTema.EspacioSm),
+                ) {
+                    Checkbox(
+                        checked = veImagenes,
+                        onCheckedChange = { veImagenes = it },
+                        colors = CheckboxDefaults.colors(
+                            checkedColor = OrderTema.Acento,
+                            uncheckedColor = OrderTema.BordeFuerte,
+                            checkmarkColor = OrderTema.Fondo,
+                        ),
+                    )
+                    Text(
+                        text = "El modelo ve imágenes",
+                        fontSize = OrderTema.TamanoPequeno,
+                        color = OrderTema.Texto,
+                    )
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(OrderTema.EspacioXs))
@@ -323,6 +352,7 @@ fun HojaAjustesAgente(
                             url = urlBase,
                             modelo = modelo,
                             apiKey = apiKey,
+                            veImagenes = veImagenes,
                             vozProveedor = vozProveedor,
                             vozUrl = vozUrlBase,
                             vozModelo = vozModelo,

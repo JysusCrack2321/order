@@ -1,12 +1,16 @@
 package com.jysusman.order
 
 import android.Manifest
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -52,6 +56,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.jysusman.order.agente.ProcesadorAndroid
 import com.jysusman.order.avisos.Canales
 import com.jysusman.order.avisos.Programador
 import com.jysusman.order.avisos.TrabajoRespaldo
@@ -119,6 +124,7 @@ class MainActivity : ComponentActivity() {
             rutaRegistroAvisos = RutasPrivadas.registroAvisos(applicationContext),
             rutaConfigAgente = RutasPrivadas.archivoAgenteConfig(applicationContext),
             onDatosActualizados = { programador.reprogramar() },
+            procesadorAdjuntos = ProcesadorAndroid(applicationContext),
         )
 
         setContent {
@@ -180,6 +186,89 @@ private fun OrderApp(
             iniciarGrabacionVoz()
         } else {
             repositorio.mostrarAvisoAgente("Permiso de micrófono denegado; no se puede grabar.", esError = true)
+        }
+    }
+
+    var fotoPendienteUri by remember { mutableStateOf<Uri?>(null) }
+    var fotoPendienteArchivo by remember { mutableStateOf<File?>(null) }
+
+    val lanzadorDocumento = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val lim = repositorio.limitesAdjuntos()
+                repositorio.adjuntarDesde {
+                    ProcesadorAndroid.leerFuenteDesdeUri(
+                        context = context,
+                        uri = uri,
+                        ladoLargo = lim.ladoLargoImagen.toInt(),
+                        calidadJpeg = lim.calidadJpeg.toInt(),
+                    )
+                }
+            }
+        }
+    }
+
+    val lanzadorFoto = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { ok ->
+        val uri = fotoPendienteUri
+        val archivo = fotoPendienteArchivo
+        fotoPendienteUri = null
+        fotoPendienteArchivo = null
+        if (ok && uri != null) {
+            scope.launch {
+                val lim = repositorio.limitesAdjuntos()
+                try {
+                    repositorio.adjuntarDesde {
+                        ProcesadorAndroid.leerFuenteDesdeUri(
+                            context = context,
+                            uri = uri,
+                            ladoLargo = lim.ladoLargoImagen.toInt(),
+                            calidadJpeg = lim.calidadJpeg.toInt(),
+                            nombreForzado = "foto.jpg",
+                        )
+                    }
+                } finally {
+                    archivo?.delete()
+                }
+            }
+        } else {
+            archivo?.delete()
+        }
+    }
+
+    fun abrirCamara() {
+        runCatching {
+            val dir = File(context.cacheDir, "fotos").apply { mkdirs() }
+            val archivo = File.createTempFile("foto-", ".jpg", dir)
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                archivo,
+            )
+            fotoPendienteArchivo = archivo
+            fotoPendienteUri = uri
+            lanzadorFoto.launch(uri)
+        }.onFailure { err ->
+            repositorio.mostrarAvisoAgente(
+                err.message ?: "No se pudo abrir la cámara.",
+                esError = true,
+            )
+        }
+    }
+
+    val lanzadorCamaraPermiso = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { concedido ->
+        if (concedido) {
+            abrirCamara()
+        } else {
+            repositorio.mostrarAvisoAgente(
+                "Permiso de cámara denegado; puedes elegir una foto desde Archivo.",
+                esError = true,
+            )
         }
     }
 
@@ -367,10 +456,12 @@ private fun OrderApp(
                     texto = estado.agenteTexto,
                     pensando = estado.agentePensando,
                     transcribiendo = estado.agenteTranscribiendo,
+                    leyendoArchivo = estado.agenteLeyendoArchivo,
                     grabando = grabandoVoz,
                     tiempoGrabacion = tiempoGrabacion,
                     aviso = estado.agenteAviso,
                     avisoEsError = estado.agenteAvisoEsError,
+                    adjuntos = estado.agenteAdjuntos,
                     alCambiarTexto = { repositorio.actualizarTextoAgente(it) },
                     alGrabar = {
                         if (grabandoVoz) {
@@ -384,6 +475,21 @@ private fun OrderApp(
                             iniciarGrabacionVoz()
                         }
                     },
+                    alElegirArchivo = {
+                        lanzadorDocumento.launch(arrayOf("application/pdf", "image/*"))
+                    },
+                    alTomarFoto = {
+                        val tieneCamara = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.CAMERA,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (tieneCamara) {
+                            abrirCamara()
+                        } else {
+                            lanzadorCamaraPermiso.launch(Manifest.permission.CAMERA)
+                        }
+                    },
+                    alQuitarAdjunto = { id -> repositorio.quitarAdjunto(id) },
                     alEnviar = { scope.launch { repositorio.enviarAlAgente() } },
                 )
                 val pie = estado.resumen?.pie ?: estado.inicio?.pie

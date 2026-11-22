@@ -1,6 +1,7 @@
 package com.jysusman.order.datos
 
 import com.jysusman.order.ffi.AccionVistaFfi
+import com.jysusman.order.ffi.AdjuntoFfi
 import com.jysusman.order.ffi.AgenteConfigFfi
 import com.jysusman.order.ffi.AjustesFormFfi
 import com.jysusman.order.ffi.AnioMesFfi
@@ -15,6 +16,7 @@ import com.jysusman.order.ffi.ErrorFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
+import com.jysusman.order.ffi.LimitesAdjuntosFfi
 import com.jysusman.order.ffi.MateriaConTonoFfi
 import com.jysusman.order.ffi.PendientesVistaFfi
 import com.jysusman.order.ffi.ProveedorInfoFfi
@@ -178,12 +180,15 @@ class RepositorioTest {
     }
 }
 
-private class FakePuenteOrder : PuenteOrder {
+class FakePuenteOrder : PuenteOrder {
     var fallarAlCargar: ErrorFfi? = null
     var fallarAgente: ErrorFfi? = null
     var respuestaAgente: RespuestaAgenteFfi = RespuestaAgenteFfi("Listo.", emptyList(), null)
     var llamadasTranscribir: Int = 0
     var transcripcionTexto: String = "hola"
+    var veImagenes: Boolean = false
+    var paginasPdfFake: List<String> = listOf("Texto página 1")
+    var ultimosAdjuntosEnviados: List<AdjuntoFfi> = emptyList()
     var conflictos: List<ConflictoFfi> = emptyList()
     var advertencias: List<String> = emptyList()
     var ultimaRutaCargada: String = ""
@@ -366,7 +371,7 @@ private class FakePuenteOrder : PuenteOrder {
     override fun proveedoresAgente(): List<ProveedorInfoFfi> = emptyList()
     override fun proveedoresVoz(): List<VozProveedorInfoFfi> = emptyList()
     override fun leerAgenteConfig(rutaConfig: String): AgenteConfigFfi =
-        AgenteConfigFfi(0, "https://api.deepseek.com", "deepseek-v4-flash", "", 0, "https://api.openai.com/v1", "whisper-1", "")
+        AgenteConfigFfi(0, "https://api.deepseek.com", "deepseek-v4-flash", "", veImagenes, 0, "https://api.openai.com/v1", "whisper-1", "")
 
     override fun guardarAgenteConfig(
         rutaConfig: String,
@@ -374,17 +379,38 @@ private class FakePuenteOrder : PuenteOrder {
         url: String,
         modelo: String,
         apiKey: String,
+        veImagenes: Boolean,
         vozProveedor: Int,
         vozUrl: String,
         vozModelo: String,
         vozKey: String,
     ): AgenteConfigFfi = leerAgenteConfig(rutaConfig)
 
+    override fun agenteVeImagenes(rutaConfig: String): Boolean = veImagenes
+
+    override fun textoDePdf(bytes: ByteArray): List<String> = paginasPdfFake
+
+    override fun paginasSinTexto(paginas: List<String>): List<UInt> =
+        paginas.mapIndexedNotNull { idx, texto ->
+            if (texto.filterNot { it.isWhitespace() }.length < 5) idx.toUInt() else null
+        }
+
+    override fun limitesAdjuntos(): LimitesAdjuntosFfi =
+        LimitesAdjuntosFfi(
+            maxAdjuntos = 5u,
+            maxPaginasPdf = 20u,
+            maxBytesTotal = (20 * 1024 * 1024).toULong(),
+            ladoLargoImagen = 1568u,
+            calidadJpeg = 85u,
+        )
+
     override fun enviarAlAgente(
         rutaDatos: String,
         rutaConfig: String,
         texto: String,
+        adjuntos: List<AdjuntoFfi>,
     ): RespuestaAgenteFfi {
+        ultimosAdjuntosEnviados = adjuntos
         fallarAgente?.let { throw it }
         return respuestaAgente
     }
