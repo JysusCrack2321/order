@@ -11,6 +11,7 @@ use order_core::agente::adjuntos::{self, Adjunto, ContenidoAdjunto};
 use order_core::agente::cliente;
 use order_core::agente::config::{self, AgenteConfig, Proveedor, VozProveedor};
 use order_core::agente::contexto;
+use order_core::agente::conversacion::Conversacion;
 use order_core::agente::voz;
 use order_core::almacen::Almacen;
 use order_core::avisos::{self, Registro};
@@ -1224,9 +1225,16 @@ pub fn resumen_del_dia(
 // Agente y voz
 // ---------------------------------------------------------------------------
 
+struct AccionPendiente {
+    accion: Accion,
+    descripcion: String,
+}
+
 static SIGUIENTE_ACCION_ID: AtomicU64 = AtomicU64::new(1);
-static ACCIONES_PENDIENTES: LazyLock<Mutex<HashMap<String, Accion>>> =
+static ACCIONES_PENDIENTES: LazyLock<Mutex<HashMap<String, AccionPendiente>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static CONVERSACION: LazyLock<Mutex<Conversacion>> =
+    LazyLock::new(|| Mutex::new(Conversacion::nueva()));
 
 #[uniffi::export]
 pub fn proveedores_agente() -> Vec<ProveedorInfoFfi> {
@@ -1389,24 +1397,58 @@ pub fn enviar_al_agente(
         &format!("UTC{}", ahora.format("%:z")),
     );
 
+    let nombres_adjuntos: Vec<String> = adjuntos.iter().map(|a| a.nombre.clone()).collect();
     let adjuntos_core: Vec<Adjunto> = adjuntos.into_iter().map(adjunto_de_ffi).collect();
-    let salida = cliente::consultar(&cfg, &resumen_ctx, pregunta_efectiva, &adjuntos_core)
-        .map_err(|e| ErrorFfi::Operacion {
-            mensaje: e.to_string(),
-        })?;
+    let conv_snapshot = CONVERSACION
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|_| Conversacion::nueva());
+    let salida = cliente::consultar(
+        &cfg,
+        &resumen_ctx,
+        pregunta_efectiva,
+        &adjuntos_core,
+        &conv_snapshot,
+    )
+    .map_err(|e| ErrorFfi::Operacion {
+        mensaje: e.to_string(),
+    })?;
 
-    Ok(construir_respuesta_agente(&datos, &salida))
+    Ok(construir_respuesta_agente(
+        &datos,
+        &salida,
+        pregunta_efectiva,
+        &nombres_adjuntos,
+    ))
+}
+
+#[uniffi::export]
+pub fn nueva_conversacion() {
+    if let Ok(mut guard) = CONVERSACION.lock() {
+        *guard = Conversacion::nueva();
+    }
+    if let Ok(mut guard) = ACCIONES_PENDIENTES.lock() {
+        guard.clear();
+    }
+}
+
+#[uniffi::export]
+pub fn hay_conversacion() -> bool {
+    CONVERSACION
+        .lock()
+        .map(|guard| !guard.esta_vacia())
+        .unwrap_or(false)
 }
 
 #[uniffi::export]
 pub fn aplicar_accion(ruta_datos: String, accion_id: String) -> Result<ResumenArchivoFfi, ErrorFfi> {
-    let accion = {
+    let pendiente = {
         let guard = ACCIONES_PENDIENTES
             .lock()
             .map_err(|_| ErrorFfi::Operacion {
                 mensaje: "No se pudo acceder a las acciones pendientes.".to_string(),
             })?;
-        guard.get(&accion_id).cloned()
+        guard.get(&accion_id).map(|p| (p.accion.clone(), p.descripcion.clone()))
     }
     .ok_or_else(|| ErrorFfi::Operacion {
         mensaje: "Esa acción ya no está pendiente.".to_string(),
@@ -1415,9 +1457,12 @@ pub fn aplicar_accion(ruta_datos: String, accion_id: String) -> Result<ResumenAr
     let almacen = Almacen {
         ruta: PathBuf::from(&ruta_datos),
     };
-    let datos = acciones::aplicar(&almacen, &accion)?;
+    let datos = acciones::aplicar(&almacen, &pendiente.0)?;
     if let Ok(mut guard) = ACCIONES_PENDIENTES.lock() {
         guard.remove(&accion_id);
+    }
+    if let Ok(mut conv) = CONVERSACION.lock() {
+        conv.anotar_resultado(&pendiente.1, true);
     }
 
     let ahora = Local::now().naive_local();
@@ -1426,8 +1471,14 @@ pub fn aplicar_accion(ruta_datos: String, accion_id: String) -> Result<ResumenAr
 
 #[uniffi::export]
 pub fn descartar_accion(accion_id: String) {
-    if let Ok(mut guard) = ACCIONES_PENDIENTES.lock() {
-        guard.remove(&accion_id);
+    let descartada = ACCIONES_PENDIENTES
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.remove(&accion_id));
+    if let Some(pendiente) = descartada {
+        if let Ok(mut conv) = CONVERSACION.lock() {
+            conv.anotar_resultado(&pendiente.descripcion, false);
+        }
     }
 }
 
@@ -1436,7 +1487,7 @@ pub fn aplicar_todas(
     ruta_datos: String,
     accion_ids: Vec<String>,
 ) -> Result<ResultadoAplicarTodasFfi, ErrorFfi> {
-    let acciones_pares: Vec<(String, Accion)> = {
+    let acciones_pares: Vec<(String, Accion, String)> = {
         let guard = ACCIONES_PENDIENTES
             .lock()
             .map_err(|_| ErrorFfi::Operacion {
@@ -1444,7 +1495,11 @@ pub fn aplicar_todas(
             })?;
         accion_ids
             .iter()
-            .filter_map(|id| guard.get(id).cloned().map(|a| (id.clone(), a)))
+            .filter_map(|id| {
+                guard
+                    .get(id)
+                    .map(|p| (id.clone(), p.accion.clone(), p.descripcion.clone()))
+            })
             .collect()
     };
 
@@ -1454,15 +1509,20 @@ pub fn aplicar_todas(
         });
     }
 
-    let solo_acciones: Vec<Accion> = acciones_pares.iter().map(|(_, a)| a.clone()).collect();
+    let solo_acciones: Vec<Accion> = acciones_pares.iter().map(|(_, a, _)| a.clone()).collect();
     let almacen = Almacen {
         ruta: PathBuf::from(&ruta_datos),
     };
     let resultado = acciones::aplicar_todas(&almacen, &solo_acciones);
 
     if let Ok(mut guard) = ACCIONES_PENDIENTES.lock() {
-        for (id, _) in acciones_pares.iter().take(resultado.aplicadas) {
+        for (id, _, _) in acciones_pares.iter().take(resultado.aplicadas) {
             guard.remove(id);
+        }
+    }
+    if let Ok(mut conv) = CONVERSACION.lock() {
+        for (_, _, descripcion) in acciones_pares.iter().take(resultado.aplicadas) {
+            conv.anotar_resultado(descripcion, true);
         }
     }
 
@@ -1546,7 +1606,12 @@ fn adjunto_de_ffi(a: AdjuntoFfi) -> Adjunto {
     }
 }
 
-fn construir_respuesta_agente(datos: &Datos, crudo: &str) -> RespuestaAgenteFfi {
+fn construir_respuesta_agente(
+    datos: &Datos,
+    crudo: &str,
+    pregunta: &str,
+    nombres_adjuntos: &[String],
+) -> RespuestaAgenteFfi {
     match acciones::parsear(crudo) {
         Ok(lectura) => {
             let respuesta = if lectura.respuesta.is_empty() {
@@ -1560,9 +1625,19 @@ fn construir_respuesta_agente(datos: &Datos, crudo: &str) -> RespuestaAgenteFfi 
                     let num = SIGUIENTE_ACCION_ID.fetch_add(1, Ordering::Relaxed);
                     let id = format!("accion-{num}");
                     let descripcion = accion.descripcion(datos);
-                    guard.insert(id.clone(), accion);
+                    guard.insert(
+                        id.clone(),
+                        AccionPendiente {
+                            accion,
+                            descripcion: descripcion.clone(),
+                        },
+                    );
                     vistas.push(AccionVistaFfi { id, descripcion });
                 }
+            }
+            if let Ok(mut conv) = CONVERSACION.lock() {
+                conv.tomar_resultados();
+                conv.registrar_turno(pregunta, nombres_adjuntos, &respuesta, lectura.resumen);
             }
             RespuestaAgenteFfi {
                 respuesta,
@@ -1570,11 +1645,16 @@ fn construir_respuesta_agente(datos: &Datos, crudo: &str) -> RespuestaAgenteFfi 
                 nota: None,
             }
         }
-        Err(mensaje) => RespuestaAgenteFfi {
-            respuesta: crudo.to_string(),
-            acciones: Vec::new(),
-            nota: Some(format!("No pude leer la propuesta: {mensaje}")),
-        },
+        Err(mensaje) => {
+            if let Ok(mut conv) = CONVERSACION.lock() {
+                conv.tomar_resultados();
+            }
+            RespuestaAgenteFfi {
+                respuesta: crudo.to_string(),
+                acciones: Vec::new(),
+                nota: Some(format!("No pude leer la propuesta: {mensaje}")),
+            }
+        }
     }
 }
 
@@ -2332,8 +2412,12 @@ hora = "18:00"
         assert!(res2.is_none(), "no se repite el resumen el mismo día");
     }
 
+    static PRUEBA_AGENTE_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn agente_config_proveedores_enviar_y_aplicar() {
+        let _guard = PRUEBA_AGENTE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        nueva_conversacion();
         let dir = TempDir::new().expect("tempdir");
         let ruta_datos = ruta_temp(&dir);
         let ruta_cfg = dir.path().join("agente.toml").to_string_lossy().into_owned();
@@ -2501,6 +2585,8 @@ hora = "18:00"
 
     #[test]
     fn adjuntos_ffi_texto_pdf_vision_y_envio_simulado() {
+        let _guard = PRUEBA_AGENTE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        nueva_conversacion();
         let dir = TempDir::new().expect("tempdir");
         let ruta_datos = ruta_temp(&dir);
         let ruta_cfg = dir.path().join("agente.toml").to_string_lossy().into_owned();
@@ -2629,5 +2715,114 @@ hora = "18:00"
         let texto = transcribir(ruta_cfg, wav).expect("transcribir");
         let _ = handle.join();
         assert_eq!(texto, "taller de control para el viernes");
+    }
+
+    #[test]
+    fn conversacion_ffi_resumen_descartar_y_nueva() {
+        let _guard = PRUEBA_AGENTE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        nueva_conversacion();
+        assert!(!hay_conversacion());
+
+        let dir = TempDir::new().expect("tempdir");
+        let ruta_datos = ruta_temp(&dir);
+        let ruta_cfg = dir.path().join("agente.toml").to_string_lossy().into_owned();
+        cargar(ruta_datos.clone()).expect("cargar");
+
+        // 1. Primera petición devuelve resumen + dos acciones.
+        let resp1_json = r#"{"choices":[{"message":{"role":"assistant","content":"{\"respuesta\":\"Propongo dos tareas.\",\"acciones\":[{\"tipo\":\"crear_tarea\",\"titulo\":\"Informe de Control\",\"materia\":\"Control\",\"vence\":\"2026-12-04T18:00\"},{\"tipo\":\"crear_tarea\",\"titulo\":\"Lectura opcional\",\"materia\":null,\"vence\":\"2026-12-05T18:00\"}],\"resumen\":\"El usuario pidió tareas para Control y una lectura.\"}"}}]}"#.to_string();
+        let (url1, h1) = servidor_http_con_captura(200, resp1_json);
+        guardar_agente_config(
+            ruta_cfg.clone(),
+            3,
+            url1,
+            "m".into(),
+            "sk-test".into(),
+            false,
+            0,
+            "".into(),
+            "".into(),
+            "".into(),
+        )
+        .expect("config 1");
+
+        let resp1 = enviar_al_agente(
+            ruta_datos.clone(),
+            ruta_cfg.clone(),
+            "crea dos tareas".into(),
+            vec![],
+        )
+        .expect("primera");
+        let _ = h1.join().expect("join 1");
+        assert!(hay_conversacion());
+        assert_eq!(resp1.acciones.len(), 2);
+
+        // Aplicar la primera y descartar la segunda.
+        aplicar_accion(ruta_datos.clone(), resp1.acciones[0].id.clone()).expect("aplicar");
+        descartar_accion(resp1.acciones[1].id.clone());
+
+        // 2. Segunda petición debe incluir el resumen de la primera y ambos resultados.
+        let resp2_json = r#"{"choices":[{"message":{"role":"assistant","content":"{\"respuesta\":\"Entendido.\",\"acciones\":[],\"resumen\":\"Se creó Informe de Control y se descartó la lectura.\"}"}}]}"#.to_string();
+        let (url2, h2) = servidor_http_con_captura(200, resp2_json);
+        guardar_agente_config(
+            ruta_cfg.clone(),
+            3,
+            url2,
+            "m".into(),
+            "sk-test".into(),
+            false,
+            0,
+            "".into(),
+            "".into(),
+            "".into(),
+        )
+        .expect("config 2");
+
+        let _resp2 = enviar_al_agente(
+            ruta_datos.clone(),
+            ruta_cfg.clone(),
+            "no, mejor solo la primera".into(),
+            vec![],
+        )
+        .expect("segunda");
+        let recibido2 = h2.join().expect("join 2");
+        assert!(
+            recibido2.contains("El usuario pidió tareas para Control y una lectura."),
+            "{recibido2}"
+        );
+        assert!(
+            recibido2.contains("aplicada: Crear la tarea «Informe de Control»"),
+            "{recibido2}"
+        );
+        assert!(
+            recibido2.contains("descartada: Crear la tarea «Lectura opcional»"),
+            "{recibido2}"
+        );
+
+        // 3. Nueva conversación limpia todo.
+        nueva_conversacion();
+        assert!(!hay_conversacion());
+
+        let resp3_json = r#"{"choices":[{"message":{"role":"assistant","content":"{\"respuesta\":\"Hola.\",\"acciones\":[],\"resumen\":\"Saludo inicial.\"}"}}]}"#.to_string();
+        let (url3, h3) = servidor_http_con_captura(200, resp3_json);
+        guardar_agente_config(
+            ruta_cfg.clone(),
+            3,
+            url3,
+            "m".into(),
+            "sk-test".into(),
+            false,
+            0,
+            "".into(),
+            "".into(),
+            "".into(),
+        )
+        .expect("config 3");
+
+        let _resp3 = enviar_al_agente(ruta_datos, ruta_cfg, "hola".into(), vec![]).expect("tercera");
+        let recibido3 = h3.join().expect("join 3");
+        assert!(!recibido3.contains("Resumen de la conversación:"), "{recibido3}");
+        assert!(!recibido3.contains("Últimos intercambios:"), "{recibido3}");
+        assert!(!recibido3.contains("Qué pasó con tus propuestas:"), "{recibido3}");
+        nueva_conversacion();
     }
 }
