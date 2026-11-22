@@ -236,6 +236,7 @@ export component CampoClave inherits VerticalLayout {
     in-out property <string> texto;
     in property <string> pista: "";
     in property <bool> ver: false;
+    in property <bool> mal: false;
 
     callback alternar();
 
@@ -243,6 +244,7 @@ export component CampoClave inherits VerticalLayout {
 
     Etiqueta {
         text: root.etiqueta;
+        mal: root.mal;
     }
 
     HorizontalLayout {
@@ -254,7 +256,7 @@ export component CampoClave inherits VerticalLayout {
             border-radius: Tema.radio-pequeno;
             background: Tema.fondo-campo;
             border-width: Tema.linea;
-            border-color: Tema.borde-campo;
+            border-color: root.mal ? Tema.vencida : Tema.borde-campo;
 
             if root.ver : TextInput {
                 x: Tema.espacio-sm;

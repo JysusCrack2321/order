@@ -1,6 +1,6 @@
 //! Lectura y validación de los campos de formulario y de filtros.
 
-use crate::agente::config::{AgenteConfig, Proveedor, Voz};
+use crate::agente::config::{AgenteConfig, Proveedor, Voz, VozProveedor};
 use crate::filtros::TipoFecha;
 use crate::modelo::{Ajustes, Clase, Dia, FORMATO_FECHA, FORMATO_HORA, Recordatorio, Semestre};
 use crate::ops::NuevaTarea;
@@ -219,47 +219,62 @@ pub fn validar_ajustes(
     ))
 }
 
+/// Una URL base solo vale si dice con qué viaja: `https://` o `http://`.
+fn url_http(url: &str) -> bool {
+    let url = url.trim();
+    url.starts_with("https://") || url.starts_with("http://")
+}
+
 pub fn validar_agente(
     proveedor: i32,
     url: &str,
     modelo: &str,
     api_key: &str,
+    v_proveedor: i32,
     v_url: &str,
     v_modelo: &str,
     v_key: &str,
 ) -> Result<AgenteConfig, ErrorCampo> {
-    let url = url.trim().to_string();
-    let modelo = modelo.trim().to_string();
+    // Un campo vacío no deja el agente sin URL ni modelo: vuelve el valor por
+    // defecto del proveedor elegido. Con "Otro" no hay defecto que poner.
+    let proveedor = Proveedor::de_codigo(proveedor);
+    let (url_defecto, modelo_defecto) = proveedor.por_defecto();
+    let url = valor_o(url, url_defecto);
+    let modelo = valor_o(modelo, modelo_defecto);
     if url.is_empty() {
         return Err(error(1, "La URL base no puede quedar vacía."));
     }
-    if !url.starts_with("http") {
-        return Err(error(2, "La URL base debe empezar por http:// o https://."));
+    if !url_http(&url) {
+        return Err(error(1, "La URL base debe empezar por https:// o http://."));
     }
     if modelo.is_empty() {
         return Err(error(2, "El modelo no puede quedar vacío."));
     }
+    let api_key = api_key.trim().to_string();
+    if api_key.is_empty() {
+        return Err(error(5, "Falta la API key"));
+    }
 
-    // La voz tiene sus propios valores por defecto: un campo vacío no deja la
-    // sección sin URL ni modelo.
-    let defecto = Voz::default();
+    let v_proveedor = VozProveedor::de_codigo(v_proveedor);
+    let (v_url_defecto, v_modelo_defecto) = v_proveedor.por_defecto();
     let voz = Voz {
-        url_base: valor_o(v_url, &defecto.url_base),
-        modelo: valor_o(v_modelo, &defecto.modelo),
+        proveedor: v_proveedor,
+        url_base: valor_o(v_url, v_url_defecto),
+        modelo: valor_o(v_modelo, v_modelo_defecto),
         api_key: v_key.trim().to_string(),
     };
-    if !voz.api_key.is_empty() && !voz.url_base.starts_with("http") {
+    if !url_http(&voz.url_base) {
         return Err(error(
             3,
-            "La URL de la voz debe empezar por http:// o https://.",
+            "La URL de la voz debe empezar por https:// o http://.",
         ));
     }
 
     Ok(AgenteConfig {
-        proveedor: Proveedor::de_codigo(proveedor),
+        proveedor,
         url_base: url,
         modelo,
-        api_key: api_key.trim().to_string(),
+        api_key,
         voz,
     })
 }
@@ -366,6 +381,47 @@ mod pruebas {
                 .unwrap_err()
                 .campo,
             2
+        );
+    }
+
+    /// El agente se valida con los valores de su ficha: URL sin esquema, key
+    /// ausente y voz con sus propios defectos.
+    #[test]
+    fn validaciones_del_agente_y_de_la_voz() {
+        let err = validar_agente(3, "localhost:1234", "local", "k", 0, "", "", "").unwrap_err();
+        assert_eq!(err.campo, 1);
+        assert_eq!(
+            err.mensaje,
+            "La URL base debe empezar por https:// o http://."
+        );
+
+        let err = validar_agente(0, "", "", "   ", 0, "", "", "").unwrap_err();
+        assert_eq!(err.campo, 5);
+        assert_eq!(err.mensaje, "Falta la API key");
+
+        // Campos vacíos = valores por defecto del proveedor elegido.
+        let agente = validar_agente(1, "", "", "clave", 0, "", "", "").unwrap();
+        assert_eq!(agente.proveedor, Proveedor::Gemini);
+        assert_eq!(
+            agente.url_base,
+            "https://generativelanguage.googleapis.com/v1beta/openai"
+        );
+        assert_eq!(agente.modelo, "gemini-flash-latest");
+        assert_eq!(agente.voz.proveedor, VozProveedor::OpenAI);
+        assert_eq!(agente.voz.url_base, "https://api.openai.com/v1");
+        assert_eq!(agente.voz.modelo, "whisper-1");
+
+        let con_groq = validar_agente(0, "", "", "clave", 1, "", "", "gsk").unwrap();
+        assert_eq!(con_groq.voz.proveedor, VozProveedor::Groq);
+        assert_eq!(con_groq.voz.url_base, "https://api.groq.com/openai/v1");
+        assert_eq!(con_groq.voz.modelo, "whisper-large-v3-turbo");
+        assert!(con_groq.voz.lista());
+
+        let err = validar_agente(0, "", "", "clave", 0, "api.openai.com", "", "").unwrap_err();
+        assert_eq!(err.campo, 3);
+        assert_eq!(
+            err.mensaje,
+            "La URL de la voz debe empezar por https:// o http://."
         );
     }
 }

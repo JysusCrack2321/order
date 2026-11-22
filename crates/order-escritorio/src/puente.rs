@@ -13,7 +13,7 @@
 use crate::grabacion::{self, Grabacion};
 use order_core::agente::acciones::{self, Accion};
 use order_core::agente::cliente::{self, ErrorAgente};
-use order_core::agente::config::{self, AgenteConfig, Proveedor};
+use order_core::agente::config::{self, AgenteConfig, Proveedor, VozProveedor};
 use order_core::agente::contexto;
 use order_core::agente::voz;
 use order_core::almacen::Almacen;
@@ -586,12 +586,47 @@ fn conectar(ui: &AppWindow) {
     ui.on_elegir_proveedor(move |codigo: i32| {
         let Some(ui) = debil.upgrade() else { return };
         let proveedor = Proveedor::de_codigo(codigo);
-        // El proveedor trae su URL y su modelo por defecto; el usuario puede
-        // cambiarlos después.
+        // La ficha trae su URL y su modelo; quedan ocultos salvo en Avanzado.
         let agente = con_estado(|estado| estado.agente.clone()).con_proveedor(proveedor);
         ui.set_a_proveedor(proveedor.codigo());
         ui.set_a_url(agente.url_base.into());
         ui.set_a_modelo(agente.modelo.into());
+        // "Otro" no tiene valores que poner: ahí hace falta Avanzado.
+        ui.set_a_avanzado(proveedor == Proveedor::OpenAICompatible);
+        ui.set_campo_mal(0);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_elegir_voz_proveedor(move |codigo: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        let proveedor = VozProveedor::de_codigo(codigo);
+        let voz = con_estado(|estado| estado.agente.voz.clone()).con_proveedor(proveedor);
+        ui.set_a_voz_proveedor(proveedor.codigo());
+        ui.set_v_url(voz.url_base.into());
+        ui.set_v_modelo(voz.modelo.into());
+        ui.set_campo_mal(0);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_conseguir_clave(move |codigo: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        if let Some(url) = Proveedor::de_codigo(codigo).url_clave() {
+            crate::sistema::abrir_en_navegador(url);
+        }
+        ui.set_campo_mal(0);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_conseguir_clave_voz(move |codigo: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        crate::sistema::abrir_en_navegador(VozProveedor::de_codigo(codigo).url_clave());
+        ui.set_campo_mal(0);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_alternar_avanzado(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        ui.set_a_avanzado(!ui.get_a_avanzado());
     });
 
     let debil = ui.as_weak();
@@ -1099,10 +1134,15 @@ fn abrir_agente(ui: &AppWindow) {
     ui.set_a_modelo(agente.modelo.into());
     ui.set_a_key(agente.api_key.into());
     ui.set_a_ver_key(false);
+    ui.set_a_voz_proveedor(agente.voz.proveedor.codigo());
     ui.set_v_url(agente.voz.url_base.into());
     ui.set_v_modelo(agente.voz.modelo.into());
     ui.set_v_key(agente.voz.api_key.into());
     ui.set_v_ver_key(false);
+    // Avanzado arranca cerrado; con "Otro" se abre porque ahí hace falta.
+    ui.set_a_avanzado(agente.proveedor == Proveedor::OpenAICompatible);
+    ui.set_campo_mal(0);
+    ui.set_form_error("".into());
     abrir_panel(ui, 5);
 }
 
@@ -1113,12 +1153,17 @@ fn guardar_agente(ui: &AppWindow) {
         &ui.get_a_url(),
         &ui.get_a_modelo(),
         &ui.get_a_key(),
+        ui.get_a_voz_proveedor(),
         &ui.get_v_url(),
         &ui.get_v_modelo(),
         &ui.get_v_key(),
     ) {
         Ok(agente) => agente,
         Err(err) => {
+            // Si el campo marcado vive en Avanzado, se abre para que se vea.
+            if (1..=4).contains(&err.campo) {
+                ui.set_a_avanzado(true);
+            }
             falta(ui, err.campo, &err.mensaje);
             return;
         }
@@ -1126,16 +1171,11 @@ fn guardar_agente(ui: &AppWindow) {
 
     match config::guardar(&agente) {
         Ok(()) => {
-            let sin_clave = !agente.lista();
             con_estado(|estado| {
                 estado.agente = agente;
                 estado.edicion = Edicion::Ninguna;
                 estado.error = None;
-                estado.aviso = if sin_clave {
-                    "Falta la clave del agente: Ajustes → Agente.".to_string()
-                } else {
-                    String::new()
-                };
+                estado.aviso = String::new();
             });
             ui.set_form_error("".into());
             ui.set_campo_mal(0);

@@ -49,6 +49,21 @@ pub fn publicar(datos: &Datos) {
     }
 }
 
+/// Abre una página en el navegador del sistema sin esperar a que termine:
+/// `xdg-open` se queda vivo mientras el navegador está abierto y la ventana
+/// no debe quedarse colgada esperándolo.
+pub fn abrir_en_navegador(url: &str) {
+    let resultado = std::process::Command::new("xdg-open")
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if let Err(error) = resultado {
+        eprintln!("ORDER: no se pudo abrir el navegador en {url}: {error}");
+    }
+}
+
 fn datos_actuales() -> Option<Datos> {
     DATOS.lock().ok().and_then(|guardados| guardados.clone())
 }

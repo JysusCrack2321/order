@@ -312,11 +312,14 @@ export component AppWindow inherits Window {
     in-out property <string> a-modelo: "";
     in-out property <string> a-key: "";
     in-out property <bool> a-ver-key: false;
-    // Ajustes → Agente → Voz.
+    // Ajustes → Agente → Voz (fichas 0–1: OpenAI y Groq).
+    in-out property <int> a-voz-proveedor: 0;
     in-out property <string> v-url: "";
     in-out property <string> v-modelo: "";
     in-out property <string> v-key: "";
     in-out property <bool> v-ver-key: false;
+    // Sección "Avanzado": URL y modelo a mano. Cerrada salvo con "Otro".
+    in-out property <bool> a-avanzado: false;
 
     // --- Selector abierto (fecha, hora o materia) -------------------------
     // 0 = ninguno · 1 = fecha · 2 = hora · 3 = materia. `sel-campo` dice qué
@@ -379,6 +382,10 @@ export component AppWindow inherits Window {
     callback agente-aplicar-todas();
     callback abrir-agente();
     callback elegir-proveedor(int);
+    callback elegir-voz-proveedor(int);
+    callback conseguir-clave(int);
+    callback conseguir-clave-voz(int);
+    callback alternar-avanzado();
     callback alternar-clave();
     callback grabar-voz();
     callback alternar-clave-voz();
@@ -1085,7 +1092,7 @@ export component AppWindow inherits Window {
                                 }
 
                                 Chip {
-                                    texto: "OpenAI";
+                                    texto: "Otro";
                                     ancho: Tema.ancho-ficha-proveedor;
                                     activo: root.a-proveedor == 3;
                                     clicked => { root.elegir-proveedor(3); }
@@ -1093,18 +1100,11 @@ export component AppWindow inherits Window {
                             }
                         }
 
-                        Campo {
-                            etiqueta: "URL base";
-                            texto <=> root.a-url;
-                            pista: "https://api.deepseek.com";
-                            mal: root.campo-mal == 1;
-                        }
-
-                        Campo {
-                            etiqueta: "Modelo";
-                            texto <=> root.a-modelo;
-                            pista: "deepseek-v4-flash";
-                            mal: root.campo-mal == 2;
+                        // "Otro" no tiene página de claves: no hay proveedor detrás.
+                        if root.a-proveedor != 3 : Boton {
+                            texto: "Conseguir mi API key";
+                            width: Tema.ancho-boton-largo;
+                            clicked => { root.conseguir-clave(root.a-proveedor); }
                         }
 
                         CampoClave {
@@ -1112,14 +1112,15 @@ export component AppWindow inherits Window {
                             texto <=> root.a-key;
                             pista: "sk-…";
                             ver: root.a-ver-key;
+                            mal: root.campo-mal == 5;
                             alternar => { root.alternar-clave(); }
                         }
 
-                        if root.a-key == "" : Text {
-                            text: "Sin clave el agente no puede responder; el resto de la app funciona igual.";
+                        Text {
+                            text: "Pega aquí la clave que te da el proveedor.";
                             wrap: word-wrap;
                             font-size: Tema.tamano-hora;
-                            color: Tema.texto-aviso;
+                            color: Tema.texto-tenue;
                         }
 
                         Rectangle {
@@ -1127,37 +1128,102 @@ export component AppWindow inherits Window {
                             background: Tema.borde-suave;
                         }
 
-                        Etiqueta {
-                            text: "Voz (Whisper por API)";
+                        VerticalLayout {
+                            spacing: Tema.espacio-xs;
+
+                            Etiqueta {
+                                text: "Voz (Whisper por API)";
+                            }
+
+                            HorizontalLayout {
+                                spacing: Tema.espacio-xs;
+
+                                Chip {
+                                    texto: "OpenAI";
+                                    ancho: Tema.ancho-ficha-proveedor;
+                                    activo: root.a-voz-proveedor == 0;
+                                    clicked => { root.elegir-voz-proveedor(0); }
+                                }
+
+                                Chip {
+                                    texto: "Groq";
+                                    ancho: Tema.ancho-ficha-proveedor;
+                                    activo: root.a-voz-proveedor == 1;
+                                    clicked => { root.elegir-voz-proveedor(1); }
+                                }
+                            }
                         }
 
-                        Campo {
-                            etiqueta: "URL base de la voz";
-                            texto <=> root.v-url;
-                            pista: "https://api.openai.com/v1";
-                            mal: root.campo-mal == 3;
-                        }
-
-                        Campo {
-                            etiqueta: "Modelo de voz";
-                            texto <=> root.v-modelo;
-                            pista: "whisper-1";
-                            mal: root.campo-mal == 4;
+                        Boton {
+                            texto: "Conseguir mi API key";
+                            width: Tema.ancho-boton-largo;
+                            clicked => { root.conseguir-clave-voz(root.a-voz-proveedor); }
                         }
 
                         CampoClave {
-                            etiqueta: "API key de la voz";
+                            etiqueta: "API key";
                             texto <=> root.v-key;
-                            pista: "sk-…";
+                            pista: root.a-voz-proveedor == 1 ? "gsk_…" : "sk-…";
                             ver: root.v-ver-key;
                             alternar => { root.alternar-clave-voz(); }
                         }
 
                         Text {
-                            text: "Groq: https://api.groq.com/openai/v1 con whisper-large-v3-turbo.";
+                            text: "Pega aquí la clave que te da el proveedor.";
                             wrap: word-wrap;
                             font-size: Tema.tamano-hora;
                             color: Tema.texto-tenue;
+                        }
+
+                        Rectangle {
+                            height: Tema.linea;
+                            background: Tema.borde-suave;
+                        }
+
+                        Boton {
+                            texto: root.a-avanzado || root.a-proveedor == 3 ? "Avanzado ▾" : "Avanzado ▸";
+                            width: Tema.ancho-boton-avanzado;
+                            clicked => { root.alternar-avanzado(); }
+                        }
+
+                        // Con "Otro" se abre sola: ahí sí hacen falta los campos.
+                        if root.a-avanzado || root.a-proveedor == 3 : VerticalLayout {
+                            spacing: Tema.espacio-md;
+
+                            Text {
+                                text: "URL base y modelo, para escribirlos a mano.";
+                                wrap: word-wrap;
+                                font-size: Tema.tamano-hora;
+                                color: Tema.texto-tenue;
+                            }
+
+                            Campo {
+                                etiqueta: "URL base del agente";
+                                texto <=> root.a-url;
+                                pista: "https://…";
+                                mal: root.campo-mal == 1;
+                            }
+
+                            Campo {
+                                etiqueta: "Modelo del agente";
+                                texto <=> root.a-modelo;
+                                pista: "modelo";
+                                mal: root.campo-mal == 2;
+                            }
+
+                            Campo {
+                                etiqueta: "URL base de la voz";
+                                texto <=> root.v-url;
+                                pista: "https://…";
+                                mal: root.campo-mal == 3;
+                            }
+
+                            Campo {
+                                etiqueta: "Modelo de la voz";
+                                texto <=> root.v-modelo;
+                                pista: "modelo";
+                                mal: root.campo-mal == 4;
+                            }
                         }
                     }
                 }

@@ -59,6 +59,28 @@ impl Proveedor {
             .unwrap_or(&Proveedor::DeepSeek)
     }
 
+    /// Nombre de la ficha. El proveedor compatible es "Otro": ahí el usuario
+    /// escribe su propia URL y su propio modelo.
+    pub fn nombre(self) -> &'static str {
+        match self {
+            Proveedor::DeepSeek => "DeepSeek",
+            Proveedor::Gemini => "Gemini",
+            Proveedor::Claude => "Claude",
+            Proveedor::OpenAICompatible => "Otro",
+        }
+    }
+
+    /// Página donde el proveedor entrega la clave. "Otro" no tiene: no hay
+    /// dónde pedirla.
+    pub fn url_clave(self) -> Option<&'static str> {
+        match self {
+            Proveedor::DeepSeek => Some("https://platform.deepseek.com/api_keys"),
+            Proveedor::Gemini => Some("https://aistudio.google.com/apikey"),
+            Proveedor::Claude => Some("https://console.anthropic.com/settings/keys"),
+            Proveedor::OpenAICompatible => None,
+        }
+    }
+
     /// URL base y modelo por defecto de la sección 12 del diseño.
     pub fn por_defecto(self) -> (&'static str, &'static str) {
         match self {
@@ -73,10 +95,67 @@ impl Proveedor {
     }
 }
 
+/// Proveedor de la transcripción (Whisper por API).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VozProveedor {
+    #[serde(rename = "openai", alias = "OpenAI")]
+    OpenAI,
+    #[serde(rename = "groq", alias = "Groq")]
+    Groq,
+}
+
+impl Default for VozProveedor {
+    fn default() -> Self {
+        VozProveedor::OpenAI
+    }
+}
+
+impl VozProveedor {
+    /// Las dos fichas en el orden de Ajustes.
+    pub const TODOS: [VozProveedor; 2] = [VozProveedor::OpenAI, VozProveedor::Groq];
+
+    pub fn codigo(self) -> i32 {
+        match self {
+            VozProveedor::OpenAI => 0,
+            VozProveedor::Groq => 1,
+        }
+    }
+
+    pub fn de_codigo(codigo: i32) -> VozProveedor {
+        *VozProveedor::TODOS
+            .get(codigo.max(0) as usize)
+            .unwrap_or(&VozProveedor::OpenAI)
+    }
+
+    pub fn nombre(self) -> &'static str {
+        match self {
+            VozProveedor::OpenAI => "OpenAI",
+            VozProveedor::Groq => "Groq",
+        }
+    }
+
+    /// URL base y modelo de Whisper para cada uno.
+    pub fn por_defecto(self) -> (&'static str, &'static str) {
+        match self {
+            VozProveedor::OpenAI => ("https://api.openai.com/v1", "whisper-1"),
+            VozProveedor::Groq => ("https://api.groq.com/openai/v1", "whisper-large-v3-turbo"),
+        }
+    }
+
+    /// Página donde se pide la clave de la voz.
+    pub fn url_clave(self) -> &'static str {
+        match self {
+            VozProveedor::OpenAI => "https://platform.openai.com/api-keys",
+            VozProveedor::Groq => "https://console.groq.com/keys",
+        }
+    }
+}
+
 /// Voz por Whisper API.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Voz {
+    pub proveedor: VozProveedor,
     pub url_base: String,
     pub modelo: String,
     pub api_key: String,
@@ -84,15 +163,26 @@ pub struct Voz {
 
 impl Default for Voz {
     fn default() -> Self {
+        let (url_base, modelo) = VozProveedor::default().por_defecto();
         Voz {
-            url_base: "https://api.openai.com/v1".to_string(),
-            modelo: "whisper-1".to_string(),
+            proveedor: VozProveedor::default(),
+            url_base: url_base.to_string(),
+            modelo: modelo.to_string(),
             api_key: String::new(),
         }
     }
 }
 
 impl Voz {
+    /// Cambia de proveedor y pone su URL y su modelo por defecto.
+    pub fn con_proveedor(mut self, proveedor: VozProveedor) -> Voz {
+        let (url_base, modelo) = proveedor.por_defecto();
+        self.proveedor = proveedor;
+        self.url_base = url_base.to_string();
+        self.modelo = modelo.to_string();
+        self
+    }
+
     /// ¿Se puede transcribir? URL y modelo siempre tienen valor por defecto,
     /// así que en la práctica depende de la clave.
     pub fn lista(&self) -> bool {
@@ -288,6 +378,7 @@ mod pruebas {
             modelo: "gemini-flash-latest".into(),
             api_key: "clave de prueba".into(),
             voz: Voz {
+                proveedor: VozProveedor::Groq,
                 url_base: "https://api.groq.com/openai/v1".into(),
                 modelo: "whisper-large-v3-turbo".into(),
                 api_key: "gsk-prueba".into(),
@@ -354,5 +445,57 @@ mod pruebas {
             assert_eq!(Proveedor::de_codigo(proveedor.codigo()), proveedor);
         }
         assert_eq!(Proveedor::de_codigo(99), Proveedor::DeepSeek);
+    }
+
+    /// Cada ficha trae su URL base, su modelo y la página de la clave; "Otro"
+    /// no tiene página porque no hay proveedor detrás.
+    #[test]
+    fn cada_ficha_trae_sus_valores_y_su_clave() {
+        assert_eq!(
+            Proveedor::DeepSeek.por_defecto(),
+            ("https://api.deepseek.com", "deepseek-v4-flash")
+        );
+        assert_eq!(
+            Proveedor::DeepSeek.url_clave(),
+            Some("https://platform.deepseek.com/api_keys")
+        );
+        assert_eq!(
+            Proveedor::Gemini.url_clave(),
+            Some("https://aistudio.google.com/apikey")
+        );
+        assert_eq!(
+            Proveedor::Claude.url_clave(),
+            Some("https://console.anthropic.com/settings/keys")
+        );
+        assert_eq!(Proveedor::OpenAICompatible.nombre(), "Otro");
+        assert_eq!(Proveedor::OpenAICompatible.url_clave(), None);
+        assert_eq!(Proveedor::OpenAICompatible.por_defecto(), ("", ""));
+    }
+
+    /// La voz tiene dos fichas con su URL, su modelo y su página de clave.
+    #[test]
+    fn la_voz_trae_sus_dos_fichas() {
+        for proveedor in VozProveedor::TODOS {
+            assert_eq!(VozProveedor::de_codigo(proveedor.codigo()), proveedor);
+        }
+        assert_eq!(VozProveedor::de_codigo(9), VozProveedor::OpenAI);
+
+        let openai = Voz::default();
+        assert_eq!(openai.proveedor, VozProveedor::OpenAI);
+        assert_eq!(openai.url_base, "https://api.openai.com/v1");
+        assert_eq!(openai.modelo, "whisper-1");
+        assert_eq!(
+            VozProveedor::OpenAI.url_clave(),
+            "https://platform.openai.com/api-keys"
+        );
+
+        let groq = Voz::default().con_proveedor(VozProveedor::Groq);
+        assert_eq!(groq.proveedor, VozProveedor::Groq);
+        assert_eq!(groq.url_base, "https://api.groq.com/openai/v1");
+        assert_eq!(groq.modelo, "whisper-large-v3-turbo");
+        assert_eq!(
+            VozProveedor::Groq.url_clave(),
+            "https://console.groq.com/keys"
+        );
     }
 }
