@@ -268,6 +268,196 @@ fn mensaje_corto(e: &toml::de::Error) -> String {
         .unwrap_or_else(|| "error de lectura del archivo".to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Advertencias por claves desconocidas
+// ---------------------------------------------------------------------------
+// `parsear` acepta el archivo aunque lleve claves que el modelo no conoce
+// (serde las ignora sin quejarse). Eso es bueno para no bloquear la app, pero
+// una tecla de más —`titlo` por `titulo`— haría desaparecer el dato en
+// silencio. Esta función las señala con su línea; la ventana las muestra en
+// amarillo, aparte del rojo de los errores que sí bloquean.
+
+const CLAVES_RAIZ: &[&str] = &["ajustes", "semestre", "clase", "tarea", "recordatorio"];
+const CLAVES_AJUSTES: &[&str] = &["aviso_dia_antes", "aviso_horas_antes"];
+const CLAVES_SEMESTRE: &[&str] = &["inicio", "fin"];
+const CLAVES_CLASE: &[&str] = &["id", "materia", "dia", "inicio", "fin", "lugar"];
+const CLAVES_TAREA: &[&str] = &["id", "titulo", "materia", "vence", "hecha", "hecha_en"];
+const CLAVES_RECORDATORIO: &[&str] = &["id", "texto", "dias", "hora"];
+
+/// Sección en la que va el escáner y las claves que admite.
+enum Seccion {
+    Raiz,
+    Tabla {
+        etiqueta: String,
+        claves: &'static [&'static str],
+    },
+    /// Sección que el modelo no conoce: se avisa una vez y no se miran sus
+    /// claves (avisar de cada una sería ruido).
+    Ignorada,
+}
+
+impl Seccion {
+    fn etiqueta(&self) -> &str {
+        match self {
+            Seccion::Raiz => "la raíz",
+            Seccion::Tabla { etiqueta, .. } => etiqueta,
+            Seccion::Ignorada => "",
+        }
+    }
+
+    fn claves(&self) -> Option<&'static [&'static str]> {
+        match self {
+            Seccion::Raiz => Some(CLAVES_RAIZ),
+            Seccion::Tabla { claves, .. } => Some(claves),
+            Seccion::Ignorada => None,
+        }
+    }
+}
+
+/// Devuelve una entrada por cada clave que el modelo no conoce, con su línea.
+/// Las advertencias **no bloquean**: `parsear` sigue devolviendo los datos. Si
+/// el archivo no parsea, la lista va vacía (de ese archivo ya se encarga el
+/// error rojo de `parsear`).
+pub fn advertencias(texto: &str) -> Vec<ErrorDatos> {
+    if toml::from_str::<toml::Value>(texto).is_err() {
+        return Vec::new();
+    }
+
+    let mut avisos = Vec::new();
+    let mut seccion = Seccion::Raiz;
+    let mut texto_largo: Option<&'static str> = None; // dentro de """ o '''
+    let mut abiertos = 0i32; // un valor partido en varias líneas
+
+    for (indice, linea) in texto.lines().enumerate() {
+        let numero = indice + 1;
+        let limpia = linea.trim();
+
+        // Continuación de un valor de varias líneas: aquí no hay claves.
+        if let Some(marca) = texto_largo {
+            if cuenta(limpia, marca) % 2 == 1 {
+                texto_largo = None;
+            }
+            continue;
+        }
+        if abiertos > 0 {
+            abiertos = (abiertos + balance(limpia)).max(0);
+            continue;
+        }
+        if limpia.is_empty() || limpia.starts_with('#') {
+            continue;
+        }
+
+        if limpia.starts_with('[') {
+            seccion = nueva_seccion(limpia, numero, &mut avisos);
+            continue;
+        }
+
+        let Some((crudo, valor)) = limpia.split_once('=') else {
+            continue;
+        };
+        let clave = crudo.trim();
+        if clave.is_empty() {
+            continue;
+        }
+
+        if let Some(claves) = seccion.claves() {
+            if !claves.contains(&clave) {
+                avisos.push(ErrorDatos {
+                    linea: Some(numero),
+                    mensaje: format!("clave desconocida \"{clave}\" en {}", seccion.etiqueta()),
+                });
+            }
+        }
+
+        // ¿El valor sigue en las líneas siguientes?
+        let valor = sin_comentario(valor.trim());
+        for marca in ["\"\"\"", "'''"] {
+            if cuenta(&valor, marca) % 2 == 1 {
+                texto_largo = Some(marca);
+            }
+        }
+        if texto_largo.is_none() {
+            abiertos = balance(&valor).max(0);
+        }
+    }
+
+    avisos
+}
+
+/// Interpreta la cabecera `[ajustes]` / `[[tarea]]` y, si el modelo no la
+/// conoce, deja la advertencia.
+fn nueva_seccion(limpia: &str, numero: usize, avisos: &mut Vec<ErrorDatos>) -> Seccion {
+    let cabecera = limpia
+        .split('#')
+        .next()
+        .unwrap_or(limpia)
+        .trim()
+        .to_string();
+    let nombre = cabecera
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let claves = match nombre.as_str() {
+        "ajustes" => CLAVES_AJUSTES,
+        "semestre" => CLAVES_SEMESTRE,
+        "clase" => CLAVES_CLASE,
+        "tarea" => CLAVES_TAREA,
+        "recordatorio" => CLAVES_RECORDATORIO,
+        _ => {
+            avisos.push(ErrorDatos {
+                linea: Some(numero),
+                mensaje: format!("sección desconocida \"{cabecera}\""),
+            });
+            return Seccion::Ignorada;
+        }
+    };
+    Seccion::Tabla {
+        etiqueta: cabecera,
+        claves,
+    }
+}
+
+/// Cuántas veces aparece `marca` en el texto.
+fn cuenta(texto: &str, marca: &str) -> usize {
+    texto.matches(marca).count()
+}
+
+/// Corchetes y llaves sin cerrar en una línea (`[` y `{` suman, `]` y `}`
+/// restan). Sirve para saber si un valor continúa abajo.
+fn balance(texto: &str) -> i32 {
+    texto
+        .chars()
+        .map(|c| match c {
+            '[' | '{' => 1,
+            ']' | '}' => -1,
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Quita el comentario final (`# …`) sin tocar los `#` que van entre comillas.
+fn sin_comentario(valor: &str) -> String {
+    let mut salida = String::with_capacity(valor.len());
+    let mut comilla: Option<char> = None;
+    let mut previo = '\0';
+    for c in valor.chars() {
+        match comilla {
+            Some(m) if c == m && previo != '\\' => comilla = None,
+            Some(_) => {}
+            None if c == '"' || c == '\'' => comilla = Some(c),
+            None if c == '#' => break,
+            None => {}
+        }
+        salida.push(c);
+        previo = c;
+    }
+    salida
+}
+
 #[cfg(test)]
 mod pruebas {
     use super::*;
@@ -335,5 +525,35 @@ mod pruebas {
         let texto = "[[tarea]]\ntitulo = \"Taller\"\nvence = \"2026-11-28T23:59\"\nhecha = false\n";
         let datos = parsear(texto).expect("una tarea sin id es válida");
         assert_eq!(datos.tareas[0].id, "");
+    }
+
+    /// Una clave mal escrita no bloquea la lectura, pero se advierte con su
+    /// línea y el nombre de la clave.
+    #[test]
+    fn advierte_clave_mal_escrita() {
+        let texto = "[[tarea]]
+titulo = \"Taller\"
+titlo = \"x\"
+vence = \"2026-11-28T23:59\"
+";
+        let avisos = advertencias(texto);
+        assert_eq!(avisos.len(), 1, "advertencias: {avisos:?}");
+        assert_eq!(avisos[0].linea, Some(3), "mensaje: {}", avisos[0].mensaje);
+        assert!(
+            avisos[0].mensaje.contains("titlo"),
+            "mensaje: {}",
+            avisos[0].mensaje
+        );
+        assert!(
+            parsear(texto).is_ok(),
+            "las advertencias no deben bloquear la lectura"
+        );
+    }
+
+    /// El archivo de ejemplo no debe producir advertencias.
+    #[test]
+    fn ejemplo_sin_advertencias() {
+        let avisos = advertencias(include_str!("../ejemplo.toml"));
+        assert!(avisos.is_empty(), "advertencias: {avisos:?}");
     }
 }
