@@ -13,6 +13,7 @@ import com.jysusman.order.ffi.ConflictoFfi
 import com.jysusman.order.ffi.DiaFfi
 import com.jysusman.order.ffi.DiaVistaFfi
 import com.jysusman.order.ffi.ErrorFfi
+import com.jysusman.order.ffi.EstadoConexionFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
@@ -23,10 +24,12 @@ import com.jysusman.order.ffi.ProveedorInfoFfi
 import com.jysusman.order.ffi.RecordatorioFormFfi
 import com.jysusman.order.ffi.RespuestaAgenteFfi
 import com.jysusman.order.ffi.ResultadoAplicarTodasFfi
+import com.jysusman.order.ffi.ResultadoConexionFfi
 import com.jysusman.order.ffi.ResumenArchivoFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ffi.TareaFfi
 import com.jysusman.order.ffi.TareaFormFfi
+import com.jysusman.order.ffi.TextosConexionAgenteFfi
 import com.jysusman.order.ffi.VozProveedorInfoFfi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -244,6 +247,90 @@ class RepositorioTest {
         assertNull(err)
         assertEquals("15000", fake.ultimoLimiteGuardado)
     }
+
+    @Test
+    fun conexionGuiadaSinClavePortapapelesResumeYReenvio() = runTest {
+        val fake = FakePuenteOrder().apply {
+            tieneClaveFlag = false
+        }
+        val repo = Repositorio(
+            puente = fake,
+            carpetaInicial = "/tmp/order-conexion",
+            dispatcherIo = UnconfinedTestDispatcher(testScheduler),
+            asegurarCarpeta = {},
+            rutaConfigAgente = "/tmp/agente.toml",
+        )
+
+        repo.cargarInicial()
+        assertTrue(!repo.estado.value.agenteTieneClave)
+        assertTrue(!repo.estado.value.conexionAbierta)
+
+        // Al intentar enviar sin clave, abre la tarjeta y NO pierde el mensaje escrito.
+        repo.actualizarTextoAgente("pon taller de control el viernes")
+        repo.enviarAlAgente()
+        assertTrue(repo.estado.value.conexionAbierta)
+        assertEquals("pon taller de control el viernes", repo.estado.value.agenteTexto)
+        assertEquals(0, fake.llamadasEnviarAgente)
+
+        // Pegar algo que no es clave no lo mete y muestra el aviso de portapapeles.
+        repo.pegarClaveDesdePortapapeles("hola mundo")
+        assertEquals("", repo.estado.value.conexionKey)
+        assertTrue(repo.estado.value.conexionEstadoError)
+        assertEquals(
+            "Lo que copiaste no parece una clave de Google.",
+            repo.estado.value.conexionEstadoTexto,
+        )
+
+        // Al volver a la app (onResume) con una key AIza... en portapapeles, la ofrece.
+        repo.revisarPortapapelesAlReanudar("AIzaSyPruebaResume123456")
+        assertEquals("AIzaSyPruebaResume123456", repo.estado.value.conexionOfertaPortapapeles)
+        repo.aceptarClaveDePortapapeles()
+        assertEquals("AIzaSyPruebaResume123456", repo.estado.value.conexionKey)
+        assertNull(repo.estado.value.conexionOfertaPortapapeles)
+
+        // Clave inválida: muestra error, permite reintentar y no envía.
+        fake.resultadoConexion = ResultadoConexionFfi(
+            estado = EstadoConexionFfi.CLAVE_INVALIDA,
+            mensaje = "Esa clave no funciona; cópiala otra vez.",
+            guardada = false,
+        )
+        repo.conectarGemini()
+        assertTrue(repo.estado.value.conexionAbierta)
+        assertTrue(repo.estado.value.conexionEstadoError)
+        assertEquals(
+            "Esa clave no funciona; cópiala otra vez.",
+            repo.estado.value.conexionEstadoTexto,
+        )
+        assertEquals(0, fake.llamadasEnviarAgente)
+
+        // Sin internet: guarda la clave igual y avisa.
+        fake.resultadoConexion = ResultadoConexionFfi(
+            estado = EstadoConexionFfi.SIN_INTERNET,
+            mensaje = "Sin internet; inténtalo luego.",
+            guardada = true,
+        )
+        repo.conectarGemini()
+        assertTrue(repo.estado.value.agenteTieneClave)
+        assertTrue(repo.estado.value.conexionAbierta)
+        assertEquals("Sin internet; inténtalo luego.", repo.estado.value.conexionEstadoTexto)
+        assertEquals(0, fake.llamadasEnviarAgente)
+
+        // Conexión exitosa: cierra la tarjeta y envía automáticamente el mensaje que estaba escrito.
+        fake.resultadoConexion = ResultadoConexionFfi(
+            estado = EstadoConexionFfi.CONECTADO,
+            mensaje = "Listo, el agente está conectado.",
+            guardada = true,
+        )
+        fake.tieneClaveFlag = true
+        fake.respuestaAgente = RespuestaAgenteFfi("Taller agregado.", emptyList(), null)
+        repo.conectarGemini()
+        assertTrue(!repo.estado.value.conexionAbierta)
+        assertTrue(repo.estado.value.agenteTieneClave)
+        assertEquals(1, fake.llamadasEnviarAgente)
+        assertTrue(repo.estado.value.agentePanelAbierto)
+        assertEquals("Taller agregado.", repo.estado.value.agenteRespuesta)
+        assertEquals("", repo.estado.value.agenteTexto)
+    }
 }
 
 class FakePuenteOrder : PuenteOrder {
@@ -260,6 +347,13 @@ class FakePuenteOrder : PuenteOrder {
     var ultimoLimiteGuardado: String = ""
     var alEnviar: (() -> Unit)? = null
     var llamadasNuevaConversacion: Int = 0
+    var llamadasEnviarAgente: Int = 0
+    var tieneClaveFlag: Boolean = true
+    var resultadoConexion: ResultadoConexionFfi = ResultadoConexionFfi(
+        estado = EstadoConexionFfi.CONECTADO,
+        mensaje = "Listo, el agente está conectado.",
+        guardada = true,
+    )
     var conflictos: List<ConflictoFfi> = emptyList()
     var advertencias: List<String> = emptyList()
     var ultimaRutaCargada: String = ""
@@ -441,8 +535,43 @@ class FakePuenteOrder : PuenteOrder {
 
     override fun proveedoresAgente(): List<ProveedorInfoFfi> = emptyList()
     override fun proveedoresVoz(): List<VozProveedorInfoFfi> = emptyList()
+    override fun textosConexionAgente(): TextosConexionAgenteFfi = TextosConexionAgenteFfi(
+        titulo = "Conecta el agente gratis",
+        paso1 = "1. Toca Abrir Google AI Studio y entra con tu cuenta de Google.",
+        paso2 = "2. Toca Create API key y copia la clave.",
+        paso3 = "3. Vuelve aquí y toca Pegar clave.",
+        botonAbrirStudio = "Abrir Google AI Studio",
+        urlStudio = "https://aistudio.google.com/apikey",
+        botonPegar = "Pegar clave",
+        etiquetaClave = "API key",
+        pistaClave = "AIza…",
+        botonConectar = "Conectar",
+        conectando = "Conectando…",
+        enlaceOtroProveedor = "Usar otro proveedor",
+        portapapelesInvalido = "Lo que copiaste no parece una clave de Google.",
+        claveVacia = "Pega o escribe tu clave de Google.",
+        ofertaPortapapeles = "¿Usar la clave que copiaste?",
+        conectado = "Listo, el agente está conectado.",
+        claveInvalida = "Esa clave no funciona; cópiala otra vez.",
+        sinInternet = "Sin internet; inténtalo luego.",
+    )
+
+    override fun pareceClaveGemini(texto: String): Boolean {
+        val limpio = texto.trim()
+        return limpio.startsWith("AIza") && limpio.length >= 10 && limpio.none { it.isWhitespace() }
+    }
+
+    override fun agenteTieneClave(rutaConfig: String): Boolean = tieneClaveFlag
+
+    override fun conectarGemini(rutaConfig: String, apiKey: String): ResultadoConexionFfi {
+        if (resultadoConexion.guardada) {
+            tieneClaveFlag = true
+        }
+        return resultadoConexion
+    }
+
     override fun leerAgenteConfig(rutaConfig: String): AgenteConfigFfi =
-        AgenteConfigFfi(0, "https://api.deepseek.com", "deepseek-v4-flash", "", veImagenes, 60000u, 0, "https://api.openai.com/v1", "whisper-1", "")
+        AgenteConfigFfi(0, "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-flash-latest", "", veImagenes, 60000u, 0, "https://api.openai.com/v1", "whisper-1", "")
 
     override fun guardarAgenteConfig(
         rutaConfig: String,
@@ -485,6 +614,7 @@ class FakePuenteOrder : PuenteOrder {
         texto: String,
         adjuntos: List<AdjuntoFfi>,
     ): RespuestaAgenteFfi {
+        llamadasEnviarAgente++
         alEnviar?.invoke()
         ultimosAdjuntosEnviados = adjuntos
         fallarAgente?.let { throw it }

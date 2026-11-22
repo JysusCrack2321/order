@@ -166,8 +166,13 @@ fun HojaAjustesAgente(
                 verticalArrangement = Arrangement.spacedBy(OrderTema.EspacioXs),
             ) {
                 proveedores.forEach { info ->
+                    val etiqueta = if (info.etiqueta != null) {
+                        "${info.nombre} · ${info.etiqueta}"
+                    } else {
+                        info.nombre
+                    }
                     ChipOrder(
-                        texto = info.nombre,
+                        texto = etiqueta,
                         activo = proveedor == info.codigo,
                         onClick = {
                             proveedor = info.codigo
@@ -194,7 +199,7 @@ fun HojaAjustesAgente(
                 apiKey = it
                 if (campoMal == 5) campoMal = 0
             },
-            pista = "sk-…",
+            pista = if (proveedor == 0) "AIza…" else "sk-…",
             mostrar = verKey,
             alAlternarMostrar = { verKey = !verKey },
             mal = campoMal == 5,

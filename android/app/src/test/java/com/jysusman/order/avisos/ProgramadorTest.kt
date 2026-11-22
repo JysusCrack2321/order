@@ -22,9 +22,11 @@ import com.jysusman.order.ffi.ProveedorInfoFfi
 import com.jysusman.order.ffi.RecordatorioFormFfi
 import com.jysusman.order.ffi.RespuestaAgenteFfi
 import com.jysusman.order.ffi.ResultadoAplicarTodasFfi
+import com.jysusman.order.ffi.ResultadoConexionFfi
 import com.jysusman.order.ffi.ResumenArchivoFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ffi.TareaFormFfi
+import com.jysusman.order.ffi.TextosConexionAgenteFfi
 import com.jysusman.order.ffi.VozProveedorInfoFfi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -203,6 +205,10 @@ private class FakePuenteAvisos(
     override fun diasSemanaEtiquetas(): List<String> = emptyList()
     override fun proveedoresAgente(): List<ProveedorInfoFfi> = emptyList()
     override fun proveedoresVoz(): List<VozProveedorInfoFfi> = emptyList()
+    override fun textosConexionAgente(): TextosConexionAgenteFfi = throw UnsupportedOperationException()
+    override fun pareceClaveGemini(texto: String): Boolean = false
+    override fun agenteTieneClave(rutaConfig: String): Boolean = false
+    override fun conectarGemini(rutaConfig: String, apiKey: String): ResultadoConexionFfi = throw UnsupportedOperationException()
     override fun leerAgenteConfig(rutaConfig: String): AgenteConfigFfi = throw UnsupportedOperationException()
     override fun guardarAgenteConfig(rutaConfig: String, proveedor: Int, url: String, modelo: String, apiKey: String, veImagenes: Boolean, limiteContexto: String, vozProveedor: Int, vozUrl: String, vozModelo: String, vozKey: String): AgenteConfigFfi = throw UnsupportedOperationException()
     override fun agenteVeImagenes(rutaConfig: String): Boolean = false

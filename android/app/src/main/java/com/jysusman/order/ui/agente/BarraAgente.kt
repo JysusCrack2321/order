@@ -61,17 +61,19 @@ fun BarraAgente(
     avisoEsError: Boolean = false,
     adjuntos: List<AdjuntoPendiente> = emptyList(),
     hayConversacion: Boolean = false,
+    tieneClave: Boolean = true,
     alCambiarTexto: (String) -> Unit,
     alGrabar: () -> Unit = {},
     alElegirArchivo: () -> Unit = {},
     alTomarFoto: () -> Unit = {},
     alQuitarAdjunto: (String) -> Unit = {},
     alNuevaConversacion: () -> Unit = {},
+    alAbrirConexion: () -> Unit = {},
     alEnviar: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val ocupado = pensando || transcribiendo || leyendoArchivo
-    val puedeEnviar = !ocupado && (texto.isNotBlank() || adjuntos.isNotEmpty())
+    val puedeEnviar = !ocupado && (!tieneClave || texto.isNotBlank() || adjuntos.isNotEmpty())
     var menuAdjuntoAbierto by remember { mutableStateOf(false) }
 
     Column(
@@ -80,6 +82,40 @@ fun BarraAgente(
             .background(OrderTema.FondoPanel),
     ) {
         HorizontalDivider(color = OrderTema.Borde, thickness = OrderTema.Linea)
+        if (!tieneClave) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = OrderTema.EspacioMd,
+                        end = OrderTema.EspacioMd,
+                        top = OrderTema.EspacioXs,
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "Agente sin conectar",
+                    fontSize = OrderTema.TamanoHora,
+                    color = OrderTema.TextoTenue,
+                )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(OrderTema.RadioPequeno))
+                        .background(OrderTema.AcentoTenue)
+                        .border(OrderTema.Linea, OrderTema.AcentoSuave, RoundedCornerShape(OrderTema.RadioPequeno))
+                        .clickable(enabled = !ocupado, onClick = alAbrirConexion)
+                        .padding(horizontal = OrderTema.EspacioSm, vertical = OrderTema.EspacioXs),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "Conectar gratis",
+                        fontSize = OrderTema.TamanoHora,
+                        color = OrderTema.Acento,
+                    )
+                }
+            }
+        }
         if (hayConversacion) {
             Row(
                 modifier = Modifier

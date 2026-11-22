@@ -22,9 +22,11 @@ import com.jysusman.order.ffi.ProveedorInfoFfi
 import com.jysusman.order.ffi.RecordatorioFormFfi
 import com.jysusman.order.ffi.RespuestaAgenteFfi
 import com.jysusman.order.ffi.ResultadoAplicarTodasFfi
+import com.jysusman.order.ffi.ResultadoConexionFfi
 import com.jysusman.order.ffi.ResumenArchivoFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ffi.TareaFormFfi
+import com.jysusman.order.ffi.TextosConexionAgenteFfi
 import com.jysusman.order.ffi.VozProveedorInfoFfi
 
 /**
@@ -119,6 +121,10 @@ interface PuenteOrder {
 
     fun proveedoresAgente(): List<ProveedorInfoFfi>
     fun proveedoresVoz(): List<VozProveedorInfoFfi>
+    fun textosConexionAgente(): TextosConexionAgenteFfi
+    fun pareceClaveGemini(texto: String): Boolean
+    fun agenteTieneClave(rutaConfig: String): Boolean
+    fun conectarGemini(rutaConfig: String, apiKey: String): ResultadoConexionFfi
     fun leerAgenteConfig(rutaConfig: String): AgenteConfigFfi
     fun guardarAgenteConfig(
         rutaConfig: String,
@@ -302,6 +308,18 @@ class PuenteOrderNativo : PuenteOrder {
 
     override fun proveedoresVoz(): List<VozProveedorInfoFfi> =
         com.jysusman.order.ffi.proveedoresVoz()
+
+    override fun textosConexionAgente(): TextosConexionAgenteFfi =
+        com.jysusman.order.ffi.textosConexionAgente()
+
+    override fun pareceClaveGemini(texto: String): Boolean =
+        com.jysusman.order.ffi.pareceClaveGemini(texto)
+
+    override fun agenteTieneClave(rutaConfig: String): Boolean =
+        com.jysusman.order.ffi.agenteTieneClave(rutaConfig)
+
+    override fun conectarGemini(rutaConfig: String, apiKey: String): ResultadoConexionFfi =
+        com.jysusman.order.ffi.conectarGemini(rutaConfig, apiKey)
 
     override fun leerAgenteConfig(rutaConfig: String): AgenteConfigFfi =
         com.jysusman.order.ffi.leerAgenteConfig(rutaConfig)

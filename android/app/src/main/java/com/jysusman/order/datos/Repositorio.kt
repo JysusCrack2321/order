@@ -15,6 +15,7 @@ import com.jysusman.order.ffi.ConflictoFfi
 import com.jysusman.order.ffi.DiaFfi
 import com.jysusman.order.ffi.DiaVistaFfi
 import com.jysusman.order.ffi.ErrorFfi
+import com.jysusman.order.ffi.EstadoConexionFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
@@ -25,6 +26,7 @@ import com.jysusman.order.ffi.RecordatorioFormFfi
 import com.jysusman.order.ffi.ResumenArchivoFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ffi.TareaFormFfi
+import com.jysusman.order.ffi.TextosConexionAgenteFfi
 import com.jysusman.order.ffi.TipoFechaFfi
 import com.jysusman.order.ffi.VozProveedorInfoFfi
 import kotlinx.coroutines.CoroutineDispatcher
@@ -75,6 +77,15 @@ data class EstadoOrder(
     val agenteNota: String = "",
     val agenteAcciones: List<AccionVistaFfi> = emptyList(),
     val agenteHayConversacion: Boolean = false,
+    val agenteTieneClave: Boolean = true,
+    val conexionAbierta: Boolean = false,
+    val conexionKey: String = "",
+    val conexionVerKey: Boolean = false,
+    val conexionConectando: Boolean = false,
+    val conexionEstadoTexto: String = "",
+    val conexionEstadoError: Boolean = false,
+    val conexionOfertaPortapapeles: String? = null,
+    val textosConexion: TextosConexionAgenteFfi? = null,
 )
 
 /**
@@ -179,6 +190,17 @@ class Repositorio(
                 } else {
                     _estado.value.agenteHayConversacion
                 }
+                val tieneClave = if (rutaConfigAgente.isNotBlank()) {
+                    withContext(dispatcherIo) {
+                        runCatching { puente.agenteTieneClave(rutaConfigAgente) }
+                            .getOrDefault(_estado.value.agenteTieneClave)
+                    }
+                } else {
+                    _estado.value.agenteTieneClave
+                }
+                val textos = _estado.value.textosConexion ?: withContext(dispatcherIo) {
+                    runCatching { puente.textosConexionAgente() }.getOrNull()
+                }
                 _estado.update {
                     it.copy(
                         cargando = false,
@@ -192,6 +214,8 @@ class Repositorio(
                         pendientes = lectura.pendientes,
                         materias = lectura.materias,
                         agenteHayConversacion = hayConvGuardada,
+                        agenteTieneClave = tieneClave,
+                        textosConexion = textos,
                     )
                 }
                 withContext(dispatcherIo) { onDatosActualizados() }
@@ -561,12 +585,201 @@ class Repositorio(
 
     suspend fun limitesAdjuntos() = withContext(dispatcherIo) { puente.limitesAdjuntos() }
 
+    suspend fun abrirConexionGuiada() {
+        val textos = _estado.value.textosConexion ?: withContext(dispatcherIo) {
+            runCatching { puente.textosConexionAgente() }.getOrNull()
+        }
+        _estado.update {
+            it.copy(
+                conexionAbierta = true,
+                conexionEstadoTexto = "",
+                conexionEstadoError = false,
+                agentePanelAbierto = false,
+                agenteAviso = "",
+                agenteAvisoEsError = false,
+                textosConexion = textos,
+            )
+        }
+    }
+
+    fun cerrarConexionGuiada() {
+        _estado.update {
+            it.copy(
+                conexionAbierta = false,
+                conexionEstadoTexto = "",
+                conexionEstadoError = false,
+                conexionOfertaPortapapeles = null,
+            )
+        }
+    }
+
+    fun actualizarClaveConexion(clave: String) {
+        _estado.update {
+            it.copy(
+                conexionKey = clave,
+                conexionEstadoTexto = "",
+                conexionEstadoError = false,
+            )
+        }
+    }
+
+    fun alternarVerClaveConexion() {
+        _estado.update { it.copy(conexionVerKey = !it.conexionVerKey) }
+    }
+
+    suspend fun pegarClaveDesdePortapapeles(textoPortapapeles: String?) {
+        val textos = _estado.value.textosConexion ?: withContext(dispatcherIo) {
+            runCatching { puente.textosConexionAgente() }.getOrNull()
+        }
+        val candidato = textoPortapapeles.orEmpty().trim()
+        val esValida = candidato.isNotEmpty() && withContext(dispatcherIo) {
+            runCatching { puente.pareceClaveGemini(candidato) }.getOrDefault(false)
+        }
+        if (esValida) {
+            _estado.update {
+                it.copy(
+                    conexionKey = candidato,
+                    conexionEstadoTexto = "",
+                    conexionEstadoError = false,
+                    conexionOfertaPortapapeles = null,
+                    textosConexion = textos,
+                )
+            }
+        } else {
+            _estado.update {
+                it.copy(
+                    conexionEstadoTexto = textos?.portapapelesInvalido
+                        ?: "Lo que copiaste no parece una clave de Google.",
+                    conexionEstadoError = true,
+                    textosConexion = textos,
+                )
+            }
+        }
+    }
+
+    suspend fun revisarPortapapelesAlReanudar(textoPortapapeles: String?) {
+        val actual = _estado.value
+        if (!actual.conexionAbierta) return
+        val candidato = textoPortapapeles.orEmpty().trim()
+        val esValida = candidato.isNotEmpty() && withContext(dispatcherIo) {
+            runCatching { puente.pareceClaveGemini(candidato) }.getOrDefault(false)
+        }
+        _estado.update {
+            it.copy(
+                conexionOfertaPortapapeles = if (esValida && candidato != it.conexionKey.trim()) {
+                    candidato
+                } else {
+                    null
+                }
+            )
+        }
+    }
+
+    fun aceptarClaveDePortapapeles() {
+        val oferta = _estado.value.conexionOfertaPortapapeles ?: return
+        _estado.update {
+            it.copy(
+                conexionKey = oferta,
+                conexionOfertaPortapapeles = null,
+                conexionEstadoTexto = "",
+                conexionEstadoError = false,
+            )
+        }
+    }
+
+    suspend fun conectarGemini() {
+        val actual = _estado.value
+        if (actual.conexionConectando) return
+        val textos = actual.textosConexion ?: withContext(dispatcherIo) {
+            runCatching { puente.textosConexionAgente() }.getOrNull()
+        }
+        val clave = actual.conexionKey.trim()
+        if (clave.isEmpty()) {
+            _estado.update {
+                it.copy(
+                    conexionEstadoTexto = textos?.claveVacia ?: "Pega o escribe tu clave de Google.",
+                    conexionEstadoError = true,
+                    textosConexion = textos,
+                )
+            }
+            return
+        }
+        if (rutaConfigAgente.isBlank()) return
+
+        _estado.update {
+            it.copy(
+                conexionConectando = true,
+                conexionEstadoTexto = "",
+                conexionEstadoError = false,
+                conexionOfertaPortapapeles = null,
+                textosConexion = textos,
+            )
+        }
+
+        val res = withContext(dispatcherIo) {
+            runCatching { puente.conectarGemini(rutaConfigAgente, clave) }
+        }
+
+        var reenviar = false
+        res.onSuccess { resultado ->
+            _estado.update { estado ->
+                val nuevaTieneClave = resultado.guardada || estado.agenteTieneClave
+                when (resultado.estado) {
+                    EstadoConexionFfi.CONECTADO -> {
+                        reenviar = estado.agenteTexto.isNotBlank() || estado.agenteAdjuntos.isNotEmpty()
+                        estado.copy(
+                            agenteTieneClave = nuevaTieneClave,
+                            conexionConectando = false,
+                            conexionAbierta = false,
+                            conexionKey = "",
+                            conexionVerKey = false,
+                            conexionEstadoTexto = "",
+                            conexionEstadoError = false,
+                            agenteAviso = resultado.mensaje,
+                            agenteAvisoEsError = false,
+                        )
+                    }
+                    EstadoConexionFfi.CLAVE_INVALIDA,
+                    EstadoConexionFfi.SIN_INTERNET -> estado.copy(
+                        agenteTieneClave = nuevaTieneClave,
+                        conexionConectando = false,
+                        conexionEstadoTexto = resultado.mensaje,
+                        conexionEstadoError = true,
+                    )
+                }
+            }
+        }.onFailure { err ->
+            _estado.update {
+                it.copy(
+                    conexionConectando = false,
+                    conexionEstadoTexto = mensajeDeError(err),
+                    conexionEstadoError = true,
+                )
+            }
+        }
+
+        if (reenviar) {
+            enviarAlAgente()
+        }
+    }
+
     suspend fun enviarAlAgente() {
         val actual = _estado.value
+        if (actual.agentePensando || actual.agenteLeyendoArchivo) return
+        if (rutaConfigAgente.isBlank() || actual.rutaArchivo.isBlank()) return
+
+        val tieneClave = withContext(dispatcherIo) {
+            runCatching { puente.agenteTieneClave(rutaConfigAgente) }.getOrDefault(actual.agenteTieneClave)
+        }
+        if (!tieneClave) {
+            _estado.update { it.copy(agenteTieneClave = false) }
+            abrirConexionGuiada()
+            return
+        }
+
         val pregunta = actual.agenteTexto.trim()
         val adjuntosFfi = actual.agenteAdjuntos.map { it.adjuntoFfi }
-        if ((pregunta.isEmpty() && adjuntosFfi.isEmpty()) || actual.agentePensando || actual.agenteLeyendoArchivo) return
-        if (rutaConfigAgente.isBlank() || actual.rutaArchivo.isBlank()) return
+        if (pregunta.isEmpty() && adjuntosFfi.isEmpty()) return
 
         val compactando = withContext(dispatcherIo) {
             runCatching { puente.necesitaCompactar(rutaConfigAgente) }.getOrDefault(false)
@@ -790,7 +1003,17 @@ class Repositorio(
             }
         }
         return res.fold(
-            onSuccess = { null },
+            onSuccess = {
+                _estado.update { estado ->
+                    estado.copy(
+                        agenteTieneClave = apiKey.isNotBlank(),
+                        conexionAbierta = false,
+                        conexionEstadoTexto = "",
+                        conexionEstadoError = false,
+                    )
+                }
+                null
+            },
             onFailure = { err ->
                 if (err is ErrorFfi.Validacion) err
                 else ErrorFfi.Validacion(0, mensajeDeError(err))

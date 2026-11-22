@@ -1,6 +1,9 @@
 package com.jysusman.order
 
 import android.Manifest
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -73,6 +76,7 @@ import com.jysusman.order.ui.abrirAjustesNotificaciones
 import com.jysusman.order.ui.abrirAjustesPermisoArchivos
 import com.jysusman.order.ui.agente.BarraAgente
 import com.jysusman.order.ui.agente.PanelRespuesta
+import com.jysusman.order.ui.agente.TarjetaConexionAgente
 import com.jysusman.order.ui.dia.DiaPantalla
 import com.jysusman.order.ui.formularios.ContenedorFormularioSheet
 import com.jysusman.order.ui.formularios.FormularioActivo
@@ -348,6 +352,11 @@ private fun OrderApp(
                         mostrarResumenSiToca()
                     }
                 }
+                if (repositorio.estado.value.conexionAbierta) {
+                    scope.launch {
+                        repositorio.revisarPortapapelesAlReanudar(leerPortapapeles(context))
+                    }
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -474,7 +483,36 @@ private fun OrderApp(
         },
         bottomBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
-                if (estado.agentePanelAbierto) {
+                val textosConexion = estado.textosConexion
+                if (estado.conexionAbierta && textosConexion != null) {
+                    TarjetaConexionAgente(
+                        textos = textosConexion,
+                        clave = estado.conexionKey,
+                        verClave = estado.conexionVerKey,
+                        conectando = estado.conexionConectando,
+                        estadoTexto = estado.conexionEstadoTexto,
+                        estadoError = estado.conexionEstadoError,
+                        ofertaPortapapeles = estado.conexionOfertaPortapapeles,
+                        alCambiarClave = { repositorio.actualizarClaveConexion(it) },
+                        alAlternarVerClave = { repositorio.alternarVerClaveConexion() },
+                        alAbrirStudio = {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(textosConexion.urlStudio))
+                            runCatching { context.startActivity(intent) }
+                        },
+                        alPegarClave = {
+                            scope.launch {
+                                repositorio.pegarClaveDesdePortapapeles(leerPortapapeles(context))
+                            }
+                        },
+                        alAceptarOferta = { repositorio.aceptarClaveDePortapapeles() },
+                        alConectar = { scope.launch { repositorio.conectarGemini() } },
+                        alOtroProveedor = {
+                            repositorio.cerrarConexionGuiada()
+                            formularioActivo = FormularioActivo.Agente
+                        },
+                        alCerrar = { repositorio.cerrarConexionGuiada() },
+                    )
+                } else if (estado.agentePanelAbierto) {
                     PanelRespuesta(
                         respuesta = estado.agenteRespuesta,
                         nota = estado.agenteNota,
@@ -497,6 +535,7 @@ private fun OrderApp(
                     avisoEsError = estado.agenteAvisoEsError,
                     adjuntos = estado.agenteAdjuntos,
                     hayConversacion = estado.agenteHayConversacion,
+                    tieneClave = estado.agenteTieneClave,
                     alCambiarTexto = { repositorio.actualizarTextoAgente(it) },
                     alGrabar = {
                         if (grabandoVoz) {
@@ -533,6 +572,7 @@ private fun OrderApp(
                     },
                     alQuitarAdjunto = { id -> repositorio.quitarAdjunto(id) },
                     alNuevaConversacion = { scope.launch { repositorio.nuevaConversacion() } },
+                    alAbrirConexion = { scope.launch { repositorio.abrirConexionGuiada() } },
                     alEnviar = { scope.launch { repositorio.enviarAlAgente() } },
                 )
                 val pie = estado.resumen?.pie ?: estado.inicio?.pie
@@ -750,4 +790,11 @@ private fun OrderApp(
             onCerrar = { selectorFiltro = SelectorFiltro.Ninguno },
         )
     }
+}
+
+private fun leerPortapapeles(context: Context): String? {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return null
+    val clip = clipboard.primaryClip ?: return null
+    if (clip.itemCount == 0) return null
+    return clip.getItemAt(0).coerceToText(context)?.toString()
 }
