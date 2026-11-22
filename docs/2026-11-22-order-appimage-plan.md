@@ -27,4 +27,4 @@ Ejecutado con `empaquetar/probar-appimage.sh` en contenedores limpios con `fontc
 - Host CachyOS/Arch (ejecución directa FUSE y `--appimage-extract-and-run --version`): `order 0.1.0`.
 
 ## Tarea 3: Cierre
-- [ ] `./remoto.sh --traer` (ampliar `--traer` para traer también `dist/*.AppImage`). README: cómo descargar y abrir el AppImage (chmod +x o Propiedades → Permitir ejecutar). Commit `docs: AppImage`.
+- [x] `./remoto.sh --traer` (ampliar `--traer` para traer también `dist/*.AppImage`). README: cómo descargar y abrir el AppImage (chmod +x o Propiedades → Permitir ejecutar). Commit `docs: AppImage`.

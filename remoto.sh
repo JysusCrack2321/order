@@ -3,7 +3,7 @@
 #
 # Uso:
 #   ./remoto.sh <comando>       copia el código allá y corre <comando> en la raíz del repo
-#   ./remoto.sh --traer         trae dist/ORDER.apk y el binario de escritorio
+#   ./remoto.sh --traer         trae dist/ORDER.apk, dist/*.AppImage y el binario de escritorio
 #
 # Ejemplos:
 #   ./remoto.sh cargo test --workspace
@@ -22,6 +22,9 @@ if [[ "${1:-}" == "--traer" ]]; then
   mkdir -p "$RAIZ/dist"
   rsync -a "$REMOTO:$DIR/dist/ORDER.apk" "$RAIZ/dist/ORDER.apk" 2>/dev/null \
     && echo "==> dist/ORDER.apk traído" || echo "==> no hay dist/ORDER.apk allá"
+  if rsync -a "$REMOTO:$DIR/dist/*.AppImage" "$RAIZ/dist/" 2>/dev/null; then
+    echo "==> dist/*.AppImage traído a dist/"
+  fi
   if rsync -a "$REMOTO:$DIR/target/release/order" "$RAIZ/dist/order" 2>/dev/null; then
     echo "==> binario de escritorio traído a dist/order"
   fi

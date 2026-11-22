@@ -86,6 +86,23 @@ Los `.desktop` (el del repo, `~/.local/share/applications/` y
 
 ## Instalar y reinstalar
 
+### AppImage portable (Linux x86_64)
+
+Si no quieres compilar, descarga `ORDER-x86_64.AppImage` (no requiere instalar `libfuse2`):
+
+1. Dale permiso de ejecución:
+   - En terminal: `chmod +x ORDER-x86_64.AppImage`
+   - En gestor de archivos (Ubuntu/GNOME, Mint, etc.): clic derecho → **Propiedades** → **Permisos** → **Permitir ejecutar el archivo como un programa**.
+2. Ábrelo con doble clic o ejecutando `./ORDER-x86_64.AppImage` (arranca en la bandeja; en **Ajustes** puedes activar **Abrir ORDER al iniciar sesión**).
+
+Para generarlo desde el código fuente (requiere `podman`):
+
+```bash
+./empaquetar/appimage.sh   # deja dist/ORDER-<versión>-x86_64.AppImage y dist/ORDER-x86_64.AppImage
+```
+
+### Desde código fuente
+
 ```bash
 cd ~/apps/order
 cargo install --path crates/order-escritorio --locked     # queda en ~/.cargo/bin/order
@@ -166,7 +183,7 @@ Desde la barra inferior del agente se pueden adjuntar hasta **5 archivos** por m
 | **DeepSeek** | texto extraído localmente (+ OCR si una página no tiene texto) | texto extraído por OCR |
 | **Otro** | texto/OCR por defecto, o imágenes si se activa *El modelo ve imágenes* en **Avanzado** | ídem |
 
-En escritorio, el renderizado de páginas usa `pdftoppm -jpeg -r 110` (Poppler) y el OCR usa `tesseract - - -l spa`; si alguno falta, la app muestra un aviso claro.
+En escritorio, el renderizado de páginas usa `pdftoppm -jpeg -r 110` (Poppler) y el OCR usa `tesseract - - -l spa`; si alguno falta, la app muestra un aviso claro. En Ubuntu/Debian se instalan con `sudo apt install poppler-utils tesseract-ocr tesseract-ocr-spa` (solo hacen falta para PDFs escaneados con DeepSeek).
 
 ## Moodle y calendarios iCal
 
