@@ -13,6 +13,7 @@
 use crate::agente::acciones;
 use crate::agente::adjuntos::{self, Adjunto, ContenidoAdjunto, ErrorAdjunto};
 use crate::agente::config::{AgenteConfig, Proveedor};
+use crate::agente::conversacion::Conversacion;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::{Value, json};
@@ -81,13 +82,14 @@ impl From<ErrorAdjunto> for ErrorAgente {
 
 impl std::error::Error for ErrorAgente {}
 
-/// Pregunta al modelo y devuelve su texto (el JSON crudo de `respuesta` y
-/// `acciones`). Bloquea hasta 60 s: la ventana la llama desde un hilo.
+/// Pregunta al modelo y devuelve su texto (el JSON crudo de `respuesta`,
+/// `acciones` y `resumen`). Bloquea hasta 60 s: la ventana la llama desde un hilo.
 pub fn consultar(
     config: &AgenteConfig,
     contexto: &str,
     pregunta: &str,
     adjuntos: &[Adjunto],
+    conversacion: &Conversacion,
 ) -> Result<String, ErrorAgente> {
     if config.url_base.trim().is_empty() {
         return Err(ErrorAgente::Configuracion(
@@ -105,8 +107,8 @@ pub fn consultar(
 
     let agente = agente_http();
     match config.proveedor {
-        Proveedor::Claude => claude(&agente, config, contexto, pregunta, adjuntos),
-        _ => openai(&agente, config, contexto, pregunta, adjuntos),
+        Proveedor::Claude => claude(&agente, config, contexto, pregunta, adjuntos, conversacion),
+        _ => openai(&agente, config, contexto, pregunta, adjuntos, conversacion),
     }
 }
 
@@ -125,7 +127,7 @@ pub fn sistema() -> String {
         r#"Eres el asistente de ORDER, una app personal de horario, tareas y recordatorios.
 
 Respondes SIEMPRE con un único objeto JSON, sin texto fuera del JSON:
-{{"respuesta": "texto corto en español", "acciones": [ ... ]}}
+{{"respuesta": "texto corto en español", "acciones": [ ... ], "resumen": "resumen breve de la conversación"}}
 
 Formatos exactos (los mismos del archivo):
 - vencimiento de tarea: "YYYY-MM-DDTHH:MM" (hora local, 24 h)
@@ -149,20 +151,42 @@ Reglas:
 4. Propón una acción por cada cosa que se pida; no apliques nada tú: el usuario confirma.
 5. Si falta un dato imprescindible (por ejemplo, el vencimiento de una tarea nueva), pregunta en "respuesta" sin acciones.
 6. "respuesta" va en español, corta (una o dos frases), sin markdown ni bloques de código.
+7. En "resumen" escribe un resumen actualizado de toda la conversación (máximo 5 líneas), solo con lo que sirva para seguirla.
 "#
     )
 }
 
-fn prompt_usuario(contexto: &str, pregunta: &str) -> String {
-    format!("Datos actuales de ORDER:\n{contexto}\nPetición del usuario:\n{pregunta}\n")
+fn prompt_usuario(contexto: &str, pregunta: &str, conversacion: &Conversacion) -> String {
+    let bloque = conversacion.bloque_contexto();
+    if bloque.is_empty() {
+        format!("Datos actuales de ORDER:\n{contexto}\nPetición del usuario:\n{pregunta}\n")
+    } else {
+        format!(
+            "Datos actuales de ORDER:\n{contexto}\n{bloque}\n\nPetición del usuario:\n{pregunta}\n"
+        )
+    }
 }
 
-fn prompt_usuario_con_adjuntos(contexto: &str, pregunta: &str, texto_adjuntos: Option<&str>) -> String {
+fn prompt_usuario_con_adjuntos(
+    contexto: &str,
+    pregunta: &str,
+    conversacion: &Conversacion,
+    texto_adjuntos: Option<&str>,
+) -> String {
     match texto_adjuntos {
-        Some(adj) if !adj.trim().is_empty() => format!(
-            "Datos actuales de ORDER:\n{contexto}\nArchivos adjuntos:\n{adj}\n\nPetición del usuario:\n{pregunta}\n"
-        ),
-        _ => prompt_usuario(contexto, pregunta),
+        Some(adj) if !adj.trim().is_empty() => {
+            let bloque = conversacion.bloque_contexto();
+            if bloque.is_empty() {
+                format!(
+                    "Datos actuales de ORDER:\n{contexto}\nArchivos adjuntos:\n{adj}\n\nPetición del usuario:\n{pregunta}\n"
+                )
+            } else {
+                format!(
+                    "Datos actuales de ORDER:\n{contexto}\n{bloque}\n\nArchivos adjuntos:\n{adj}\n\nPetición del usuario:\n{pregunta}\n"
+                )
+            }
+        }
+        _ => prompt_usuario(contexto, pregunta, conversacion),
     }
 }
 
@@ -176,9 +200,10 @@ fn openai(
     contexto: &str,
     pregunta: &str,
     adjuntos: &[Adjunto],
+    conversacion: &Conversacion,
 ) -> Result<String, ErrorAgente> {
     let url = endpoint_chat(&config.url_base);
-    let mut cuerpo = cuerpo_openai(config, contexto, pregunta, adjuntos, true)?;
+    let mut cuerpo = cuerpo_openai(config, contexto, pregunta, adjuntos, conversacion, true)?;
     let (mut estado, mut texto) = enviar(
         agente,
         &url,
@@ -189,7 +214,7 @@ fn openai(
     // Gemini rechaza `response_format`; si el error viene por ese campo, se
     // reintenta sin él.
     if reintentar_sin_formato(estado, &texto) {
-        cuerpo = cuerpo_openai(config, contexto, pregunta, adjuntos, false)?;
+        cuerpo = cuerpo_openai(config, contexto, pregunta, adjuntos, conversacion, false)?;
         (estado, texto) = enviar(
             agente,
             &url,
@@ -219,10 +244,11 @@ fn cuerpo_openai(
     contexto: &str,
     pregunta: &str,
     adjuntos: &[Adjunto],
+    conversacion: &Conversacion,
     formato: bool,
 ) -> Result<Value, ErrorAgente> {
     let contenido_usuario = if adjuntos.is_empty() {
-        Value::String(prompt_usuario(contexto, pregunta))
+        Value::String(prompt_usuario(contexto, pregunta, conversacion))
     } else {
         let ve_imagenes = config.ve_imagenes();
         adjuntos::validar(adjuntos, config.proveedor, ve_imagenes)?;
@@ -257,7 +283,7 @@ fn cuerpo_openai(
             }
             partes.push(json!({
                 "type": "text",
-                "text": prompt_usuario(contexto, pregunta)
+                "text": prompt_usuario(contexto, pregunta, conversacion)
             }));
             Value::Array(partes)
         } else {
@@ -265,6 +291,7 @@ fn cuerpo_openai(
             Value::String(prompt_usuario_con_adjuntos(
                 contexto,
                 pregunta,
+                conversacion,
                 Some(&texto_adjuntos),
             ))
         }
@@ -321,9 +348,10 @@ fn claude(
     contexto: &str,
     pregunta: &str,
     adjuntos: &[Adjunto],
+    conversacion: &Conversacion,
 ) -> Result<String, ErrorAgente> {
     let url = endpoint_claude(&config.url_base);
-    let cuerpo = cuerpo_claude(config, contexto, pregunta, adjuntos)?;
+    let cuerpo = cuerpo_claude(config, contexto, pregunta, adjuntos, conversacion)?;
     let (estado, texto) = enviar(
         agente,
         &url,
@@ -357,9 +385,10 @@ fn cuerpo_claude(
     contexto: &str,
     pregunta: &str,
     adjuntos: &[Adjunto],
+    conversacion: &Conversacion,
 ) -> Result<Value, ErrorAgente> {
     let contenido = if adjuntos.is_empty() {
-        Value::String(prompt_usuario(contexto, pregunta))
+        Value::String(prompt_usuario(contexto, pregunta, conversacion))
     } else {
         adjuntos::validar(adjuntos, Proveedor::Claude, true)?;
         let mut bloques = Vec::new();
@@ -410,7 +439,7 @@ fn cuerpo_claude(
         }
         bloques.push(json!({
             "type": "text",
-            "text": prompt_usuario(contexto, pregunta)
+            "text": prompt_usuario(contexto, pregunta, conversacion)
         }));
         Value::Array(bloques)
     };
@@ -552,7 +581,9 @@ mod pruebas {
     #[test]
     fn cuerpo_openai_lleva_lo_que_pide_la_api() {
         let config = config(Proveedor::DeepSeek);
-        let cuerpo = cuerpo_openai(&config, "datos", "crea una tarea", &[], true).expect("cuerpo");
+        let vacia = Conversacion::nueva();
+        let cuerpo =
+            cuerpo_openai(&config, "datos", "crea una tarea", &[], &vacia, true).expect("cuerpo");
         assert_eq!(cuerpo["model"], "deepseek-v4-flash");
         assert_eq!(cuerpo["response_format"]["type"], "json_object");
         let mensajes = cuerpo["messages"].as_array().expect("mensajes");
@@ -563,14 +594,16 @@ mod pruebas {
         assert!(mensajes[1]["content"].as_str().unwrap().contains("crea una tarea"));
 
         // El reintento para Gemini va sin `response_format`.
-        let sin = cuerpo_openai(&config, "datos", "pregunta", &[], false).expect("sin formato");
+        let sin =
+            cuerpo_openai(&config, "datos", "pregunta", &[], &vacia, false).expect("sin formato");
         assert!(sin.get("response_format").is_none());
     }
 
     #[test]
     fn cuerpo_claude_sin_thinking_ni_temperatura() {
         let config = config(Proveedor::Claude);
-        let cuerpo = cuerpo_claude(&config, "datos", "hazlo", &[]).expect("cuerpo");
+        let vacia = Conversacion::nueva();
+        let cuerpo = cuerpo_claude(&config, "datos", "hazlo", &[], &vacia).expect("cuerpo");
         assert_eq!(cuerpo["model"], "claude-opus-5-5");
         assert_eq!(cuerpo["max_tokens"], MAX_TOKENS);
         assert_eq!(cuerpo["output_config"]["effort"], "low");
@@ -589,6 +622,7 @@ mod pruebas {
     #[test]
     fn cuerpo_claude_manda_document_e_imagen_antes_del_texto() {
         let config = config(Proveedor::Claude);
+        let vacia = Conversacion::nueva();
         let pdf = crate::agente::adjuntos::pruebas_ayuda::pdf_con_paginas(&["Horario de Control"]);
         let adjuntos = vec![
             Adjunto {
@@ -608,7 +642,8 @@ mod pruebas {
             },
         ];
 
-        let cuerpo = cuerpo_claude(&config, "datos", "agrega las clases", &adjuntos).expect("cuerpo");
+        let cuerpo =
+            cuerpo_claude(&config, "datos", "agrega las clases", &adjuntos, &vacia).expect("cuerpo");
         let content = cuerpo["messages"][0]["content"].as_array().expect("bloques");
         assert_eq!(content.len(), 3);
         assert_eq!(content[0]["type"], "document");
@@ -624,6 +659,7 @@ mod pruebas {
     #[test]
     fn cuerpo_gemini_manda_image_url_data_url() {
         let config = config(Proveedor::Gemini);
+        let vacia = Conversacion::nueva();
         let adjuntos = vec![
             Adjunto {
                 nombre: "enunciado.pdf".into(),
@@ -642,7 +678,9 @@ mod pruebas {
             },
         ];
 
-        let cuerpo = cuerpo_openai(&config, "datos", "lee el enunciado", &adjuntos, false).expect("cuerpo");
+        let cuerpo =
+            cuerpo_openai(&config, "datos", "lee el enunciado", &adjuntos, &vacia, false)
+                .expect("cuerpo");
         let content = cuerpo["messages"][1]["content"].as_array().expect("bloques");
         assert_eq!(content.len(), 4);
         assert_eq!(content[0]["type"], "image_url");
@@ -660,6 +698,7 @@ mod pruebas {
 
     #[test]
     fn cuerpo_deepseek_y_otro_solo_texto() {
+        let vacia = Conversacion::nueva();
         let pdf = crate::agente::adjuntos::pruebas_ayuda::pdf_con_paginas(&["Taller 3 para el viernes"]);
         let adjuntos = vec![
             Adjunto {
@@ -680,7 +719,8 @@ mod pruebas {
         ];
 
         let deepseek = config(Proveedor::DeepSeek);
-        let cuerpo = cuerpo_openai(&deepseek, "datos", "resume", &adjuntos, true).expect("deepseek");
+        let cuerpo =
+            cuerpo_openai(&deepseek, "datos", "resume", &adjuntos, &vacia, true).expect("deepseek");
         let texto = cuerpo["messages"][1]["content"].as_str().expect("solo texto");
         assert!(texto.contains("--- archivo: taller.pdf (página 1) ---"), "{texto}");
         assert!(texto.contains("Taller 3 para el viernes"), "{texto}");
@@ -689,11 +729,13 @@ mod pruebas {
 
         // «Otro» sin ve_imagenes se comporta como DeepSeek; con ve_imagenes como Gemini.
         let mut otro = config(Proveedor::OpenAICompatible);
-        let cuerpo_sin = cuerpo_openai(&otro, "datos", "resume", &adjuntos, false).expect("otro sin");
+        let cuerpo_sin =
+            cuerpo_openai(&otro, "datos", "resume", &adjuntos, &vacia, false).expect("otro sin");
         assert!(cuerpo_sin["messages"][1]["content"].is_string());
 
         otro.ve_imagenes = true;
-        let cuerpo_con = cuerpo_openai(&otro, "datos", "resume", &adjuntos, false).expect("otro con");
+        let cuerpo_con =
+            cuerpo_openai(&otro, "datos", "resume", &adjuntos, &vacia, false).expect("otro con");
         assert!(cuerpo_con["messages"][1]["content"].is_array());
     }
 
@@ -773,7 +815,8 @@ mod pruebas {
     fn sin_clave_no_llama() {
         let mut config = AgenteConfig::default();
         config.api_key.clear();
-        let error = consultar(&config, "datos", "hola", &[]).expect_err("sin clave");
+        let error = consultar(&config, "datos", "hola", &[], &Conversacion::nueva())
+            .expect_err("sin clave");
         assert!(matches!(error, ErrorAgente::Configuracion(_)));
         assert!(error.to_string().contains("clave"), "{error}");
     }
@@ -787,5 +830,52 @@ mod pruebas {
         assert!(sistema.contains("no inventes un id") || sistema.contains("Nunca inventes un id"));
         assert!(sistema.contains("grafía exacta de las materias"));
         assert!(sistema.contains("pregunta"));
+        assert!(sistema.contains("\"resumen\""));
+    }
+
+    #[test]
+    fn cuerpos_claude_y_openai_incluyen_conversacion_en_orden() {
+        let mut conv = Conversacion::nueva();
+        conv.registrar_turno(
+            "pon taller el jueves",
+            &["horario.pdf".into()],
+            "Propongo el jueves.",
+            Some("Hablan de taller de Control.".into()),
+        );
+        conv.anotar_resultado("Crear la tarea «Taller» (jueves)", true);
+
+        let openai_cfg = config(Proveedor::DeepSeek);
+        let cuerpo_oai = cuerpo_openai(
+            &openai_cfg,
+            "Agenda de hoy\n",
+            "no, mejor el viernes",
+            &[],
+            &conv,
+            true,
+        )
+        .expect("openai");
+        let texto_oai = cuerpo_oai["messages"][1]["content"].as_str().expect("texto");
+
+        let claude_cfg = config(Proveedor::Claude);
+        let cuerpo_cld = cuerpo_claude(
+            &claude_cfg,
+            "Agenda de hoy\n",
+            "no, mejor el viernes",
+            &[],
+            &conv,
+        )
+        .expect("claude");
+        let texto_cld = cuerpo_cld["messages"][0]["content"].as_str().expect("texto");
+
+        for texto in [texto_oai, texto_cld] {
+            let p1 = texto.find("Datos actuales de ORDER:").expect("1. agenda");
+            let p2 = texto.find("Resumen de la conversación:").expect("2. resumen");
+            let p3 = texto.find("Últimos intercambios:").expect("3. intercambios");
+            let p4 = texto.find("Qué pasó con tus propuestas:").expect("4. resultados");
+            let p5 = texto.find("Petición del usuario:").expect("5. peticion");
+            assert!(p1 < p2 && p2 < p3 && p3 < p4 && p4 < p5, "{texto}");
+            assert!(texto.contains("[adjuntó: horario.pdf]"), "{texto}");
+            assert!(texto.contains("no, mejor el viernes"), "{texto}");
+        }
     }
 }

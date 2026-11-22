@@ -9,4 +9,5 @@ pub mod adjuntos;
 pub mod cliente;
 pub mod config;
 pub mod contexto;
+pub mod conversacion;
 pub mod voz;

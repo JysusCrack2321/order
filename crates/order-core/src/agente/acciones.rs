@@ -206,6 +206,7 @@ impl Accion {
 pub struct Respuesta {
     pub respuesta: String,
     pub acciones: Vec<Accion>,
+    pub resumen: Option<String>,
 }
 
 /// Lee la respuesta del modelo: acepta el JSON solo, dentro de un bloque de
@@ -224,6 +225,13 @@ pub fn parsear(texto: &str) -> Result<Respuesta, String> {
         .trim()
         .to_string();
 
+    let resumen = valor
+        .get("resumen")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
     let lista = valor.get("acciones").and_then(Value::as_array);
     let mut acciones = Vec::new();
     let mut fallos = 0;
@@ -239,6 +247,7 @@ pub fn parsear(texto: &str) -> Result<Respuesta, String> {
     Ok(Respuesta {
         respuesta,
         acciones,
+        resumen,
     })
 }
 
@@ -287,9 +296,13 @@ pub fn esquema() -> Value {
         "type": "object",
         "properties": {
             "respuesta": texto,
-            "acciones": { "type": "array", "items": accion }
+            "acciones": { "type": "array", "items": accion },
+            "resumen": {
+                "type": "string",
+                "description": "Resumen actualizado de toda la conversación, incluida esta petición y tu respuesta; máximo 5 líneas; solo lo que sirva para seguirla (de qué se habla, qué quiere el usuario, qué decidió)"
+            }
         },
-        "required": ["respuesta", "acciones"],
+        "required": ["respuesta", "acciones", "resumen"],
         "additionalProperties": false
     })
 }
@@ -964,10 +977,13 @@ hora = \"18:00\"
         assert!(dia("festivo").is_err());
     }
 
-    /// El esquema que se le da a Claude nombra todos los tipos de acción.
+    /// El esquema que se le da a Claude nombra todos los tipos de acción y `resumen`.
     #[test]
     fn esquema_completo() {
         let esquema = esquema();
+        assert_eq!(esquema["properties"]["resumen"]["type"], "string");
+        let requeridos = esquema["required"].as_array().expect("required");
+        assert!(requeridos.iter().any(|v| v == "resumen"), "falta resumen");
         let tipos = esquema["properties"]["acciones"]["items"]["properties"]["tipo"]["enum"]
             .as_array()
             .expect("enum de tipos");
@@ -987,6 +1003,20 @@ hora = \"18:00\"
                 "falta {accion}"
             );
         }
+    }
+
+    #[test]
+    fn parsear_expone_resumen_si_viene_y_none_si_falta_o_vacio() {
+        let con = parsear(r#"{"respuesta":"Ok","acciones":[],"resumen":"Hablan de Control."}"#)
+            .expect("con resumen");
+        assert_eq!(con.resumen.as_deref(), Some("Hablan de Control."));
+
+        let sin = parsear(r#"{"respuesta":"Ok","acciones":[]}"#).expect("sin resumen");
+        assert_eq!(sin.resumen, None);
+
+        let vacio =
+            parsear(r#"{"respuesta":"Ok","acciones":[],"resumen":"   "}"#).expect("resumen vacío");
+        assert_eq!(vacio.resumen, None);
     }
 
     #[test]
