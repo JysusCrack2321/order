@@ -9,7 +9,7 @@ import { DiaVista } from "dia.slint";
 import { ClaseInicioUI, ConteoMateriaUI, RecordatorioInicioUI } from "listas.slint";
 import { Marco, Campo, CampoBoton, CampoClave, Chip, Casilla, Boton, Etiqueta, RecordatorioUI } from "formularios.slint";
 import { Selector, CeldaDia, MateriaUI } from "selectores.slint";
-import { AccionUI, AdjuntoUI, BarraAgente, PanelAgente } from "agente.slint";
+import { AccionUI, AdjuntoUI, BarraAgente, PanelAgente, TarjetaConexionAgente } from "agente.slint";
 import { ScrollView } from "std-widgets.slint";
 
 component Pestana inherits Rectangle {
@@ -310,6 +310,24 @@ export component AppWindow inherits Window {
     in property <[AdjuntoUI]> agente-adjuntos: [];
     in property <bool> agente-leyendo: false;
     in property <bool> agente-hay-conversacion: false;
+    // Tarjeta de conexión guiada (cuando falta la clave).
+    in property <bool> conexion-abierta: false;
+    in property <string> conexion-titulo: "";
+    in property <string> conexion-paso-1: "";
+    in property <string> conexion-paso-2: "";
+    in property <string> conexion-paso-3: "";
+    in property <string> conexion-texto-abrir-studio: "";
+    in property <string> conexion-texto-pegar: "";
+    in property <string> conexion-etiqueta-clave: "";
+    in property <string> conexion-pista-clave: "";
+    in property <string> conexion-texto-conectar: "";
+    in property <string> conexion-texto-conectando: "";
+    in property <string> conexion-texto-otro-proveedor: "";
+    in-out property <string> conexion-key: "";
+    in-out property <bool> conexion-ver-key: false;
+    in property <bool> conexion-conectando: false;
+    in property <string> conexion-estado-texto: "";
+    in property <bool> conexion-estado-error: false;
     // Ajustes → Agente (el proveedor va por fichas, 0–3).
     in-out property <int> a-proveedor: 0;
     in-out property <string> a-url: "";
@@ -389,6 +407,12 @@ export component AppWindow inherits Window {
     callback agente-adjuntar();
     callback agente-quitar-adjunto(int);
     callback agente-nueva-conversacion();
+    callback conexion-abrir-studio();
+    callback conexion-pegar();
+    callback conexion-alternar-clave();
+    callback conexion-conectar();
+    callback conexion-otro-proveedor();
+    callback conexion-cerrar();
     callback abrir-agente();
     callback elegir-proveedor(int);
     callback elegir-voz-proveedor(int);
@@ -606,8 +630,34 @@ export component AppWindow inherits Window {
                 }
             }
 
-            // --- Agente: respuesta y barra fija ---------------------------
-            if root.agente-panel : PanelAgente {
+            // --- Agente: conexión guiada, respuesta y barra fija ----------
+            if root.conexion-abierta : TarjetaConexionAgente {
+                titulo: root.conexion-titulo;
+                paso-1: root.conexion-paso-1;
+                paso-2: root.conexion-paso-2;
+                paso-3: root.conexion-paso-3;
+                texto-abrir-studio: root.conexion-texto-abrir-studio;
+                texto-pegar: root.conexion-texto-pegar;
+                etiqueta-clave: root.conexion-etiqueta-clave;
+                pista-clave: root.conexion-pista-clave;
+                texto-conectar: root.conexion-texto-conectar;
+                texto-conectando: root.conexion-texto-conectando;
+                texto-otro-proveedor: root.conexion-texto-otro-proveedor;
+                clave <=> root.conexion-key;
+                ver-clave: root.conexion-ver-key;
+                conectando: root.conexion-conectando;
+                estado-texto: root.conexion-estado-texto;
+                estado-error: root.conexion-estado-error;
+
+                abrir-studio => { root.conexion-abrir-studio(); }
+                pegar-clave => { root.conexion-pegar(); }
+                alternar-clave => { root.conexion-alternar-clave(); }
+                conectar => { root.conexion-conectar(); }
+                otro-proveedor => { root.conexion-otro-proveedor(); }
+                cerrar => { root.conexion-cerrar(); }
+            }
+
+            if !root.conexion-abierta && root.agente-panel : PanelAgente {
                 respuesta: root.agente-respuesta;
                 acciones: root.agente-acciones;
                 nota: root.agente-nota;
@@ -1087,14 +1137,14 @@ export component AppWindow inherits Window {
                                 spacing: Tema.espacio-xs;
 
                                 Chip {
-                                    texto: "DeepSeek";
-                                    ancho: Tema.ancho-ficha-proveedor;
+                                    texto: "Gemini · Gratis";
+                                    ancho: Tema.ancho-ficha-gemini;
                                     activo: root.a-proveedor == 0;
                                     clicked => { root.elegir-proveedor(0); }
                                 }
 
                                 Chip {
-                                    texto: "Gemini";
+                                    texto: "DeepSeek";
                                     ancho: Tema.ancho-ficha-proveedor;
                                     activo: root.a-proveedor == 1;
                                     clicked => { root.elegir-proveedor(1); }
@@ -1126,7 +1176,7 @@ export component AppWindow inherits Window {
                         CampoClave {
                             etiqueta: "API key";
                             texto <=> root.a-key;
-                            pista: "sk-…";
+                            pista: root.a-proveedor == 0 ? "AIza…" : "sk-…";
                             ver: root.a-ver-key;
                             mal: root.campo-mal == 5;
                             alternar => { root.alternar-clave(); }

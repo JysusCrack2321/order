@@ -14,8 +14,10 @@ use crate::adjuntos;
 use crate::grabacion::{self, Grabacion};
 use order_core::agente::acciones::{self, Accion};
 use order_core::agente::adjuntos::{self as core_adjuntos, Adjunto, MAX_ADJUNTOS};
-use order_core::agente::cliente::{self, ErrorAgente};
-use order_core::agente::config::{self, AgenteConfig, Proveedor, VozProveedor};
+use order_core::agente::cliente::{self, ErrorAgente, EstadoConexion};
+use order_core::agente::config::{
+    self, AgenteConfig, Proveedor, VozProveedor, parece_clave_gemini, textos_conexion_agente,
+};
 use order_core::agente::contexto;
 use order_core::agente::conversacion::Conversacion;
 use order_core::agente::voz;
@@ -128,6 +130,11 @@ struct Estado {
     leyendo_archivo: bool,
     /// Memoria completa de la conversación con el agente.
     conversacion: Conversacion,
+    /// Tarjeta de conexión guiada de Gemini cuando falta la clave.
+    conexion_abierta: bool,
+    conexion_conectando: bool,
+    conexion_estado_texto: String,
+    conexion_estado_error: bool,
 }
 
 fn ruta_conversacion() -> std::path::PathBuf {
@@ -161,6 +168,10 @@ impl Estado {
             siguiente_adjunto_id: 1,
             leyendo_archivo: false,
             conversacion: Conversacion::cargar_de(&ruta_conversacion()),
+            conexion_abierta: false,
+            conexion_conectando: false,
+            conexion_estado_texto: String::new(),
+            conexion_estado_error: false,
         }
     }
 }
@@ -222,6 +233,10 @@ struct Vista {
     agente_adjuntos: Vec<AdjuntoUI>,
     agente_leyendo: bool,
     agente_hay_conversacion: bool,
+    conexion_abierta: bool,
+    conexion_conectando: bool,
+    conexion_estado_texto: SharedString,
+    conexion_estado_error: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +349,19 @@ pub fn mostrar_conflictos(lista: Vec<Conflicto>) {
 // ---------------------------------------------------------------------------
 
 fn conectar(ui: &AppWindow) {
+    let textos = textos_conexion_agente();
+    ui.set_conexion_titulo(textos.titulo.into());
+    ui.set_conexion_paso_1(textos.paso_1.into());
+    ui.set_conexion_paso_2(textos.paso_2.into());
+    ui.set_conexion_paso_3(textos.paso_3.into());
+    ui.set_conexion_texto_abrir_studio(textos.boton_abrir_studio.into());
+    ui.set_conexion_texto_pegar(textos.boton_pegar.into());
+    ui.set_conexion_etiqueta_clave(textos.etiqueta_clave.into());
+    ui.set_conexion_pista_clave(textos.pista_clave.into());
+    ui.set_conexion_texto_conectar(textos.boton_conectar.into());
+    ui.set_conexion_texto_conectando(textos.conectando.into());
+    ui.set_conexion_texto_otro_proveedor(textos.enlace_otro_proveedor.into());
+
     // Cerrar con la X oculta la ventana: ORDER sigue en la bandeja. Si se
     // estaba grabando, el micrófono se suelta.
     let debil = ui.as_weak();
@@ -637,6 +665,52 @@ fn conectar(ui: &AppWindow) {
     ui.on_abrir_agente(move || {
         let Some(ui) = debil.upgrade() else { return };
         abrir_agente(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_conexion_abrir_studio(move || {
+        let Some(_ui) = debil.upgrade() else { return };
+        crate::sistema::abrir_en_navegador(&textos_conexion_agente().url_studio);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_conexion_pegar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        pegar_clave_conexion(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_conexion_alternar_clave(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        ui.set_conexion_ver_key(!ui.get_conexion_ver_key());
+    });
+
+    let debil = ui.as_weak();
+    ui.on_conexion_conectar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        conectar_gemini_panel(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_conexion_otro_proveedor(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        con_estado(|estado| {
+            estado.conexion_abierta = false;
+            estado.conexion_estado_texto.clear();
+            estado.conexion_estado_error = false;
+        });
+        abrir_agente(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_conexion_cerrar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        con_estado(|estado| {
+            estado.conexion_abierta = false;
+            estado.conexion_estado_texto.clear();
+            estado.conexion_estado_error = false;
+        });
+        actualizar(&ui);
     });
 
     let debil = ui.as_weak();
@@ -1245,6 +1319,9 @@ fn guardar_agente(ui: &AppWindow) {
                 estado.edicion = Edicion::Ninguna;
                 estado.error = None;
                 estado.aviso = String::new();
+                estado.conexion_abierta = false;
+                estado.conexion_estado_texto.clear();
+                estado.conexion_estado_error = false;
             });
             ui.set_form_error("".into());
             ui.set_campo_mal(0);
@@ -1344,9 +1421,114 @@ fn adjuntar_archivos(ui: &AppWindow) {
     });
 }
 
+/// Lee el portapapeles y rellena el campo solo si parece una clave de Google.
+fn pegar_clave_conexion(ui: &AppWindow) {
+    let textos = textos_conexion_agente();
+    match crate::sistema::leer_portapapeles() {
+        Some(texto) if parece_clave_gemini(&texto) => {
+            ui.set_conexion_key(texto.trim().into());
+            con_estado(|estado| {
+                estado.conexion_estado_texto.clear();
+                estado.conexion_estado_error = false;
+            });
+        }
+        _ => {
+            con_estado(|estado| {
+                estado.conexion_estado_texto = textos.portapapeles_invalido;
+                estado.conexion_estado_error = true;
+            });
+        }
+    }
+    actualizar(ui);
+}
+
+/// Guarda la clave de Gemini y la valida en un hilo; si conecta y había un
+/// mensaje pendiente, lo envía al instante.
+fn conectar_gemini_panel(ui: &AppWindow) {
+    if con_estado(|estado| estado.conexion_conectando) {
+        return;
+    }
+    let clave = ui.get_conexion_key().to_string();
+    let textos = textos_conexion_agente();
+    if clave.trim().is_empty() {
+        con_estado(|estado| {
+            estado.conexion_estado_texto = textos.clave_vacia;
+            estado.conexion_estado_error = true;
+        });
+        actualizar(ui);
+        return;
+    }
+
+    con_estado(|estado| {
+        estado.conexion_conectando = true;
+        estado.conexion_estado_texto.clear();
+        estado.conexion_estado_error = false;
+    });
+    actualizar(ui);
+
+    let debil = ui.as_weak();
+    std::thread::spawn(move || {
+        let ruta = config::ruta();
+        let resultado = cliente::conectar_gemini(&ruta, &clave);
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = debil.upgrade() else { return };
+            let mut reenviar = false;
+            con_estado(|estado| {
+                estado.conexion_conectando = false;
+                match resultado {
+                    Ok(res) => {
+                        if res.guardada {
+                            estado.agente = config::cargar();
+                        }
+                        match res.estado {
+                            EstadoConexion::Conectado => {
+                                estado.conexion_abierta = false;
+                                estado.conexion_estado_texto.clear();
+                                estado.conexion_estado_error = false;
+                                estado.aviso = res.mensaje;
+                                reenviar = !ui.get_agente_texto().trim().is_empty()
+                                    || !estado.adjuntos.is_empty();
+                            }
+                            EstadoConexion::ClaveInvalida | EstadoConexion::SinInternet => {
+                                estado.conexion_estado_texto = res.mensaje;
+                                estado.conexion_estado_error = true;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        estado.conexion_estado_texto = err;
+                        estado.conexion_estado_error = true;
+                    }
+                }
+            });
+            if !con_estado(|estado| estado.conexion_abierta) {
+                ui.set_conexion_key("".into());
+                ui.set_conexion_ver_key(false);
+            }
+            actualizar(&ui);
+            if reenviar {
+                enviar_agente(&ui);
+            }
+        });
+    });
+}
+
 /// Manda la pregunta al modelo en un hilo y vuelve al bucle de la ventana.
 fn enviar_agente(ui: &AppWindow) {
     if con_estado(|estado| estado.pensando || estado.leyendo_archivo) {
+        return;
+    }
+    let agente = con_estado(|estado| estado.agente.clone());
+    if !agente.lista() {
+        con_estado(|estado| {
+            estado.conexion_abierta = true;
+            estado.conexion_estado_texto.clear();
+            estado.conexion_estado_error = false;
+            estado.panel = false;
+            estado.aviso.clear();
+            estado.error = None;
+        });
+        actualizar(ui);
         return;
     }
     let pregunta_escrita = ui.get_agente_texto().trim().to_string();
@@ -1366,18 +1548,6 @@ fn enviar_agente(ui: &AppWindow) {
     } else {
         pregunta_escrita
     };
-    let agente = con_estado(|estado| estado.agente.clone());
-    if !agente.lista() {
-        con_estado(|estado| {
-            estado.aviso = "Falta la clave del agente: Ajustes → Agente.".to_string();
-            estado.error = Some(
-                "El agente no tiene clave. Ábrela en Ajustes → Agente y guárdala.".to_string(),
-            );
-            estado.panel = false;
-        });
-        actualizar(ui);
-        return;
-    }
 
     let datos = con_estado(|estado| estado.datos.clone()).unwrap_or_else(datos_vacios);
     let ahora = Local::now();
@@ -1846,6 +2016,10 @@ fn actualizar(ui: &AppWindow) {
     ui.set_agente_adjuntos(ModelRc::new(VecModel::from(vista.agente_adjuntos)));
     ui.set_agente_leyendo(vista.agente_leyendo);
     ui.set_agente_hay_conversacion(vista.agente_hay_conversacion);
+    ui.set_conexion_abierta(vista.conexion_abierta);
+    ui.set_conexion_conectando(vista.conexion_conectando);
+    ui.set_conexion_estado_texto(vista.conexion_estado_texto);
+    ui.set_conexion_estado_error(vista.conexion_estado_error);
 }
 
 fn construir_vista() -> Vista {
@@ -2016,6 +2190,10 @@ fn construir_vista() -> Vista {
                 .collect(),
             agente_leyendo: estado.leyendo_archivo,
             agente_hay_conversacion: !estado.conversacion.esta_vacia(),
+            conexion_abierta: estado.conexion_abierta,
+            conexion_conectando: estado.conexion_conectando,
+            conexion_estado_texto: estado.conexion_estado_texto.clone().into(),
+            conexion_estado_error: estado.conexion_estado_error,
         }
     })
 }

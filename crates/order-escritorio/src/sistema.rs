@@ -64,6 +64,30 @@ pub fn abrir_en_navegador(url: &str) {
     }
 }
 
+/// Lee texto plano del portapapeles del sistema (Wayland con `wl-paste`, con
+/// respaldo para X11 vía `xclip` o `xsel`).
+pub fn leer_portapapeles() -> Option<String> {
+    for (programa, args) in [
+        ("wl-paste", &["--no-newline"][..]),
+        ("xclip", &["-o", "-selection", "clipboard"][..]),
+        ("xsel", &["-ob"][..]),
+    ] {
+        let Ok(salida) = std::process::Command::new(programa).args(args).output() else {
+            continue;
+        };
+        if !salida.status.success() {
+            continue;
+        }
+        if let Ok(texto) = String::from_utf8(salida.stdout) {
+            let limpio = texto.trim().to_string();
+            if !limpio.is_empty() {
+                return Some(limpio);
+            }
+        }
+    }
+    None
+}
+
 fn datos_actuales() -> Option<Datos> {
     DATOS.lock().ok().and_then(|guardados| guardados.clone())
 }

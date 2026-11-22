@@ -5,7 +5,7 @@
 // Colores y tamaños salen de tema.slint.
 
 import { Tema } from "tema.slint";
-import { Boton, Etiqueta } from "formularios.slint";
+import { Boton, CampoClave, Etiqueta } from "formularios.slint";
 import { ScrollView } from "std-widgets.slint";
 
 /// Una acción propuesta, ya descrita en español por puente.rs.
@@ -351,6 +351,178 @@ export component PanelAgente inherits Rectangle {
                             clicked => { root.descartar(accion.indice); }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Tarjeta de conexión guiada cuando aún no hay clave del agente.
+export component TarjetaConexionAgente inherits Rectangle {
+    in property <string> titulo;
+    in property <string> paso-1;
+    in property <string> paso-2;
+    in property <string> paso-3;
+    in property <string> texto-abrir-studio;
+    in property <string> texto-pegar;
+    in property <string> etiqueta-clave;
+    in property <string> pista-clave;
+    in property <string> texto-conectar;
+    in property <string> texto-conectando;
+    in property <string> texto-otro-proveedor;
+
+    in-out property <string> clave;
+    in property <bool> ver-clave: false;
+    in property <bool> conectando: false;
+    in property <string> estado-texto: "";
+    in property <bool> estado-error: false;
+
+    callback abrir-studio();
+    callback pegar-clave();
+    callback alternar-clave();
+    callback conectar();
+    callback otro-proveedor();
+    callback cerrar();
+
+    height: Tema.alto-tarjeta-conexion;
+    background: Tema.fondo-panel-alto;
+
+    Rectangle {
+        y: 0;
+        width: parent.width;
+        height: Tema.linea;
+        background: Tema.borde;
+    }
+
+    VerticalLayout {
+        x: Tema.espacio-xl;
+        y: Tema.espacio-sm;
+        width: parent.width - 2 * Tema.espacio-xl;
+        height: parent.height - Tema.espacio-sm - Tema.espacio-md;
+        spacing: Tema.espacio-sm;
+
+        HorizontalLayout {
+            spacing: Tema.espacio-sm;
+            cross-axis-alignment: center;
+
+            Text {
+                horizontal-stretch: 1;
+                text: root.titulo;
+                font-family: Tema.fuente-titulos;
+                font-size: Tema.tamano-seccion;
+                font-weight: 700;
+                letter-spacing: Tema.letra-normal;
+                color: Tema.acento;
+                overflow: elide;
+            }
+
+            Boton {
+                texto: "Cerrar";
+                width: Tema.ancho-boton-cerrar;
+                clicked => { root.cerrar(); }
+            }
+        }
+
+        VerticalLayout {
+            spacing: Tema.espacio-2xs;
+
+            Text {
+                text: root.paso-1;
+                font-size: Tema.tamano-pequeno;
+                color: Tema.texto;
+                wrap: word-wrap;
+            }
+
+            Text {
+                text: root.paso-2;
+                font-size: Tema.tamano-pequeno;
+                color: Tema.texto;
+                wrap: word-wrap;
+            }
+
+            Text {
+                text: root.paso-3;
+                font-size: Tema.tamano-pequeno;
+                color: Tema.texto;
+                wrap: word-wrap;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Tema.espacio-sm;
+            cross-axis-alignment: center;
+
+            Boton {
+                texto: root.texto-abrir-studio;
+                principal: true;
+                width: Tema.ancho-boton-studio;
+                clicked => { root.abrir-studio(); }
+            }
+
+            Boton {
+                texto: root.texto-pegar;
+                width: Tema.ancho-boton-pegar;
+                clicked => { root.pegar-clave(); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Tema.espacio-sm;
+            cross-axis-alignment: end;
+
+            CampoClave {
+                horizontal-stretch: 1;
+                etiqueta: root.etiqueta-clave;
+                texto <=> root.clave;
+                pista: root.pista-clave;
+                ver: root.ver-clave;
+                mal: root.estado-error;
+                alternar => { root.alternar-clave(); }
+            }
+
+            Boton {
+                texto: root.conectando ? root.texto-conectando : root.texto-conectar;
+                principal: true;
+                width: Tema.ancho-boton-conectar;
+                clicked => {
+                    if (!root.conectando) {
+                        root.conectar();
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Tema.espacio-sm;
+            cross-axis-alignment: center;
+
+            Text {
+                horizontal-stretch: 1;
+                text: root.estado-texto;
+                font-size: Tema.tamano-hora;
+                color: root.estado-error ? Tema.texto-error : Tema.acento;
+                overflow: elide;
+            }
+
+            Rectangle {
+                width: Tema.ancho-enlace-proveedor;
+                height: Tema.alto-chip;
+                border-radius: Tema.radio-pequeno;
+                background: otro-ta.has-hover ? Tema.fondo-hover : transparent;
+
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    text: root.texto-otro-proveedor;
+                    font-size: Tema.tamano-hora;
+                    color: otro-ta.has-hover ? Tema.acento : Tema.texto-suave;
+                }
+
+                otro-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.otro-proveedor(); }
                 }
             }
         }
