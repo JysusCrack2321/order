@@ -123,8 +123,10 @@ component Banner inherits Rectangle {
 export component AppWindow inherits Window {
     title: "ORDER";
     no-frame: true;
-    width: Tema.ancho-ventana;
-    height: Tema.alto-ventana;
+    // Sin tamaño fijo: la ventana se adapta al tamaño que le dé el
+    // compositor y el contenido la llena entera. Solo se pone un mínimo.
+    min-width: Tema.ancho-minimo-ventana;
+    min-height: Tema.alto-minimo-ventana;
     background: Tema.fondo;
     default-font-family: Tema.fuente-texto;
     default-font-size: Tema.tamano-texto;

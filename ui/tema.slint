@@ -88,8 +88,12 @@ export global Tema {
     out property <length> separacion-linea: 1px;
 
     // --- Medidas de la ventana y de la rejilla ---------------------------
-    out property <length> ancho-ventana: 1060px;
-    out property <length> alto-ventana: 780px;
+    // La ventana NO tiene tamaño fijo: el contenido estira con ella y estas
+    // medidas son solo el mínimo razonable para que la rejilla se lea.
+    // (Fijar `width`/`height` en la Window haría que Slint la tratara como
+    // layout fijo y el contenido dejaría de seguir el tamaño real.)
+    out property <length> ancho-minimo-ventana: 940px;
+    out property <length> alto-minimo-ventana: 620px;
 
     out property <length> alto-cabecera: 72px;
     out property <length> alto-cabecera-dia: 46px;
