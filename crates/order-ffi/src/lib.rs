@@ -18,6 +18,7 @@ use order_core::avisos::{self, Registro};
 use order_core::conflictos;
 use order_core::filtros::{Filtro, TipoFecha};
 use order_core::modelo::{self, Ajustes, Datos, Dia, ErrorDatos, FORMATO_FECHA, Semestre, Tarea};
+use order_core::moodle::{self, EstadoMoodle};
 use order_core::ops;
 use order_core::presentacion::formularios::{self, ErrorCampo, interpretar_fecha, interpretar_hora, opcional};
 use order_core::presentacion::materias::{self, materias_de, tono_materia};
@@ -319,6 +320,7 @@ pub struct TareaFormFfi {
     pub fecha_iso: String,
     pub hora_texto: String,
     pub hecha: bool,
+    pub enlace: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -531,6 +533,22 @@ pub struct ResultadoAplicarTodasFfi {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct EstadoMoodleFfi {
+    pub conectado: bool,
+    pub sitio: String,
+    pub usuario: String,
+    pub texto_estado: String,
+    pub requiere_reingreso: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct ResumenSyncFfi {
+    pub creadas: u32,
+    pub actualizadas: u32,
+    pub hechas: u32,
+}
+
 // ---------------------------------------------------------------------------
 // Rutas, carga, advertencias y conflictos
 // ---------------------------------------------------------------------------
@@ -738,6 +756,7 @@ pub fn obtener_tarea_form(ruta: String, id: Option<String>) -> Result<TareaFormF
                 fecha_iso: tarea.vence.format(FORMATO_FECHA).to_string(),
                 hora_texto: hora_texto(tarea.vence.time()),
                 hecha: tarea.hecha,
+                enlace: tarea.enlace.unwrap_or_default(),
             })
         }
         None => {
@@ -749,6 +768,7 @@ pub fn obtener_tarea_form(ruta: String, id: Option<String>) -> Result<TareaFormF
                 fecha_iso: defecto.format(FORMATO_FECHA).to_string(),
                 hora_texto: hora_texto(construir_hora(23, 59)),
                 hecha: false,
+                enlace: String::new(),
             })
         }
     }
@@ -1759,6 +1779,63 @@ pub fn transcribir(ruta_config: String, wav: Vec<u8>) -> Result<String, ErrorFfi
     }
     voz::transcribir(&cfg.voz, &wav).map_err(|e| ErrorFfi::Operacion {
         mensaje: e.to_string(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Moodle
+// ---------------------------------------------------------------------------
+
+fn estado_moodle_a_ffi(est: EstadoMoodle) -> EstadoMoodleFfi {
+    EstadoMoodleFfi {
+        conectado: est.conectado,
+        sitio: est.sitio,
+        usuario: est.usuario,
+        texto_estado: est.texto_estado,
+        requiere_reingreso: est.requiere_reingreso,
+    }
+}
+
+#[uniffi::export]
+pub fn moodle_conectar(
+    ruta_config: String,
+    sitio: String,
+    usuario: String,
+    contrasena: String,
+) -> Result<EstadoMoodleFfi, ErrorFfi> {
+    let estado = moodle::conectar(Path::new(&ruta_config), &sitio, &usuario, &contrasena)
+        .map_err(|e| ErrorFfi::Operacion {
+            mensaje: e.to_string(),
+        })?;
+    Ok(estado_moodle_a_ffi(estado))
+}
+
+#[uniffi::export]
+pub fn moodle_estado(ruta_config: String) -> EstadoMoodleFfi {
+    estado_moodle_a_ffi(moodle::config::estado_de(Path::new(&ruta_config)))
+}
+
+#[uniffi::export]
+pub fn moodle_sincronizar(
+    ruta_datos: String,
+    ruta_config: String,
+) -> Result<ResumenSyncFfi, ErrorFfi> {
+    let hoy = Local::now().date_naive();
+    let resumen = moodle::sincronizar_ahora(Path::new(&ruta_datos), Path::new(&ruta_config), hoy)
+        .map_err(|e| ErrorFfi::Operacion {
+            mensaje: e.to_string(),
+        })?;
+    Ok(ResumenSyncFfi {
+        creadas: resumen.creadas,
+        actualizadas: resumen.actualizadas,
+        hechas: resumen.hechas,
+    })
+}
+
+#[uniffi::export]
+pub fn moodle_desconectar(ruta_config: String) -> Result<(), ErrorFfi> {
+    moodle::config::borrar_en(Path::new(&ruta_config)).map_err(|mensaje| ErrorFfi::Operacion {
+        mensaje,
     })
 }
 
@@ -3262,5 +3339,118 @@ hora = "18:00"
         nueva_conversacion();
         assert!(!ruta_conv.exists());
         assert!(!hay_conversacion_en(ruta_cfg));
+    }
+
+    #[test]
+    fn moodle_ffi_conectar_sincronizar_estado_y_desconectar() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering as AtomicOrdering},
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind moodle ffi");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let addr = listener.local_addr().expect("addr");
+        let parar = Arc::new(AtomicBool::new(false));
+        let parar_h = Arc::clone(&parar);
+
+        let handle = std::thread::spawn(move || {
+            while !parar_h.load(AtomicOrdering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+                        let mut buf = [0u8; 4096];
+                        let n = stream.read(&mut buf).unwrap_or(0);
+                        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let (cab, cuerpo) = req.split_once("\r\n\r\n").unwrap_or((&req, ""));
+                        let ruta = cab
+                            .lines()
+                            .next()
+                            .and_then(|l| l.split_whitespace().nth(1))
+                            .unwrap_or("/");
+                        let json_resp = if ruta.contains("service-nologin.php") {
+                            r#"[{"error":false,"data":{"typeoflogin":1,"enablemobilewebservice":1}}]"#
+                                .to_string()
+                        } else if ruta.contains("login/token.php") {
+                            if cuerpo.contains("password=mala") {
+                                r#"{"error":"Invalid","errorcode":"invalidlogin"}"#.to_string()
+                            } else {
+                                r#"{"token":"tok-ffi-1"}"#.to_string()
+                            }
+                        } else if cuerpo.contains("core_webservice_get_site_info") {
+                            r#"{"fullname":"Carlos UNAL","userid":7}"#.to_string()
+                        } else if cuerpo.contains("core_calendar_get_action_events_by_timesort") {
+                            r#"{"events":[{"id":1,"name":"Taller FFI","timesort":1795823940,"modulename":"assign","instance":77,"url":"https://moodle.test/mod/assign/view.php?id=77","course":{"id":5,"fullname":"[2022888] Control"}}]}"#.to_string()
+                        } else if cuerpo.contains("mod_assign_get_submission_status") {
+                            r#"{"lastattempt":{"submission":{"status":"new"}}}"#.to_string()
+                        } else {
+                            "{}".to_string()
+                        };
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json_resp}",
+                            json_resp.len()
+                        );
+                        let _ = stream.write_all(resp.as_bytes());
+                        let _ = stream.flush();
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let url = format!("http://{addr}");
+        let dir = TempDir::new().expect("tempdir");
+        let ruta_datos = ruta_temp(&dir);
+        let ruta_cfg = dir.path().join("moodle.toml").to_string_lossy().into_owned();
+        cargar(ruta_datos.clone()).expect("cargar");
+
+        assert!(!moodle_estado(ruta_cfg.clone()).conectado);
+
+        let err = moodle_conectar(ruta_cfg.clone(), url.clone(), "carlos".into(), "mala".into())
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Usuario o contraseña incorrectos.");
+
+        let est = moodle_conectar(ruta_cfg.clone(), url, "carlos".into(), "buena".into())
+            .expect("conectar");
+        assert!(est.conectado);
+        assert_eq!(est.usuario, "Carlos UNAL");
+
+        let resumen = moodle_sincronizar(ruta_datos.clone(), ruta_cfg.clone()).expect("sync");
+        assert_eq!(resumen.creadas, 1);
+
+        let pend = vista_pendientes(
+            ruta_datos.clone(),
+            FiltroPendientesFfi {
+                materia: None,
+                tipo_fecha: TipoFechaFfi::Todas,
+                desde_iso: None,
+                hasta_iso: None,
+                hora_desde: None,
+                hora_hasta: None,
+                mostrar_hechas: true,
+            },
+        )
+        .expect("pendientes");
+        let t = pend
+            .tareas
+            .iter()
+            .find(|t| t.titulo == "Taller FFI")
+            .expect("tarea moodle");
+        let form = obtener_tarea_form(ruta_datos, Some(t.id.clone())).expect("form");
+        assert_eq!(form.enlace, "https://moodle.test/mod/assign/view.php?id=77");
+
+        let est_tras = moodle_estado(ruta_cfg.clone());
+        assert!(est_tras.texto_estado.contains("Carlos UNAL"));
+
+        moodle_desconectar(ruta_cfg.clone()).expect("desconectar");
+        assert!(!moodle_estado(ruta_cfg).conectado);
+
+        parar.store(true, AtomicOrdering::Relaxed);
+        let _ = handle.join();
     }
 }
