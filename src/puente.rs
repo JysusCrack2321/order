@@ -14,6 +14,7 @@ use crate::agente::acciones::{self, Accion};
 use crate::agente::cliente::{self, ErrorAgente};
 use crate::agente::config::{self, AgenteConfig, Proveedor};
 use crate::agente::contexto;
+use crate::agente::voz::{self, Grabacion};
 use crate::almacen::Almacen;
 use crate::filtros::{Filtro, TipoFecha};
 use crate::modelo::{
@@ -26,6 +27,7 @@ use crate::semana;
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Timelike, Weekday};
 use slint::{ModelRc, SharedString, VecModel, Weak};
 use std::cell::RefCell;
+use std::time::Duration;
 
 slint::include_modules!();
 
@@ -139,6 +141,10 @@ struct Estado {
     panel: bool,
     /// Aviso de la barra (clave ausente, por ejemplo).
     aviso: String,
+    /// Grabación de voz en curso (el flujo de cpal vive en el hilo principal).
+    grabacion: Option<Grabacion>,
+    /// Reloj del indicador rojo de la barra.
+    temporizador: Option<slint::Timer>,
 }
 
 impl Estado {
@@ -160,6 +166,8 @@ impl Estado {
             pensando: false,
             panel: false,
             aviso: String::new(),
+            grabacion: None,
+            temporizador: None,
         }
     }
 }
@@ -214,6 +222,8 @@ struct Vista {
     agente_panel: bool,
     agente_aviso: SharedString,
     agente_nota: SharedString,
+    agente_grabando: bool,
+    agente_tiempo: SharedString,
 }
 
 // ---------------------------------------------------------------------------
@@ -320,9 +330,24 @@ pub fn mostrar_advertencias(advertencias: &[ErrorDatos]) {
 // ---------------------------------------------------------------------------
 
 fn conectar(ui: &AppWindow) {
-    // Cerrar con la X oculta la ventana: ORDER sigue en la bandeja.
-    ui.window()
-        .on_close_requested(|| slint::CloseRequestResponse::HideWindow);
+    // Cerrar con la X oculta la ventana: ORDER sigue en la bandeja. Si se
+    // estaba grabando, el micrófono se suelta.
+    let debil = ui.as_weak();
+    ui.window().on_close_requested(move || {
+        if let Some(ui) = debil.upgrade() {
+            if let Some(grabacion) = con_estado(|estado| estado.grabacion.take()) {
+                drop(grabacion);
+                con_estado(|estado| {
+                    if let Some(temporizador) = estado.temporizador.take() {
+                        temporizador.stop();
+                    }
+                });
+                ui.set_agente_grabando(false);
+                ui.set_agente_tiempo("".into());
+            }
+        }
+        slint::CloseRequestResponse::HideWindow
+    });
 
     let debil = ui.as_weak();
     ui.on_semana_anterior(move || mover(&debil, -7));
@@ -592,6 +617,18 @@ fn conectar(ui: &AppWindow) {
     ui.on_alternar_clave(move || {
         let Some(ui) = debil.upgrade() else { return };
         ui.set_a_ver_key(!ui.get_a_ver_key());
+    });
+
+    let debil = ui.as_weak();
+    ui.on_alternar_clave_voz(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        ui.set_v_ver_key(!ui.get_v_ver_key());
+    });
+
+    let debil = ui.as_weak();
+    ui.on_grabar_voz(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        grabar_voz(&ui);
     });
 }
 
@@ -1084,6 +1121,10 @@ fn abrir_agente(ui: &AppWindow) {
     ui.set_a_modelo(agente.modelo.into());
     ui.set_a_key(agente.api_key.into());
     ui.set_a_ver_key(false);
+    ui.set_v_url(agente.voz.url_base.into());
+    ui.set_v_modelo(agente.voz.modelo.into());
+    ui.set_v_key(agente.voz.api_key.into());
+    ui.set_v_ver_key(false);
     abrir_panel(ui, 5);
 }
 
@@ -1108,12 +1149,25 @@ fn guardar_agente(ui: &AppWindow) {
         return;
     }
 
+    // La voz tiene sus propios valores por defecto: un campo vacío no deja la
+    // sección sin URL ni modelo.
+    let defecto = config::Voz::default();
+    let voz = config::Voz {
+        url_base: valor_o(ui.get_v_url().trim(), &defecto.url_base),
+        modelo: valor_o(ui.get_v_modelo().trim(), &defecto.modelo),
+        api_key: ui.get_v_key().trim().to_string(),
+    };
+    if !voz.api_key.is_empty() && !voz.url_base.starts_with("http") {
+        falta(ui, 3, "La URL de la voz debe empezar por http:// o https://.");
+        return;
+    }
+
     let agente = AgenteConfig {
         proveedor: Proveedor::de_codigo(ui.get_a_proveedor()),
         url_base: url,
         modelo,
         api_key: ui.get_a_key().trim().to_string(),
-        voz: con_estado(|estado| estado.agente.voz.clone()),
+        voz,
     };
 
     match config::guardar(&agente) {
@@ -1312,6 +1366,130 @@ fn aplicar_todas(ui: &AppWindow) {
 }
 
 // ---------------------------------------------------------------------------
+// Voz
+// ---------------------------------------------------------------------------
+
+/// El botón del micrófono: empieza a grabar o detiene y transcribe.
+fn grabar_voz(ui: &AppWindow) {
+    if con_estado(|estado| estado.grabacion.is_some()) {
+        detener_y_transcribir(ui);
+        return;
+    }
+    if con_estado(|estado| estado.pensando) {
+        return;
+    }
+
+    match voz::empezar() {
+        Ok(grabacion) => {
+            // Reloj del indicador rojo mientras se graba.
+            let debil = ui.as_weak();
+            let temporizador = slint::Timer::default();
+            temporizador.start(
+                slint::TimerMode::Repeated,
+                Duration::from_millis(500),
+                move || {
+                    if let Some(ui) = debil.upgrade() {
+                        let segundos =
+                            con_estado(|estado| estado.grabacion.as_ref().map(Grabacion::segundos));
+                        if let Some(segundos) = segundos {
+                            ui.set_agente_tiempo(formato_tiempo(segundos).into());
+                        }
+                    }
+                },
+            );
+            con_estado(|estado| {
+                estado.grabacion = Some(grabacion);
+                estado.temporizador = Some(temporizador);
+                estado.aviso.clear();
+                estado.error = None;
+            });
+            ui.set_agente_grabando(true);
+            ui.set_agente_tiempo("0:00".into());
+            actualizar(ui);
+        }
+        Err(mensaje) => aviso(ui, &format!("No se pudo usar el micrófono — {mensaje}")),
+    }
+}
+
+/// Detiene la grabación, arma el WAV y lanza la transcripción en un hilo.
+fn detener_y_transcribir(ui: &AppWindow) {
+    let Some(grabacion) = con_estado(|estado| estado.grabacion.take()) else {
+        return;
+    };
+    con_estado(|estado| {
+        if let Some(temporizador) = estado.temporizador.take() {
+            temporizador.stop();
+        }
+    });
+    ui.set_agente_grabando(false);
+    ui.set_agente_tiempo("".into());
+
+    let (muestras, tasa, canales) = grabacion.detener();
+    let segundos = muestras.len() as f32 / canales.max(1) as f32 / tasa.max(1) as f32;
+    if segundos < 0.4 {
+        aviso(ui, "La grabación quedó vacía; revisa el micrófono.");
+        return;
+    }
+    let wav = match voz::a_wav(&muestras, tasa, canales) {
+        Ok(wav) => wav,
+        Err(mensaje) => {
+            aviso(ui, &format!("No se pudo preparar el audio — {mensaje}"));
+            return;
+        }
+    };
+
+    let config_voz = con_estado(|estado| estado.agente.voz.clone());
+    if !config_voz.lista() {
+        con_estado(|estado| {
+            estado.error =
+                Some("La voz no tiene clave: Ajustes → Agente → Voz.".to_string());
+        });
+        actualizar(ui);
+        return;
+    }
+
+    con_estado(|estado| estado.aviso = "transcribiendo…".to_string());
+    actualizar(ui);
+    let debil = ui.as_weak();
+    std::thread::spawn(move || {
+        let salida = voz::transcribir(&config_voz, &wav);
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = debil.upgrade() {
+                recibir_transcripcion(&ui, salida);
+            }
+        });
+    });
+}
+
+fn recibir_transcripcion(ui: &AppWindow, salida: Result<String, ErrorAgente>) {
+    match salida {
+        Ok(texto) => {
+            // Se respeta lo que el usuario ya hubiera escrito.
+            let actual = ui.get_agente_texto().trim().to_string();
+            let nuevo = if actual.is_empty() {
+                texto
+            } else {
+                format!("{actual} {texto}")
+            };
+            ui.set_agente_texto(nuevo.into());
+            con_estado(|estado| estado.aviso.clear());
+        }
+        Err(error) => {
+            con_estado(|estado| {
+                estado.aviso.clear();
+                estado.error = Some(format!("No se pudo transcribir — {error}"));
+            });
+        }
+    }
+    actualizar(ui);
+}
+
+/// "0:07" para el indicador de grabación.
+fn formato_tiempo(segundos: u64) -> String {
+    format!("{}:{:02}", segundos / 60, segundos % 60)
+}
+
+// ---------------------------------------------------------------------------
 // Volcado a la ventana
 // ---------------------------------------------------------------------------
 
@@ -1368,6 +1546,8 @@ fn actualizar(ui: &AppWindow) {
     ui.set_agente_panel(vista.agente_panel);
     ui.set_agente_aviso(vista.agente_aviso);
     ui.set_agente_nota(vista.agente_nota);
+    ui.set_agente_grabando(vista.agente_grabando);
+    ui.set_agente_tiempo(vista.agente_tiempo);
 }
 
 fn construir_vista() -> Vista {
@@ -1511,6 +1691,13 @@ fn construir_vista() -> Vista {
             agente_panel: estado.panel,
             agente_aviso: estado.aviso.clone().into(),
             agente_nota: estado.nota.clone().into(),
+            agente_grabando: estado.grabacion.is_some(),
+            agente_tiempo: estado
+                .grabacion
+                .as_ref()
+                .map(|grabacion| formato_tiempo(grabacion.segundos()))
+                .unwrap_or_default()
+                .into(),
         }
     })
 }
@@ -2298,6 +2485,16 @@ fn opcional(texto: &str) -> Option<String> {
         None
     } else {
         Some(texto.to_string())
+    }
+}
+
+/// Texto escrito o, si está vacío, el valor por defecto.
+fn valor_o(texto: &str, defecto: &str) -> String {
+    let texto = texto.trim();
+    if texto.is_empty() {
+        defecto.to_string()
+    } else {
+        texto.to_string()
     }
 }
 

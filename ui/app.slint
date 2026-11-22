@@ -246,12 +246,19 @@ export component AppWindow inherits Window {
     in property <bool> agente-panel: false;
     in property <string> agente-aviso: "";
     in property <string> agente-nota: "";
+    in property <bool> agente-grabando: false;
+    in property <string> agente-tiempo: "";
     // Ajustes → Agente (el proveedor va por fichas, 0–3).
     in-out property <int> a-proveedor: 0;
     in-out property <string> a-url: "";
     in-out property <string> a-modelo: "";
     in-out property <string> a-key: "";
     in-out property <bool> a-ver-key: false;
+    // Ajustes → Agente → Voz.
+    in-out property <string> v-url: "";
+    in-out property <string> v-modelo: "";
+    in-out property <string> v-key: "";
+    in-out property <bool> v-ver-key: false;
 
     // --- Selector abierto (fecha, hora o materia) -------------------------
     // 0 = ninguno · 1 = fecha · 2 = hora · 3 = materia. `sel-campo` dice qué
@@ -315,6 +322,8 @@ export component AppWindow inherits Window {
     callback abrir-agente();
     callback elegir-proveedor(int);
     callback alternar-clave();
+    callback grabar-voz();
+    callback alternar-clave-voz();
 
     Rectangle {
         width: parent.width;
@@ -531,7 +540,10 @@ export component AppWindow inherits Window {
                 texto <=> root.agente-texto;
                 pensando: root.agente-pensando;
                 aviso: root.agente-aviso;
+                grabando: root.agente-grabando;
+                tiempo: root.agente-tiempo;
                 enviar => { root.agente-enviar(); }
+                grabar => { root.grabar-voz(); }
             }
 
             // --- Pie ------------------------------------------------------
@@ -1042,6 +1054,44 @@ export component AppWindow inherits Window {
                             wrap: word-wrap;
                             font-size: Tema.tamano-hora;
                             color: Tema.texto-aviso;
+                        }
+
+                        Rectangle {
+                            height: Tema.linea;
+                            background: Tema.borde-suave;
+                        }
+
+                        Etiqueta {
+                            text: "Voz (Whisper por API)";
+                        }
+
+                        Campo {
+                            etiqueta: "URL base de la voz";
+                            texto <=> root.v-url;
+                            pista: "https://api.openai.com/v1";
+                            mal: root.campo-mal == 3;
+                        }
+
+                        Campo {
+                            etiqueta: "Modelo de voz";
+                            texto <=> root.v-modelo;
+                            pista: "whisper-1";
+                            mal: root.campo-mal == 4;
+                        }
+
+                        CampoClave {
+                            etiqueta: "API key de la voz";
+                            texto <=> root.v-key;
+                            pista: "sk-…";
+                            ver: root.v-ver-key;
+                            alternar => { root.alternar-clave-voz(); }
+                        }
+
+                        Text {
+                            text: "Groq: https://api.groq.com/openai/v1 con whisper-large-v3-turbo.";
+                            wrap: word-wrap;
+                            font-size: Tema.tamano-hora;
+                            color: Tema.texto-tenue;
                         }
                     }
                 }

@@ -19,8 +19,12 @@ export component BarraAgente inherits Rectangle {
     in-out property <string> texto;
     in property <bool> pensando: false;
     in property <string> aviso: "";
+    // Grabación de voz en curso y su tiempo ("0:07").
+    in property <bool> grabando: false;
+    in property <string> tiempo: "";
 
     callback enviar();
+    callback grabar();
 
     height: Tema.alto-barra-agente;
     background: Tema.fondo-panel;
@@ -78,6 +82,37 @@ export component BarraAgente inherits Rectangle {
                 font-size: Tema.tamano-pequeno;
                 overflow: elide;
             }
+        }
+
+        // Micrófono: clic para grabar, clic para detener y transcribir.
+        Rectangle {
+            width: Tema.ancho-boton-mic;
+            height: Tema.alto-campo;
+            border-radius: Tema.radio-pequeno;
+            border-width: Tema.linea;
+            border-color: root.grabando ? Tema.vencida : (mic.has-hover ? Tema.acento-suave : Tema.borde-campo);
+            background: root.grabando ? Tema.fondo-error : Tema.fondo-campo;
+
+            Text {
+                width: parent.width;
+                height: parent.height;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                text: root.grabando ? "■" : "◉";
+                font-size: Tema.tamano-seccion;
+                color: root.grabando ? Tema.vencida-texto : Tema.texto-suave;
+            }
+
+            mic := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.grabar(); }
+            }
+        }
+
+        if root.grabando : Text {
+            text: root.tiempo;
+            font-size: Tema.tamano-hora;
+            color: Tema.vencida-texto;
         }
 
         if root.pensando : Text {

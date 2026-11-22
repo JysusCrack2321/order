@@ -92,6 +92,14 @@ impl Default for Voz {
     }
 }
 
+impl Voz {
+    /// ¿Se puede transcribir? URL y modelo siempre tienen valor por defecto,
+    /// así que en la práctica depende de la clave.
+    pub fn lista(&self) -> bool {
+        !self.api_key.trim().is_empty() && !self.url_base.trim().is_empty()
+    }
+}
+
 /// Lo que se guarda en `agente.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

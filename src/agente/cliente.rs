@@ -343,7 +343,7 @@ fn enviar(
     Ok((estado, texto))
 }
 
-fn comprobar(estado: u16, texto: &str) -> Result<(), ErrorAgente> {
+pub(crate) fn comprobar(estado: u16, texto: &str) -> Result<(), ErrorAgente> {
     match estado {
         200..=299 => Ok(()),
         401 | 403 => Err(ErrorAgente::Clave),

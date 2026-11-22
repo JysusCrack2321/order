@@ -8,3 +8,4 @@ pub mod acciones;
 pub mod cliente;
 pub mod config;
 pub mod contexto;
+pub mod voz;
