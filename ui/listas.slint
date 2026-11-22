@@ -119,6 +119,10 @@ export component Tarjeta inherits Rectangle {
                 color: root.tono;
             }
 
+            // El contador ("1 clase", "2") va pegado a la derecha, en la
+            // misma línea del título de la tarjeta.
+            Rectangle { horizontal-stretch: 1; }
+
             if root.detalle != "" : Text {
                 text: root.detalle;
                 font-size: Tema.tamano-hora;
@@ -226,6 +230,7 @@ export component FilaTarea inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
+            cross-axis-alignment: start;
             spacing: 0;
 
             TituloTachado {

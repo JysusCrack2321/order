@@ -25,8 +25,42 @@ export struct MateriaUI {
     tono: int,
 }
 
+/// Un renglón de una rueda. Se coloca a `desplazamiento` renglones del centro
+/// y se desvanece a medida que se aleja, en vez de quedar cortado por el borde.
+component RenglonRueda inherits Text {
+    in property <string> texto;
+    /// Distancia al centro medida en renglones: 0 = el elegido, negativo hacia
+    /// arriba. Es continua, así el renglón acompaña el arrastre.
+    in property <float> desplazamiento: 0;
+    /// Renglones que caben en la rueda: de ahí sale el desvanecido del borde.
+    in property <float> renglones: 6;
+    /// Medidas de la rueda que lo contiene (el renglón se centra en ella).
+    in property <length> ancho-rueda: 0px;
+    in property <length> alto-rueda: 0px;
+
+    x: 0;
+    y: (self.alto-rueda - self.height) / 2
+        + (self.desplazamiento * (Tema.alto-rueda-item / 1px)) * 1px;
+    width: self.ancho-rueda;
+    height: Tema.alto-rueda-item;
+    horizontal-alignment: center;
+    vertical-alignment: center;
+    text: self.texto;
+    font-family: Tema.fuente-titulos;
+    // El del centro un punto más grande; el resto se lee igual de bien.
+    font-size: Math.abs(self.desplazamiento) < 0.5 ? Tema.tamano-texto : Tema.tamano-pequeno;
+    color: Math.abs(self.desplazamiento) < 0.5
+        ? Tema.acento
+        : (Math.abs(self.desplazamiento) < 1.5 ? Tema.texto-suave : Tema.texto-tenue);
+    // Opaco en el centro y transparente justo en el borde de la rueda.
+    opacity: Math.max(0, 1 - Math.abs(self.desplazamiento) / (self.renglones / 2));
+}
+
 /// Una rueda de valores: se mueve con la rueda del ratón y arrastrando, y el
 /// valor que queda en el centro es el elegido. La banda central lo resalta.
+///
+/// La rueda es circular: los valores se repiten sin fin (arriba de 00 están
+/// 59, 58…; arriba de 1, 12, 11…), así que no hay topes ni saltos.
 component Rueda inherits Rectangle {
     in property <[string]> valores;
     /// Índice con el que abre la rueda; después manda lo que haga el usuario.
@@ -41,21 +75,25 @@ component Rueda inherits Rectangle {
     // final: así las cuentas de la rueda son simples divisiones.
     property <float> renglon: Tema.alto-rueda-item / 1px;
     property <float> alto: self.height / 1px;
-    // Posición continua dentro de la lista: 0 = primer valor en el centro.
+    property <float> cuenta: root.valores.length * 1.0;
+    // Medio giro: el desplazamiento de cada valor va de -mitad a +mitad, de
+    // manera que el valor anterior queda justo una fila arriba del 00 y el
+    // siguiente justo una fila abajo del último.
+    property <float> mitad: root.cuenta / 2;
+    // Posición continua y sin topes: 0 = primer valor en el centro.
     property <float> posicion: root.inicial;
+    property <int> centro: root.cuenta <= 0
+        ? 0
+        : Math.round(Math.mod(Math.round(root.posicion) + root.cuenta, root.cuenta));
     // Posición al empezar a arrastrar y dónde se pulsó.
     property <float> desde: 0;
     property <float> y-pulsada: 0;
-    property <int> centro: Math.round(root.posicion);
+    // Dónde está el cursor ahora (en números sueltos).
+    property <float> y-ultima: 0;
     property <int> avisado: -1;
 
+    /// Avisa del valor que quedó en el centro, si cambió.
     function acotar() {
-        if root.posicion < 0 {
-            root.posicion = 0;
-        }
-        if root.posicion > (root.valores.length - 1) * 1.0 {
-            root.posicion = (root.valores.length - 1) * 1.0;
-        }
         if root.centro != root.avisado {
             root.avisado = root.centro;
             root.elegido(root.centro);
@@ -67,12 +105,14 @@ component Rueda inherits Rectangle {
         if Math.abs(root.y-pulsada - root.y-ultima) < Tema.espacio-md / 1px {
             root.posicion = root.posicion + (root.y-ultima - root.alto / 2) / root.renglon;
         }
-        root.posicion = Math.round(root.posicion) * 1.0;
+        // Se redondea y se devuelve la posición a la primera vuelta: el dibujo
+        // es el mismo, así que no se ve ningún salto.
+        root.posicion = Math.round(root.posicion);
+        if root.cuenta > 0 {
+            root.posicion = Math.mod(root.posicion + root.cuenta, root.cuenta);
+        }
         root.acotar();
     }
-
-    // Dónde está el cursor ahora (en números sueltos).
-    property <float> y-ultima: 0;
 
     // Banda central: el valor elegido.
     Rectangle {
@@ -85,19 +125,15 @@ component Rueda inherits Rectangle {
         border-color: Tema.acento-suave;
     }
 
-    for texto[i] in root.valores : Text {
-        y: (parent.height - Tema.alto-rueda-item) / 2
-            + ((i * 1.0 - root.posicion) * root.renglon) * 1px;
-        width: parent.width;
-        height: Tema.alto-rueda-item;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        text: texto;
-        font-family: Tema.fuente-titulos;
-        font-size: i == root.centro ? Tema.tamano-texto : Tema.tamano-pequeno;
-        color: i == root.centro
-            ? Tema.acento
-            : (Math.abs(i - root.centro) == 1 ? Tema.texto-suave : Tema.texto-tenue);
+    for texto[i] in root.valores : RenglonRueda {
+        texto: texto;
+        renglones: root.alto / root.renglon;
+        ancho-rueda: root.width;
+        alto-rueda: root.height;
+        desplazamiento: Math.mod(
+            Math.mod(i - root.posicion + root.mitad, root.cuenta) + root.cuenta,
+            root.cuenta,
+        ) - root.mitad;
     }
 
     ta := TouchArea {
@@ -352,7 +388,7 @@ export component Selector inherits Rectangle {
                     height: Tema.espacio-lg;
                     horizontal-alignment: center;
                     vertical-alignment: center;
-                    text: "Rueda del ratón o arrastra; se guarda en 24 h.";
+                    text: "Rueda del ratón o arrastra.";
                     font-size: Tema.tamano-hora;
                     color: Tema.texto-tenue;
                 }

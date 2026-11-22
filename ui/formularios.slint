@@ -27,6 +27,8 @@ export component TituloTachado inherits Rectangle {
         width: min(parent.width, self.preferred-width);
         height: parent.height;
         vertical-alignment: center;
+        // El título va pegado a la izquierda, como la materia y la fecha.
+        horizontal-alignment: left;
         text: root.texto;
         font-size: Tema.tamano-texto;
         color: root.tinta;

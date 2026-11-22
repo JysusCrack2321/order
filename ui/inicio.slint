@@ -39,8 +39,6 @@ export component InicioVista inherits Rectangle {
     callback editar-tarea(string);
     callback editar-clase(string);
     callback editar-recordatorio(string);
-    callback nueva-clase();
-    callback nueva-tarea();
 
     background: transparent;
 
@@ -84,36 +82,6 @@ export component InicioVista inherits Rectangle {
                         font-weight: 700;
                         letter-spacing: Tema.letra-normal;
                         color: Tema.texto;
-                    }
-                }
-
-                Rectangle { horizontal-stretch: 1; }
-
-                Text {
-                    text: "+  Clase";
-                    font-size: Tema.tamano-pequeno;
-                    color: nueva-clase-ta.has-hover ? Tema.acento : Tema.texto-suave;
-                    vertical-alignment: center;
-                    height: Tema.alto-boton;
-
-                    nueva-clase-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.nueva-clase(); }
-                    }
-                }
-
-                Text {
-                    text: "+  Tarea";
-                    font-family: Tema.fuente-titulos;
-                    font-size: Tema.tamano-pequeno;
-                    letter-spacing: Tema.letra-normal;
-                    color: nueva-tarea-ta.has-hover ? Tema.acento : Tema.texto-suave;
-                    vertical-alignment: center;
-                    height: Tema.alto-boton;
-
-                    nueva-tarea-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.nueva-tarea(); }
                     }
                 }
             }
