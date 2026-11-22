@@ -1,5 +1,6 @@
 package com.jysusman.order
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -26,24 +27,35 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import com.jysusman.order.ffi.ResumenArchivoFfi
-import com.jysusman.order.ffi.cargar
-import com.jysusman.order.ffi.rutaPorDefecto
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.jysusman.order.datos.ObservadorCarpeta
+import com.jysusman.order.datos.PuenteOrderNativo
+import com.jysusman.order.datos.Repositorio
+import com.jysusman.order.ui.BannersEstado
+import com.jysusman.order.ui.PantallaPermisoArchivos
+import com.jysusman.order.ui.abrirAjustesPermisoArchivos
 import com.jysusman.order.ui.theme.OrderTema
 import com.jysusman.order.ui.theme.OrderTheme
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import com.jysusman.order.ui.tienePermisoArchivos
+import kotlinx.coroutines.launch
+import java.io.File
 
 enum class Pestana(val titulo: String, val icono: ImageVector) {
     Inicio("Inicio", Icons.Outlined.Home),
@@ -52,13 +64,24 @@ enum class Pestana(val titulo: String, val icono: ImageVector) {
     Pendientes("Pendientes", Icons.Outlined.CheckCircle),
 }
 
+private const val PREFS_ORDER = "order_prefs"
+private const val CLAVE_CARPETA = "carpeta_datos"
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val prefs = getSharedPreferences(PREFS_ORDER, Context.MODE_PRIVATE)
+        val puente = PuenteOrderNativo()
+        val carpetaInicial = prefs.getString(CLAVE_CARPETA, null)
+        val repositorio = Repositorio(puente = puente, carpetaInicial = carpetaInicial)
+
         setContent {
             OrderTheme {
-                OrderAppInicial(
-                    rutaFallback = filesDir.resolve("order.toml").absolutePath,
+                OrderApp(
+                    repositorio = repositorio,
+                    alCambiarCarpeta = { nueva ->
+                        prefs.edit().putString(CLAVE_CARPETA, nueva).apply()
+                    },
                 )
             }
         }
@@ -66,22 +89,66 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun OrderAppInicial(rutaFallback: String) {
-    var pestana by rememberSaveable { mutableIntStateOf(0) }
-    var resumen by remember { mutableStateOf<ResumenArchivoFfi?>(null) }
-    var errorCarga by remember { mutableStateOf<String?>(null) }
+private fun OrderApp(
+    repositorio: Repositorio,
+    alCambiarCarpeta: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
+    val estado by repositorio.estado.collectAsStateWithLifecycle()
 
-    LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
-            val ruta = runCatching { cargar(rutaPorDefecto()) }
-                .recoverCatching { cargar(rutaFallback) }
-            ruta.onSuccess { res ->
-                resumen = res
-                errorCarga = null
-            }.onFailure { err ->
-                errorCarga = err.message ?: err.toString()
+    var permisoOk by remember { mutableStateOf(tienePermisoArchivos()) }
+    var pestana by rememberSaveable { mutableIntStateOf(0) }
+
+    // Recarga al volver a primer plano (vuelta de Ajustes del permiso o Syncthing).
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val ahoraTienePermiso = tienePermisoArchivos()
+                permisoOk = ahoraTienePermiso
+                if (ahoraTienePermiso) {
+                    scope.launch { repositorio.recargar() }
+                }
             }
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Carga inicial al tener permiso.
+    LaunchedEffect(permisoOk) {
+        if (permisoOk) {
+            repositorio.cargarInicial()
+        }
+    }
+
+    // Observa la carpeta de datos cuando hay permiso.
+    DisposableEffect(permisoOk, estado.carpetaDatos) {
+        if (!permisoOk || estado.carpetaDatos.isBlank()) {
+            onDispose { }
+        } else {
+            val dir = File(estado.carpetaDatos).apply { mkdirs() }
+            val observador = ObservadorCarpeta(dir, scope) {
+                repositorio.recargar()
+            }
+            observador.startWatching()
+            onDispose { observador.detener() }
+        }
+    }
+
+    if (!permisoOk) {
+        PantallaPermisoArchivos(
+            carpeta = estado.carpetaDatos.ifBlank { "/storage/emulated/0/ORDER" },
+            onAbrirAjustes = { abrirAjustesPermisoArchivos(context) },
+            onReintentar = {
+                permisoOk = tienePermisoArchivos()
+                if (permisoOk) {
+                    scope.launch { repositorio.cargarInicial() }
+                }
+            },
+        )
+        return
     }
 
     Scaffold(
@@ -117,6 +184,13 @@ private fun OrderAppInicial(rutaFallback: String) {
                     }
                 }
                 HorizontalDivider(color = OrderTema.Borde, thickness = OrderTema.Linea)
+                BannersEstado(
+                    error = estado.error,
+                    advertencias = estado.advertencias,
+                    conflicto = estado.conflictos.firstOrNull(),
+                    onQuedarActual = { scope.launch { repositorio.resolverConflicto(usarOtra = false) } },
+                    onUsarOtra = { scope.launch { repositorio.resolverConflicto(usarOtra = true) } },
+                )
             }
         },
         bottomBar = {
@@ -169,13 +243,11 @@ private fun OrderAppInicial(rutaFallback: String) {
                     color = OrderTema.Acento,
                 )
                 Spacer(modifier = Modifier.height(OrderTema.EspacioSm))
-                val estadoTexto = when {
-                    resumen != null -> "${resumen!!.numTareas} tareas (${resumen!!.numTareasPendientes} pendientes)"
-                    errorCarga != null -> "Sin acceso al archivo: $errorCarga"
-                    else -> "Cargando…"
-                }
+                val textoEstado = estado.resumen?.let {
+                    "${it.numTareas} tareas (${it.numTareasPendientes} pendientes)"
+                } ?: if (estado.cargando) "Cargando…" else "Sin datos"
                 Text(
-                    text = estadoTexto,
+                    text = textoEstado,
                     fontSize = OrderTema.TamanoTexto,
                     color = OrderTema.TextoSuave,
                 )
