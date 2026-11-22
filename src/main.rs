@@ -2,6 +2,8 @@
 
 #[allow(dead_code)] // el almacén se consume en las tareas siguientes del plan
 mod almacen;
+#[allow(dead_code)] // los avisos los envía el reloj (Tarea 8)
+mod avisos;
 #[allow(dead_code)] // el modelo se consume en las tareas siguientes del plan
 mod modelo;
 #[allow(dead_code)] // las operaciones se usan desde los formularios (Tarea 7)
