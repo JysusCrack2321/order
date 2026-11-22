@@ -11,6 +11,7 @@
 //! con lo que el usuario había escrito.
 
 use crate::almacen::Almacen;
+use crate::filtros::{Filtro, TipoFecha};
 use crate::modelo::{
     self, Ajustes, Clase, Datos, Dia, ErrorDatos, FORMATO_FECHA, FORMATO_HORA, Recordatorio,
     Semestre, Tarea,
@@ -51,6 +52,16 @@ const DIAS_SEMANA: [Dia; 7] = [
     Dia::Sab,
     Dia::Dom,
 ];
+
+/// Campos del formulario y de la barra de filtros que abren un selector.
+/// Los del formulario usan 1–4 (ver `campo-mal` en app.slint); los filtros de
+/// Pendientes van aparte para no confundirse con ellos.
+const CAMPO_MATERIA: i32 = 1;
+const CAMPO_FILTRO_MATERIA: i32 = 21;
+const CAMPO_FILTRO_DESDE: i32 = 22;
+const CAMPO_FILTRO_HASTA: i32 = 23;
+const CAMPO_FILTRO_HORA_DESDE: i32 = 24;
+const CAMPO_FILTRO_HORA_HASTA: i32 = 25;
 
 /// Qué formulario está abierto y sobre qué elemento trabaja. El `id` vacío
 /// significa "crear"; los campos escritos viven en las propiedades de la
@@ -94,6 +105,8 @@ struct Estado {
     advertencias: Vec<String>,
     edicion: Edicion,
     seleccion: Option<Seleccion>,
+    /// Barra de filtros de Pendientes: se conserva mientras la app vive.
+    filtro: Filtro,
 }
 
 impl Estado {
@@ -105,6 +118,7 @@ impl Estado {
             advertencias: Vec::new(),
             edicion: Edicion::Ninguna,
             seleccion: None,
+            filtro: Filtro::default(),
         }
     }
 }
@@ -127,6 +141,14 @@ struct Vista {
     hay_tareas: bool,
     tareas: Vec<TareaUI>,
     recordatorios: Vec<RecordatorioUI>,
+    filtro_materia: String,
+    filtro_fecha: i32,
+    filtro_desde: String,
+    filtro_hasta: String,
+    filtro_hora_desde: String,
+    filtro_hora_hasta: String,
+    mostrar_hechas: bool,
+    filtro_activo: bool,
     resumen: String,
     pie: String,
     error: SharedString,
@@ -269,9 +291,38 @@ fn conectar(ui: &AppWindow) {
     });
 
     let debil = ui.as_weak();
-    ui.on_marcar_hecha(move |id: SharedString| {
+    ui.on_marcar_hecha(move |id: SharedString, hecha: bool| {
         let Some(ui) = debil.upgrade() else { return };
-        marcar(&ui, &id);
+        marcar(&ui, &id, hecha);
+    });
+
+    // --- Filtros de Pendientes -------------------------------------------
+    let debil = ui.as_weak();
+    ui.on_filtro_fecha(move |opcion: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        con_estado(|estado| estado.filtro.tipo_fecha = fecha_del_codigo(opcion));
+        actualizar(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_filtro_hechas(move |mostrar: bool| {
+        let Some(ui) = debil.upgrade() else { return };
+        con_estado(|estado| estado.filtro.mostrar_hechas = mostrar);
+        actualizar(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_filtro_limpiar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        con_estado(|estado| {
+            // El interruptor de hechas no es un filtro: se queda como esté.
+            let mostrar_hechas = estado.filtro.mostrar_hechas;
+            estado.filtro = Filtro {
+                mostrar_hechas,
+                ..Filtro::default()
+            };
+        });
+        actualizar(&ui);
     });
 
     // --- Clases ----------------------------------------------------------
@@ -830,10 +881,11 @@ fn borrar(ui: &AppWindow) {
     }
 }
 
-/// La casilla de Pendientes: marca la tarea como hecha hoy.
-fn marcar(ui: &AppWindow, id: &str) {
+/// La casilla de Pendientes: marca (o desmarca) la tarea. Al marcar se anota
+/// la fecha de hoy, que es la que usa el archivado a los 30 días.
+fn marcar(ui: &AppWindow, id: &str, hecha: bool) {
     let hoy = Local::now().date_naive();
-    let resultado = almacen().modificar(|doc| ops::marcar_tarea(doc, id, true, hoy));
+    let resultado = almacen().modificar(|doc| ops::marcar_tarea(doc, id, hecha, hoy));
     match resultado {
         Ok(datos) => {
             crate::sistema::publicar(&datos);
@@ -843,7 +895,8 @@ fn marcar(ui: &AppWindow, id: &str) {
             });
         }
         Err(error) => {
-            con_estado(|estado| estado.error = Some(format!("No se pudo marcar — {error}")));
+            let que = if hecha { "marcar" } else { "desmarcar" };
+            con_estado(|estado| estado.error = Some(format!("No se pudo {que} — {error}")));
         }
     }
     actualizar(ui);
@@ -875,6 +928,14 @@ fn actualizar(ui: &AppWindow) {
     ui.set_tareas(ModelRc::new(VecModel::from(vista.tareas)));
     ui.set_recordatorios(ModelRc::new(VecModel::from(vista.recordatorios)));
     ui.set_resumen_pendientes(vista.resumen.into());
+    ui.set_pm_materia(vista.filtro_materia.into());
+    ui.set_pm_fecha(vista.filtro_fecha);
+    ui.set_pm_desde(vista.filtro_desde.into());
+    ui.set_pm_hasta(vista.filtro_hasta.into());
+    ui.set_pm_hora_desde(vista.filtro_hora_desde.into());
+    ui.set_pm_hora_hasta(vista.filtro_hora_hasta.into());
+    ui.set_pm_mostrar_hechas(vista.mostrar_hechas);
+    ui.set_pm_filtro_activo(vista.filtro_activo);
     ui.set_pie(vista.pie.into());
     ui.set_error(vista.error);
     ui.set_advertencias(ModelRc::new(VecModel::from(vista.advertencias)));
@@ -906,8 +967,11 @@ fn construir_vista() -> Vista {
         let dias: Vec<DiaUI> = dias_vista.iter().map(|dia| dia_ui(dia)).collect();
         let hay_tareas = dias_vista.iter().any(|dia| !dia.tareas.is_empty());
 
+        // El pie cuenta lo pendiente de verdad; la lista, lo que pasa los
+        // filtros de la barra de Pendientes.
         let pendientes = semana::pendientes(datos);
-        let tareas: Vec<TareaUI> = pendientes
+        let visibles = estado.filtro.aplicar(&datos.tareas, ahora.date());
+        let tareas: Vec<TareaUI> = visibles
             .iter()
             .map(|tarea| TareaUI {
                 id: tarea.id.clone().into(),
@@ -921,6 +985,7 @@ fn construir_vista() -> Vista {
                 )
                 .into(),
                 vencida: semana::vencida(tarea, ahora),
+                hecha: tarea.hecha,
             })
             .collect();
 
@@ -936,10 +1001,18 @@ fn construir_vista() -> Vista {
             mostrar_ahora,
             ahora_min,
             hay_tareas,
-            resumen: resumen(&tareas),
-            pie: pie(datos, tareas.len(), ahora),
+            resumen: resumen(&tareas, estado.filtro.activo()),
+            pie: pie(datos, pendientes.len(), ahora),
             tareas,
             recordatorios: recordatorios_ui(datos),
+            filtro_materia: estado.filtro.materia.clone().unwrap_or_default(),
+            filtro_fecha: codigo_fecha(estado.filtro.tipo_fecha),
+            filtro_desde: fecha_o_vacio(estado.filtro.desde),
+            filtro_hasta: fecha_o_vacio(estado.filtro.hasta),
+            filtro_hora_desde: hora_o_vacio(estado.filtro.hora_desde),
+            filtro_hora_hasta: hora_o_vacio(estado.filtro.hora_hasta),
+            mostrar_hechas: estado.filtro.mostrar_hechas,
+            filtro_activo: estado.filtro.activo(),
             error: estado.error.clone().unwrap_or_default().into(),
             advertencias: estado
                 .advertencias
@@ -1157,6 +1230,8 @@ fn aceptar_selector(ui: &AppWindow) {
             }
         }
     }
+    // Los campos del filtro no viven en el formulario: hay que repintar.
+    actualizar(ui);
 }
 
 /// Elige una materia de la lista (o vacía con "Sin materia"). Se guarda con la
@@ -1164,10 +1239,15 @@ fn aceptar_selector(ui: &AppWindow) {
 fn aplicar_materia(ui: &AppWindow, texto: &str) {
     let materia = canonica(&materias_actuales(), texto);
     let campo = con_estado(|estado| estado.seleccion.as_ref().map(|s| s.campo));
-    if matches!(campo, Some(1)) {
-        ui.set_f_materia(materia.into());
+    match campo {
+        Some(CAMPO_MATERIA) => ui.set_f_materia(materia.into()),
+        Some(CAMPO_FILTRO_MATERIA) => {
+            con_estado(|estado| estado.filtro.materia = opcional(&materia));
+        }
+        _ => {}
     }
     cerrar_selector(ui);
+    actualizar(ui);
 }
 
 fn pintar_calendario(ui: &AppWindow) {
@@ -1193,45 +1273,68 @@ fn pintar_hora(ui: &AppWindow) {
 
 /// La fecha que muestra el campo que se va a llenar, si ya tiene una válida.
 fn fecha_del_campo(ui: &AppWindow, campo: i32) -> Option<NaiveDate> {
-    match con_estado(|estado| estado.edicion.clone()) {
-        Edicion::Tarea(_) if campo == 2 => interpretar_fecha(&ui.get_f_fecha()),
-        Edicion::Ajustes if campo == 1 => interpretar_fecha(&ui.get_a_inicio()),
-        Edicion::Ajustes if campo == 2 => interpretar_fecha(&ui.get_a_fin()),
-        _ => None,
+    match campo {
+        CAMPO_FILTRO_DESDE => con_estado(|estado| estado.filtro.desde),
+        CAMPO_FILTRO_HASTA => con_estado(|estado| estado.filtro.hasta),
+        _ => match con_estado(|estado| estado.edicion.clone()) {
+            Edicion::Tarea(_) if campo == 2 => interpretar_fecha(&ui.get_f_fecha()),
+            Edicion::Ajustes if campo == 1 => interpretar_fecha(&ui.get_a_inicio()),
+            Edicion::Ajustes if campo == 2 => interpretar_fecha(&ui.get_a_fin()),
+            _ => None,
+        },
     }
 }
 
 /// La hora que muestra el campo que se va a llenar, si ya tiene una válida.
 fn hora_del_campo(ui: &AppWindow, campo: i32) -> Option<NaiveTime> {
-    match con_estado(|estado| estado.edicion.clone()) {
-        Edicion::Tarea(_) if campo == 3 => interpretar_hora(&ui.get_f_hora()),
-        Edicion::Clase(_) if campo == 2 => interpretar_hora(&ui.get_f_hora()),
-        Edicion::Clase(_) if campo == 3 => interpretar_hora(&ui.get_f_fin()),
-        Edicion::Recordatorio(_) if campo == 2 => interpretar_hora(&ui.get_r_hora()),
-        Edicion::Ajustes if campo == 3 => interpretar_hora(&ui.get_a_hora()),
-        _ => None,
+    match campo {
+        CAMPO_FILTRO_HORA_DESDE => con_estado(|estado| estado.filtro.hora_desde),
+        CAMPO_FILTRO_HORA_HASTA => con_estado(|estado| estado.filtro.hora_hasta),
+        _ => match con_estado(|estado| estado.edicion.clone()) {
+            Edicion::Tarea(_) if campo == 3 => interpretar_hora(&ui.get_f_hora()),
+            Edicion::Clase(_) if campo == 2 => interpretar_hora(&ui.get_f_hora()),
+            Edicion::Clase(_) if campo == 3 => interpretar_hora(&ui.get_f_fin()),
+            Edicion::Recordatorio(_) if campo == 2 => interpretar_hora(&ui.get_r_hora()),
+            Edicion::Ajustes if campo == 3 => interpretar_hora(&ui.get_a_hora()),
+            _ => None,
+        },
     }
 }
 
 fn poner_fecha_en_campo(ui: &AppWindow, campo: i32, fecha: NaiveDate) {
     let texto = SharedString::from(fecha.format(FORMATO_FECHA).to_string());
-    match con_estado(|estado| estado.edicion.clone()) {
-        Edicion::Tarea(_) if campo == 2 => ui.set_f_fecha(texto),
-        Edicion::Ajustes if campo == 1 => ui.set_a_inicio(texto),
-        Edicion::Ajustes if campo == 2 => ui.set_a_fin(texto),
-        _ => {}
+    match campo {
+        // Elegir una fecha del rango enciende el filtro de rango.
+        CAMPO_FILTRO_DESDE => con_estado(|estado| {
+            estado.filtro.desde = Some(fecha);
+            estado.filtro.tipo_fecha = TipoFecha::Rango;
+        }),
+        CAMPO_FILTRO_HASTA => con_estado(|estado| {
+            estado.filtro.hasta = Some(fecha);
+            estado.filtro.tipo_fecha = TipoFecha::Rango;
+        }),
+        _ => match con_estado(|estado| estado.edicion.clone()) {
+            Edicion::Tarea(_) if campo == 2 => ui.set_f_fecha(texto),
+            Edicion::Ajustes if campo == 1 => ui.set_a_inicio(texto),
+            Edicion::Ajustes if campo == 2 => ui.set_a_fin(texto),
+            _ => {}
+        },
     }
 }
 
 fn poner_hora_en_campo(ui: &AppWindow, campo: i32, hora: NaiveTime) {
     let texto = SharedString::from(hora.format(FORMATO_HORA).to_string());
-    match con_estado(|estado| estado.edicion.clone()) {
-        Edicion::Tarea(_) if campo == 3 => ui.set_f_hora(texto),
-        Edicion::Clase(_) if campo == 2 => ui.set_f_hora(texto),
-        Edicion::Clase(_) if campo == 3 => ui.set_f_fin(texto),
-        Edicion::Recordatorio(_) if campo == 2 => ui.set_r_hora(texto),
-        Edicion::Ajustes if campo == 3 => ui.set_a_hora(texto),
-        _ => {}
+    match campo {
+        CAMPO_FILTRO_HORA_DESDE => con_estado(|estado| estado.filtro.hora_desde = Some(hora)),
+        CAMPO_FILTRO_HORA_HASTA => con_estado(|estado| estado.filtro.hora_hasta = Some(hora)),
+        _ => match con_estado(|estado| estado.edicion.clone()) {
+            Edicion::Tarea(_) if campo == 3 => ui.set_f_hora(texto),
+            Edicion::Clase(_) if campo == 2 => ui.set_f_hora(texto),
+            Edicion::Clase(_) if campo == 3 => ui.set_f_fin(texto),
+            Edicion::Recordatorio(_) if campo == 2 => ui.set_r_hora(texto),
+            Edicion::Ajustes if campo == 3 => ui.set_a_hora(texto),
+            _ => {}
+        },
     }
 }
 
@@ -1402,6 +1505,37 @@ fn dias_texto(dias: &[Dia]) -> String {
         .join(", ")
 }
 
+/// La opción de fecha de la barra de filtros: 0 Todas · 1 Hoy · 2 Esta semana
+/// · 3 Rango. El orden es el de las fichas que dibuja pendientes.slint.
+fn codigo_fecha(tipo: TipoFecha) -> i32 {
+    match tipo {
+        TipoFecha::Todas => 0,
+        TipoFecha::Hoy => 1,
+        TipoFecha::EstaSemana => 2,
+        TipoFecha::Rango => 3,
+    }
+}
+
+fn fecha_del_codigo(codigo: i32) -> TipoFecha {
+    match codigo {
+        1 => TipoFecha::Hoy,
+        2 => TipoFecha::EstaSemana,
+        3 => TipoFecha::Rango,
+        _ => TipoFecha::Todas,
+    }
+}
+
+fn fecha_o_vacio(fecha: Option<NaiveDate>) -> String {
+    fecha
+        .map(|fecha| fecha.format(FORMATO_FECHA).to_string())
+        .unwrap_or_default()
+}
+
+fn hora_o_vacio(hora: Option<NaiveTime>) -> String {
+    hora.map(|hora| hora.format(FORMATO_HORA).to_string())
+        .unwrap_or_default()
+}
+
 fn fecha_corta(fecha: NaiveDate) -> String {
     format!("{} {}", fecha.day(), MESES[fecha.month0() as usize])
 }
@@ -1433,11 +1567,28 @@ fn etiqueta_semana(lunes: NaiveDate, dias: &[semana::DiaVista]) -> String {
     }
 }
 
-fn resumen(tareas: &[TareaUI]) -> String {
-    match tareas.len() {
-        0 => "nada por entregar".to_string(),
-        1 => "1 tarea por entregar".to_string(),
-        n => format!("{n} tareas por entregar"),
+/// Lo que dice la cabecera de Pendientes: cuántas quedan y cuántas hechas se
+/// están viendo. Con filtros puestos, se dice que la lista está filtrada.
+fn resumen(tareas: &[TareaUI], filtrado: bool) -> String {
+    let hechas = tareas.iter().filter(|tarea| tarea.hecha).count();
+    let pendientes = tareas.len() - hechas;
+    let cuerpo = match (pendientes, hechas) {
+        (0, 0) if filtrado => "sin resultados para estos filtros".to_string(),
+        (0, 0) => "nada por entregar".to_string(),
+        (1, 0) => "1 tarea pendiente".to_string(),
+        (n, 0) => format!("{n} tareas pendientes"),
+        (0, 1) => "1 tarea hecha".to_string(),
+        (0, h) => format!("{h} tareas hechas"),
+        (1, 1) => "1 pendiente · 1 hecha".to_string(),
+        (1, h) => format!("1 pendiente · {h} hechas"),
+        (n, 1) => format!("{n} pendientes · 1 hecha"),
+        (n, h) => format!("{n} pendientes · {h} hechas"),
+    };
+    // "sin resultados para estos filtros" ya lo dice todo: no se repite.
+    if filtrado && !cuerpo.starts_with("sin resultados") {
+        format!("{cuerpo} (filtrado)")
+    } else {
+        cuerpo
     }
 }
 
@@ -1785,5 +1936,55 @@ mod pruebas {
     fn campos_opcionales_vacios_son_none() {
         assert_eq!(opcional("   "), None);
         assert_eq!(opcional(" Control "), Some("Control".to_string()));
+    }
+
+    fn tarea_ui(hecha: bool) -> TareaUI {
+        TareaUI {
+            id: "t-uno".into(),
+            titulo: "Taller".into(),
+            materia: "Control".into(),
+            fecha: "lun 30 nov · 23:59".into(),
+            vencida: false,
+            hecha,
+        }
+    }
+
+    /// La cabecera de Pendientes cuenta lo pendiente y lo hecho por separado.
+    #[test]
+    fn resumen_cuenta_pendientes_y_hechas() {
+        let lista = vec![tarea_ui(false), tarea_ui(false), tarea_ui(true)];
+        assert_eq!(resumen(&lista, false), "2 pendientes · 1 hecha");
+        assert_eq!(resumen(&lista, true), "2 pendientes · 1 hecha (filtrado)");
+        assert_eq!(resumen(&[], false), "nada por entregar");
+        assert_eq!(resumen(&[], true), "sin resultados para estos filtros");
+        assert_eq!(resumen(&[tarea_ui(false)], false), "1 tarea pendiente");
+        assert_eq!(resumen(&[tarea_ui(true), tarea_ui(true)], false), "2 tareas hechas");
+    }
+
+    /// Las fichas de fecha de la barra de filtros y su código van de la mano.
+    #[test]
+    fn codigos_de_fecha_del_filtro() {
+        for (codigo, tipo) in [
+            (0, TipoFecha::Todas),
+            (1, TipoFecha::Hoy),
+            (2, TipoFecha::EstaSemana),
+            (3, TipoFecha::Rango),
+        ] {
+            assert_eq!(codigo_fecha(tipo), codigo);
+            assert_eq!(fecha_del_codigo(codigo), tipo);
+        }
+        assert_eq!(fecha_del_codigo(99), TipoFecha::Todas, "código raro = todas");
+    }
+
+    /// Los campos del filtro se muestran vacíos cuando no hay valor.
+    #[test]
+    fn filtros_vacios_no_escriben_texto() {
+        assert_eq!(fecha_o_vacio(None), "");
+        assert_eq!(fecha_o_vacio(Some(fecha(2026, 12, 1))), "2026-12-01");
+        assert_eq!(hora_o_vacio(None), "");
+        assert_eq!(
+            hora_o_vacio(Some(NaiveTime::from_hms_opt(8, 5, 0).unwrap())),
+            "08:05"
+        );
     }
 }

@@ -203,9 +203,11 @@ export component CampoBoton inherits VerticalLayout {
 export component Chip inherits Rectangle {
     in property <string> texto;
     in property <bool> activo: false;
+    /// Ancho de la ficha: las de los días son cortas, las de filtro más largas.
+    in property <length> ancho: Tema.ancho-chip;
     callback clicked();
 
-    width: Tema.ancho-chip;
+    width: root.ancho;
     height: Tema.alto-chip;
     border-radius: Tema.radio-pequeno;
     border-width: Tema.linea;

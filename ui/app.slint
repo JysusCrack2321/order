@@ -151,6 +151,18 @@ export component AppWindow inherits Window {
     in property <string> resumen-pendientes: "";
     in property <[RecordatorioUI]> recordatorios;
 
+    // --- Barra de filtros de Pendientes (la pone puente.rs) ---------------
+    // Los valores llegan ya resueltos: aquí solo se dibujan.
+    in property <string> pm-materia: "";
+    // 0 = todas · 1 = hoy · 2 = esta semana · 3 = rango
+    in property <int> pm-fecha: 0;
+    in property <string> pm-desde: "";
+    in property <string> pm-hasta: "";
+    in property <string> pm-hora-desde: "";
+    in property <string> pm-hora-hasta: "";
+    in property <bool> pm-mostrar-hechas: true;
+    in property <bool> pm-filtro-activo: false;
+
     // --- Estado del formulario abierto -----------------------------------
     // 0 = ninguno · 1 = tarea · 2 = clase · 3 = ajustes · 4 = recordatorio
     in-out property <int> formulario: 0;
@@ -223,7 +235,12 @@ export component AppWindow inherits Window {
     callback nueva-tarea();
     callback abrir-ajustes();
     callback editar-tarea(string);
-    callback marcar-hecha(string);
+    callback marcar-hecha(string, bool);
+    // Filtros de Pendientes. Los campos 21–25 de `abrir-materia`, `abrir-fecha`
+    // y `abrir-hora` son los de la barra de filtros (ver puente.rs).
+    callback filtro-fecha(int);
+    callback filtro-hechas(bool);
+    callback filtro-limpiar();
     callback nueva-clase();
     callback editar-clase(string);
     callback nuevo-recordatorio();
@@ -373,9 +390,25 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
                     tareas: root.tareas;
                     resumen: root.resumen-pendientes;
+                    pm-materia: root.pm-materia;
+                    pm-fecha: root.pm-fecha;
+                    pm-desde: root.pm-desde;
+                    pm-hasta: root.pm-hasta;
+                    pm-hora-desde: root.pm-hora-desde;
+                    pm-hora-hasta: root.pm-hora-hasta;
+                    pm-mostrar-hechas: root.pm-mostrar-hechas;
+                    pm-filtro-activo: root.pm-filtro-activo;
 
                     editar(id) => { root.editar-tarea(id); }
-                    marcar(id) => { root.marcar-hecha(id); }
+                    marcar(id, hecha) => { root.marcar-hecha(id, hecha); }
+                    filtro-materia => { root.abrir-materia(21); }
+                    filtro-fecha(opcion) => { root.filtro-fecha(opcion); }
+                    filtro-hechas(mostrar) => { root.filtro-hechas(mostrar); }
+                    filtro-limpiar => { root.filtro-limpiar(); }
+                    elegir-desde => { root.abrir-fecha(22); }
+                    elegir-hasta => { root.abrir-fecha(23); }
+                    elegir-hora-desde => { root.abrir-hora(24); }
+                    elegir-hora-hasta => { root.abrir-hora(25); }
                 }
             }
 

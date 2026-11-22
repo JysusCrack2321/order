@@ -1,11 +1,13 @@
-// Vista Pendientes: tareas sin hacer, de la que vence antes a la que vence
-// después. Las vencidas van resaltadas en terracota.
+// Vista Pendientes: tareas por fecha de entrega, con las hechas visibles y
+// tachadas, filtros combinables (materia, fecha y hora de entrega) y casilla
+// para marcar o desmarcar con un clic.
 //
-// La casilla marca la tarea como hecha con un clic; pinchar el resto de la
-// fila abre el formulario de edición (Tarea 7 del plan).
+// La lógica de qué se ve vive en `src/filtros.rs`; aquí solo se dibuja y se
+// avisa a `puente.rs` de lo que el usuario toca. Colores, tamaños y tipografía
+// salen siempre de Tema.
 
 import { Tema } from "tema.slint";
-import { Casilla } from "formularios.slint";
+import { CampoBoton, Casilla, Chip, Etiqueta } from "formularios.slint";
 import { ScrollView } from "std-widgets.slint";
 
 export struct TareaUI {
@@ -14,14 +16,62 @@ export struct TareaUI {
     materia: string,
     fecha: string,
     vencida: bool,
+    hecha: bool,
+}
+
+/// Título de una tarea. Si está hecha se dibuja una línea encima, del ancho
+/// justo del texto: Slint no trae tachado, así que se pinta.
+component TituloTachado inherits Rectangle {
+    in property <string> texto;
+    in property <bool> tachada: false;
+    in property <color> tinta: Tema.texto;
+
+    height: Tema.alto-linea-titulo;
+
+    txt := Text {
+        width: min(parent.width, self.preferred-width);
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.texto;
+        font-size: Tema.tamano-texto;
+        color: root.tinta;
+        overflow: elide;
+    }
+
+    if root.tachada : Rectangle {
+        y: (parent.height - Tema.linea) / 2;
+        width: txt.width;
+        height: Tema.linea;
+        background: root.tinta;
+    }
 }
 
 export component PendientesVista inherits Rectangle {
     in property <[TareaUI]> tareas;
     in property <string> resumen;
 
+    // --- Filtros ---------------------------------------------------------
+    in property <string> pm-materia: "";
+    // 0 = todas · 1 = hoy · 2 = esta semana · 3 = rango
+    in property <int> pm-fecha: 0;
+    in property <string> pm-desde: "";
+    in property <string> pm-hasta: "";
+    in property <string> pm-hora-desde: "";
+    in property <string> pm-hora-hasta: "";
+    in property <bool> pm-mostrar-hechas: true;
+    in property <bool> pm-filtro-activo: false;
+
     callback editar(string);
-    callback marcar(string);
+    callback marcar(string, bool);
+
+    callback filtro-materia();
+    callback filtro-fecha(int);
+    callback filtro-hechas(bool);
+    callback filtro-limpiar();
+    callback elegir-desde();
+    callback elegir-hasta();
+    callback elegir-hora-desde();
+    callback elegir-hora-hasta();
 
     background: transparent;
 
@@ -30,25 +80,162 @@ export component PendientesVista inherits Rectangle {
         height: parent.height;
         spacing: 0;
 
-        Text {
-            text: "PENDIENTES";
-            font-family: Tema.fuente-titulos;
-            font-size: Tema.tamano-seccion;
-            font-weight: 700;
-            letter-spacing: Tema.letra-seccion;
-            color: Tema.texto-suave;
-        }
+        // --- Cabecera ------------------------------------------------------
+        HorizontalLayout {
+            spacing: Tema.espacio-md;
+            cross-axis-alignment: end;
 
-        Rectangle { height: Tema.espacio-xs; }
+            Text {
+                text: "PENDIENTES";
+                font-family: Tema.fuente-titulos;
+                font-size: Tema.tamano-seccion;
+                font-weight: 700;
+                letter-spacing: Tema.letra-seccion;
+                color: Tema.texto-suave;
+            }
 
-        Text {
-            text: root.resumen;
-            font-size: Tema.tamano-pequeno;
-            color: Tema.texto-tenue;
+            Text {
+                text: root.resumen;
+                font-size: Tema.tamano-pequeno;
+                color: Tema.texto-tenue;
+                vertical-alignment: center;
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            // Interruptor de hechas: por defecto se muestran.
+            HorizontalLayout {
+                spacing: Tema.espacio-sm;
+                cross-axis-alignment: center;
+
+                Text {
+                    text: "Mostrar hechas";
+                    font-size: Tema.tamano-pequeno;
+                    color: Tema.texto-suave;
+                    vertical-alignment: center;
+                }
+
+                Casilla {
+                    marcada: root.pm-mostrar-hechas;
+                    clicked => { root.filtro-hechas(!root.pm-mostrar-hechas); }
+                }
+            }
         }
 
         Rectangle { height: Tema.espacio-md; }
 
+        // --- Filtros: materia y fecha --------------------------------------
+        HorizontalLayout {
+            spacing: Tema.espacio-sm;
+            cross-axis-alignment: end;
+
+            CampoBoton {
+                width: Tema.ancho-filtro-materia;
+                etiqueta: "Materia";
+                valor: root.pm-materia;
+                pista: "Todas";
+                glifo: "▾";
+                clicked => { root.filtro-materia(); }
+            }
+
+            VerticalLayout {
+                spacing: Tema.espacio-xs;
+
+                Etiqueta { text: "Fecha de entrega"; }
+
+                HorizontalLayout {
+                    spacing: Tema.espacio-xs;
+
+                    Chip {
+                        texto: "Todas";
+                        ancho: Tema.ancho-chip-opcion;
+                        activo: root.pm-fecha == 0;
+                        clicked => { root.filtro-fecha(0); }
+                    }
+                    Chip {
+                        texto: "Hoy";
+                        ancho: Tema.ancho-chip-opcion;
+                        activo: root.pm-fecha == 1;
+                        clicked => { root.filtro-fecha(1); }
+                    }
+                    Chip {
+                        texto: "Semana";
+                        ancho: Tema.ancho-chip-opcion;
+                        activo: root.pm-fecha == 2;
+                        clicked => { root.filtro-fecha(2); }
+                    }
+                    Chip {
+                        texto: "Rango";
+                        ancho: Tema.ancho-chip-opcion;
+                        activo: root.pm-fecha == 3;
+                        clicked => { root.filtro-fecha(3); }
+                    }
+                }
+            }
+        }
+
+        Rectangle { height: Tema.espacio-md; }
+
+        // --- Filtros: rango de fechas y hora de entrega ---------------------
+        HorizontalLayout {
+            spacing: Tema.espacio-sm;
+            cross-axis-alignment: end;
+
+            if root.pm-fecha == 3 : CampoBoton {
+                width: Tema.ancho-filtro-fecha;
+                etiqueta: "Desde";
+                valor: root.pm-desde;
+                pista: "Elegir fecha";
+                glifo: "▦";
+                clicked => { root.elegir-desde(); }
+            }
+
+            if root.pm-fecha == 3 : CampoBoton {
+                width: Tema.ancho-filtro-fecha;
+                etiqueta: "Hasta";
+                valor: root.pm-hasta;
+                pista: "Elegir fecha";
+                glifo: "▦";
+                clicked => { root.elegir-hasta(); }
+            }
+
+            CampoBoton {
+                width: Tema.ancho-filtro-hora;
+                etiqueta: "Hora desde";
+                valor: root.pm-hora-desde;
+                pista: "00:00";
+                glifo: "◷";
+                clicked => { root.elegir-hora-desde(); }
+            }
+
+            CampoBoton {
+                width: Tema.ancho-filtro-hora;
+                etiqueta: "Hora hasta";
+                valor: root.pm-hora-hasta;
+                pista: "23:59";
+                glifo: "◷";
+                clicked => { root.elegir-hora-hasta(); }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            if root.pm-filtro-activo : Text {
+                text: "Quitar filtros";
+                font-size: Tema.tamano-pequeno;
+                color: limpiar-ta.has-hover ? Tema.acento : Tema.texto-suave;
+                vertical-alignment: center;
+                height: Tema.alto-campo;
+
+                limpiar-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.filtro-limpiar(); }
+                }
+            }
+        }
+
+        Rectangle { height: Tema.espacio-md; }
+
+        // --- Lista ---------------------------------------------------------
         ScrollView {
             vertical-stretch: 1;
 
@@ -60,14 +247,14 @@ export component PendientesVista inherits Rectangle {
                     background: ta.has-hover ? Tema.fondo-hover : transparent;
 
                     // Toda la fila abre el formulario; la casilla, encima,
-                    // solo marca la tarea (abajo está su TouchArea).
+                    // solo marca o desmarca (abajo está su TouchArea).
                     ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.editar(tarea.id); }
                     }
 
-                    // Filo terracota en las vencidas.
-                    if tarea.vencida : Rectangle {
+                    // Filo terracota en las vencidas que siguen sin hacer.
+                    if tarea.vencida && !tarea.hecha : Rectangle {
                         x: 0;
                         y: Tema.espacio-sm;
                         width: Tema.trazo;
@@ -84,8 +271,8 @@ export component PendientesVista inherits Rectangle {
                         cross-axis-alignment: center;
 
                         Casilla {
-                            marcada: false;
-                            clicked => { root.marcar(tarea.id); }
+                            marcada: tarea.hecha;
+                            clicked => { root.marcar(tarea.id, !tarea.hecha); }
                         }
 
                         VerticalLayout {
@@ -93,11 +280,12 @@ export component PendientesVista inherits Rectangle {
                             alignment: center;
                             spacing: Tema.espacio-2xs;
 
-                            Text {
-                                text: tarea.titulo;
-                                font-size: Tema.tamano-texto;
-                                color: tarea.vencida ? Tema.vencida-texto : Tema.texto;
-                                overflow: elide;
+                            TituloTachado {
+                                texto: tarea.titulo;
+                                tachada: tarea.hecha;
+                                tinta: tarea.hecha
+                                    ? Tema.texto-tenue
+                                    : (tarea.vencida ? Tema.vencida-texto : Tema.texto);
                             }
 
                             HorizontalLayout {
@@ -107,23 +295,31 @@ export component PendientesVista inherits Rectangle {
                                 if tarea.materia != "" : Text {
                                     text: tarea.materia;
                                     font-size: Tema.tamano-pequeno;
-                                    color: Tema.texto-suave;
+                                    color: tarea.hecha ? Tema.texto-tenue : Tema.texto-suave;
                                 }
 
                                 Text {
                                     text: tarea.fecha;
                                     font-size: Tema.tamano-pequeno;
-                                    color: tarea.vencida ? Tema.vencida : Tema.texto-tenue;
+                                    color: (tarea.vencida && !tarea.hecha) ? Tema.vencida : Tema.texto-tenue;
                                 }
                             }
                         }
 
-                        if tarea.vencida : Text {
+                        if tarea.vencida && !tarea.hecha : Text {
                             text: "VENCIDA";
                             font-family: Tema.fuente-titulos;
                             font-size: Tema.tamano-hora;
                             letter-spacing: Tema.letra-normal;
                             color: Tema.vencida;
+                        }
+
+                        if tarea.hecha : Text {
+                            text: "HECHA";
+                            font-family: Tema.fuente-titulos;
+                            font-size: Tema.tamano-hora;
+                            letter-spacing: Tema.letra-normal;
+                            color: Tema.texto-tenue;
                         }
                     }
 
@@ -145,7 +341,7 @@ export component PendientesVista inherits Rectangle {
                         spacing: Tema.espacio-xs;
 
                         Text {
-                            text: "Nada pendiente";
+                            text: root.pm-filtro-activo ? "Sin resultados" : "Nada pendiente";
                             horizontal-alignment: center;
                             font-family: Tema.fuente-titulos;
                             font-size: Tema.tamano-semana;
@@ -154,7 +350,9 @@ export component PendientesVista inherits Rectangle {
                         }
 
                         Text {
-                            text: "Las tareas que agregues aparecerán aquí.";
+                            text: root.pm-filtro-activo
+                                ? "Ninguna tarea pasa estos filtros."
+                                : "Las tareas que agregues aparecerán aquí.";
                             horizontal-alignment: center;
                             font-size: Tema.tamano-pequeno;
                             color: Tema.texto-tenue;

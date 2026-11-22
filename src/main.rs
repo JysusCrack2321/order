@@ -2,6 +2,7 @@
 
 mod almacen;
 mod avisos;
+mod filtros;
 mod modelo;
 mod ops;
 mod puente;
