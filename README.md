@@ -19,6 +19,8 @@ Todo vive en un único archivo TOML, legible y editable a mano o con Hermes:
 | `~/.config/order/historial.toml` | tareas hechas con más de 30 días (las mueve la app) |
 | `~/.config/order/moodle.toml` | conexión con Moodle (solo token, permisos `600`, nunca se sincroniza) |
 | `~/.config/order/calendarios.toml` | suscripciones iCal (permisos `600`, nunca se sincroniza) |
+| `~/.config/order/sync.toml` | clave privada del nodo P2P y dispositivos emparejados (permisos `600`, nunca se sincroniza) |
+| `~/.config/order/sync-estado.json` | marcas HLC por campo, lápidas y foto de sincronización (permisos `600`, nunca se sincroniza) |
 | `~/.local/state/order/enviados.txt` | claves de los avisos ya enviados (no repetir) |
 
 Si `order.toml` no existe, la app lo crea a partir de `ejemplo.toml` (incluido
@@ -176,3 +178,15 @@ Desde **Ajustes → Moodle** puedes conectar tu cuenta (por ejemplo `micampus.un
 `hermes/order-tareas/SKILL.md` es la skill que enseña a Hermes el formato del
 TOML y cómo agregar, editar, marcar y borrar sin romper el archivo. Vive también
 en `~/.hermes/skills/order-tareas/`.
+
+## Sincronización entre dispositivos (P2P)
+
+ORDER sincroniza `order.toml` directamente entre tu PC y tu celular sin cuentas ni servidor propio, fusionando cambios por campo (CRDT LWW con marcas HLC y lápidas que se purgan a los 60 días; los cambios hechos a mano o por Hermes también se detectan y viajan).
+
+- **Cómo emparejar**:
+  1. En un dispositivo (por ejemplo el PC), abre **Ajustes → Dispositivos** y toca **Agregar dispositivo**. Aparece un código QR (válido 10 minutos, de un solo uso), un código de **8 palabras** (para la misma red Wi-Fi) y un enlace `order://emparejar?…`.
+  2. En el celular, abre **Ajustes → Dispositivos** y toca **Escanear QR** (o **Escribir código** para introducir las 8 palabras en la misma Wi-Fi o pegar el enlace `order://emparejar?…`).
+  3. Solo se aceptan conexiones de nodos previamente emparejados.
+- **Qué viaja**: exclusivamente los campos de tu agenda (`ajustes`, `semestre`, `clase`, `tarea`, `recordatorio`) con sus marcas lógicas, sobre QUIC (`iroh`, ALPN `order/sync/1`) con **cifrado de extremo a extremo**. En la misma red Wi-Fi se descubren localmente por mDNS; cuando están en redes distintas, los relays públicos de n0 actúan solo como paso de tráfico cifrado (nunca ven tu agenda ni tus claves).
+- **Dónde vive el estado**: en **`sync.toml`** (clave privada del nodo, nombre del dispositivo y lista de emparejados) y **`sync-estado.json`** (marcas HLC, lápidas y última foto sincronizada), siempre con permisos **`600`** en el almacenamiento privado junto a `agente.toml` (`~/.config/order/` en escritorio o `filesDir` en Android, nunca dentro de `order.toml` ni de la carpeta compartida).
+- **Cuándo sincroniza**: como no hay servidor intermedio, **ambos dispositivos deben estar encendidos a la vez** para intercambiar cambios (en escritorio basta con que ORDER esté vivo en la bandeja). El escritorio escucha siempre y sincroniza al arrancar, cada 5 minutos y 2 segundos después de cada cambio local; Android sincroniza al abrir o volver a primer plano, tras cada cambio y periódicamente en `TrabajoRespaldo`, y escucha mientras la app está abierta.
