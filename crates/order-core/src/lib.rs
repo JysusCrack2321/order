@@ -3,6 +3,7 @@
 
 pub mod agente;
 pub mod almacen;
+pub mod atajos;
 pub mod avisos;
 pub mod conflictos;
 pub mod filtros;
