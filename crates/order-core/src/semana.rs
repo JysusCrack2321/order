@@ -349,6 +349,8 @@ mod pruebas {
             vence,
             hecha,
             hecha_en: hecha.then(|| vence.date()),
+            origen: None,
+            enlace: None,
         }
     }
 

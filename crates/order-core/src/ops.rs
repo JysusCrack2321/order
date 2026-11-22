@@ -39,6 +39,66 @@ pub fn agregar_tarea(doc: &mut DocumentMut, t: &NuevaTarea) -> Result<String, St
     Ok(id)
 }
 
+/// Añade una tarea sincronizada (Moodle o iCal) con `origen` y `enlace` opcionales.
+pub fn agregar_tarea_sincronizada(
+    doc: &mut DocumentMut,
+    t: &NuevaTarea,
+    origen: &str,
+    enlace: Option<&str>,
+    hecha: bool,
+    hecha_en: Option<NaiveDate>,
+) -> Result<String, String> {
+    let id = nuevo_id('t');
+    let mut tabla = Table::new();
+    poner(&mut tabla, "id", texto(&id));
+    campos_tarea(&mut tabla, t);
+    poner(&mut tabla, "hecha", Value::from(hecha));
+    if hecha {
+        if let Some(fecha) = hecha_en {
+            poner(&mut tabla, "hecha_en", texto(fecha.format(FORMATO_FECHA)));
+        }
+    }
+    poner(&mut tabla, "origen", texto(origen));
+    poner_opcional(tabla_ref_mut(&mut tabla), "enlace", enlace.map(texto));
+    tablas_creadas(doc, "tarea")?.push(tabla);
+    Ok(id)
+}
+
+fn tabla_ref_mut(tabla: &mut Table) -> &mut Table {
+    tabla
+}
+
+/// Actualiza los campos sincronizados de una tarea existente sin tocar los demás.
+pub fn actualizar_tarea_sincronizada(
+    doc: &mut DocumentMut,
+    id: &str,
+    origen: &str,
+    titulo: Option<&str>,
+    vence: Option<NaiveDateTime>,
+    enlace: Option<Option<&str>>,
+    marcar_hecha_en: Option<NaiveDate>,
+) -> Result<(), String> {
+    let tabla = if !id.trim().is_empty() {
+        por_id(doc, "tarea", "la tarea", id)?
+    } else {
+        por_origen(doc, "tarea", origen)?
+    };
+    if let Some(titulo) = titulo {
+        poner(tabla, "titulo", texto(titulo));
+    }
+    if let Some(vence) = vence {
+        poner(tabla, "vence", texto(vence.format(FORMATO_FECHA_HORA)));
+    }
+    if let Some(enlace) = enlace {
+        poner_opcional(tabla, "enlace", enlace.map(texto));
+    }
+    if let Some(fecha) = marcar_hecha_en {
+        poner(tabla, "hecha", Value::from(true));
+        poner(tabla, "hecha_en", texto(fecha.format(FORMATO_FECHA)));
+    }
+    Ok(())
+}
+
 /// Reemplaza título, materia y vencimiento. `hecha` y `hecha_en` no se tocan.
 pub fn editar_tarea(doc: &mut DocumentMut, id: &str, t: &NuevaTarea) -> Result<(), String> {
     campos_tarea(por_id(doc, "tarea", "la tarea", id)?, t);
@@ -310,6 +370,22 @@ fn por_id<'a>(
     let tablas = tablas_de(doc, seccion)?.ok_or_else(|| no_existe(que, id))?;
     let i = indice(tablas, id).ok_or_else(|| no_existe(que, id))?;
     tablas.get_mut(i).ok_or_else(|| no_existe(que, id))
+}
+
+fn por_origen<'a>(
+    doc: &'a mut DocumentMut,
+    seccion: &str,
+    origen: &str,
+) -> Result<&'a mut Table, String> {
+    let tablas = tablas_de(doc, seccion)?
+        .ok_or_else(|| format!("no existe la sección «{seccion}» para origen \"{origen}\""))?;
+    let i = tablas
+        .iter()
+        .position(|tabla| tabla.get("origen").and_then(Item::as_str) == Some(origen))
+        .ok_or_else(|| format!("no existe elemento con origen \"{origen}\""))?;
+    tablas
+        .get_mut(i)
+        .ok_or_else(|| format!("no existe elemento con origen \"{origen}\""))
 }
 
 fn borrar_por_id(doc: &mut DocumentMut, seccion: &str, que: &str, id: &str) -> Result<(), String> {

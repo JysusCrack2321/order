@@ -250,6 +250,10 @@ pub struct Tarea {
     pub hecha: bool,
     #[serde(with = "fecha_opcional", default)]
     pub hecha_en: Option<NaiveDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origen: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enlace: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -392,7 +396,16 @@ const CLAVES_RAIZ: &[&str] = &["ajustes", "semestre", "clase", "tarea", "recorda
 const CLAVES_AJUSTES: &[&str] = &["aviso_dia_antes", "aviso_horas_antes"];
 const CLAVES_SEMESTRE: &[&str] = &["inicio", "fin"];
 const CLAVES_CLASE: &[&str] = &["id", "materia", "dia", "dias", "inicio", "fin", "lugar"];
-const CLAVES_TAREA: &[&str] = &["id", "titulo", "materia", "vence", "hecha", "hecha_en"];
+const CLAVES_TAREA: &[&str] = &[
+    "id",
+    "titulo",
+    "materia",
+    "vence",
+    "hecha",
+    "hecha_en",
+    "origen",
+    "enlace",
+];
 const CLAVES_RECORDATORIO: &[&str] = &["id", "texto", "dias", "hora"];
 
 /// Sección en la que va el escáner y las claves que admite.
@@ -724,5 +737,44 @@ vence = \"2026-11-28T23:59\"
     fn ejemplo_sin_advertencias() {
         let avisos = advertencias(include_str!("../ejemplo.toml"));
         assert!(avisos.is_empty(), "advertencias: {avisos:?}");
+    }
+
+    /// Los campos opcionales `origen` y `enlace` sobreviven a ida y vuelta
+    /// sin romper TOML antiguos ni generar advertencias.
+    #[test]
+    fn tarea_con_origen_y_enlace_ida_y_vuelta() {
+        let vieja = "\
+[[tarea]]
+id = \"t-vieja\"
+titulo = \"Manual\"
+vence = \"2026-11-28T23:59\"
+hecha = false
+";
+        let datos_viejos = parsear(vieja).expect("TOML viejo válido");
+        assert_eq!(datos_viejos.tareas[0].origen, None);
+        assert_eq!(datos_viejos.tareas[0].enlace, None);
+
+        let sin_extras = toml::to_string(&datos_viejos.tareas[0]).expect("serializa");
+        assert!(!sin_extras.contains("origen"), "{sin_extras}");
+        assert!(!sin_extras.contains("enlace"), "{sin_extras}");
+
+        let con_extras = Tarea {
+            id: "t-moodle".to_string(),
+            titulo: "Taller 1".to_string(),
+            materia: Some("Control".to_string()),
+            vence: NaiveDateTime::parse_from_str("2026-11-30T23:59", FORMATO_FECHA_HORA).unwrap(),
+            hecha: false,
+            hecha_en: None,
+            origen: Some("moodle:micampus.unal.edu.co:assign:42".to_string()),
+            enlace: Some("https://micampus.unal.edu.co/mod/assign/view.php?id=42".to_string()),
+        };
+        let doc_toml = format!("[[tarea]]\n{}", toml::to_string(&con_extras).expect("serializa"));
+        assert!(
+            advertencias(&doc_toml).is_empty(),
+            "origen y enlace no deben advertirse: {:?}",
+            advertencias(&doc_toml)
+        );
+        let leidos = parsear(&doc_toml).expect("vuelve a parsear");
+        assert_eq!(leidos.tareas[0], con_extras);
     }
 }

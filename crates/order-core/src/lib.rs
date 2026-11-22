@@ -7,6 +7,7 @@ pub mod avisos;
 pub mod conflictos;
 pub mod filtros;
 pub mod modelo;
+pub mod moodle;
 pub mod ops;
 pub mod presentacion;
 pub mod reloj;

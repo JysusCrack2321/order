@@ -416,6 +416,8 @@ mod pruebas {
             vence: momento(2026, 11, 28, 23, 59),
             hecha,
             hecha_en: hecha.then(|| fecha(2026, 11, 28)),
+            origen: None,
+            enlace: None,
         }
     }
 

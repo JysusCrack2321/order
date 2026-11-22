@@ -233,6 +233,8 @@ mod pruebas {
             vence: momento("2026-11-28T23:59"),
             hecha: false,
             hecha_en: None,
+            origen: None,
+            enlace: None,
         });
         datos.tareas.push(Tarea {
             id: "t-dos".into(),
@@ -241,6 +243,8 @@ mod pruebas {
             vence: momento("2026-11-20T10:00"),
             hecha: true,
             hecha_en: Some(fecha("2026-11-19")),
+            origen: None,
+            enlace: None,
         });
         datos.recordatorios.push(Recordatorio {
             id: "r-uno".into(),

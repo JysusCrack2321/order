@@ -134,6 +134,8 @@ mod pruebas {
             vence: momento(2026, 11, 28, 23, 59),
             hecha: false,
             hecha_en: None,
+            origen: None,
+            enlace: None,
         });
 
         let lista = materias_de(&d);
