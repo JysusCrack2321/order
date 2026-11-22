@@ -7,6 +7,7 @@
 
 use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Timelike};
 use order_core::agente::acciones::{self, Accion};
+use order_core::agente::adjuntos::{self, Adjunto, ContenidoAdjunto};
 use order_core::agente::cliente;
 use order_core::agente::config::{self, AgenteConfig, Proveedor, VozProveedor};
 use order_core::agente::contexto;
@@ -430,10 +431,35 @@ pub struct AgenteConfigFfi {
     pub url_base: String,
     pub modelo: String,
     pub api_key: String,
+    pub ve_imagenes: bool,
     pub voz_proveedor: i32,
     pub voz_url_base: String,
     pub voz_modelo: String,
     pub voz_api_key: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum TipoAdjuntoFfi {
+    Pdf,
+    Imagen,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AdjuntoFfi {
+    pub nombre: String,
+    pub tipo: TipoAdjuntoFfi,
+    pub bytes: Vec<u8>,
+    pub paginas_jpeg: Vec<Vec<u8>>,
+    pub texto_ocr: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct LimitesAdjuntosFfi {
+    pub max_adjuntos: u32,
+    pub max_paginas_pdf: u32,
+    pub max_bytes_total: u64,
+    pub lado_largo_imagen: u32,
+    pub calidad_jpeg: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -1273,12 +1299,13 @@ pub fn guardar_agente_config(
     url: String,
     modelo: String,
     api_key: String,
+    ve_imagenes: bool,
     voz_proveedor: i32,
     voz_url: String,
     voz_modelo: String,
     voz_key: String,
 ) -> Result<AgenteConfigFfi, ErrorFfi> {
-    let cfg = formularios::validar_agente(
+    let mut cfg = formularios::validar_agente(
         proveedor,
         &url,
         &modelo,
@@ -1288,9 +1315,41 @@ pub fn guardar_agente_config(
         &voz_modelo,
         &voz_key,
     )?;
+    cfg.ve_imagenes = ve_imagenes;
     config::guardar_en(Path::new(&ruta_config), &cfg)
         .map_err(|mensaje| ErrorFfi::Operacion { mensaje })?;
     Ok(agente_config_a_ffi(&cfg))
+}
+
+#[uniffi::export]
+pub fn agente_ve_imagenes(ruta_config: String) -> bool {
+    config::cargar_de(Path::new(&ruta_config)).ve_imagenes()
+}
+
+#[uniffi::export]
+pub fn texto_de_pdf(bytes: Vec<u8>) -> Result<Vec<String>, ErrorFfi> {
+    adjuntos::extraer_texto_pdf(&bytes).map_err(|e| ErrorFfi::Operacion {
+        mensaje: e.to_string(),
+    })
+}
+
+#[uniffi::export]
+pub fn paginas_sin_texto(paginas: Vec<String>) -> Vec<u32> {
+    adjuntos::paginas_sin_texto(&paginas)
+        .into_iter()
+        .map(|i| i as u32)
+        .collect()
+}
+
+#[uniffi::export]
+pub fn limites_adjuntos() -> LimitesAdjuntosFfi {
+    LimitesAdjuntosFfi {
+        max_adjuntos: adjuntos::MAX_ADJUNTOS as u32,
+        max_paginas_pdf: adjuntos::MAX_PAGINAS_PDF as u32,
+        max_bytes_total: adjuntos::MAX_BYTES_TOTAL as u64,
+        lado_largo_imagen: adjuntos::LADO_LARGO_IMAGEN,
+        calidad_jpeg: u32::from(adjuntos::CALIDAD_JPEG),
+    }
 }
 
 #[uniffi::export]
@@ -1298,13 +1357,19 @@ pub fn enviar_al_agente(
     ruta_datos: String,
     ruta_config: String,
     texto: String,
+    adjuntos: Vec<AdjuntoFfi>,
 ) -> Result<RespuestaAgenteFfi, ErrorFfi> {
     let pregunta = texto.trim();
-    if pregunta.is_empty() {
+    if pregunta.is_empty() && adjuntos.is_empty() {
         return Err(ErrorFfi::Operacion {
             mensaje: "Escribe una petición para el agente.".to_string(),
         });
     }
+    let pregunta_efectiva = if pregunta.is_empty() {
+        "Revisa los archivos adjuntos y propón las tareas, clases o recordatorios correspondientes."
+    } else {
+        pregunta
+    };
 
     let cfg = config::cargar_de(Path::new(&ruta_config));
     if !cfg.lista() {
@@ -1324,7 +1389,8 @@ pub fn enviar_al_agente(
         &format!("UTC{}", ahora.format("%:z")),
     );
 
-    let salida = cliente::consultar(&cfg, &resumen_ctx, pregunta, &[])
+    let adjuntos_core: Vec<Adjunto> = adjuntos.into_iter().map(adjunto_de_ffi).collect();
+    let salida = cliente::consultar(&cfg, &resumen_ctx, pregunta_efectiva, &adjuntos_core)
         .map_err(|e| ErrorFfi::Operacion {
             mensaje: e.to_string(),
         })?;
@@ -1454,10 +1520,29 @@ fn agente_config_a_ffi(cfg: &AgenteConfig) -> AgenteConfigFfi {
         url_base: cfg.url_base.clone(),
         modelo: cfg.modelo.clone(),
         api_key: cfg.api_key.clone(),
+        ve_imagenes: cfg.ve_imagenes,
         voz_proveedor: cfg.voz.proveedor.codigo(),
         voz_url_base: cfg.voz.url_base.clone(),
         voz_modelo: cfg.voz.modelo.clone(),
         voz_api_key: cfg.voz.api_key.clone(),
+    }
+}
+
+fn adjunto_de_ffi(a: AdjuntoFfi) -> Adjunto {
+    let contenido = match a.tipo {
+        TipoAdjuntoFfi::Pdf => ContenidoAdjunto::Pdf {
+            bytes: a.bytes,
+            paginas_jpeg: a.paginas_jpeg,
+            texto_ocr: a.texto_ocr,
+        },
+        TipoAdjuntoFfi::Imagen => ContenidoAdjunto::Imagen {
+            jpeg: a.bytes,
+            texto_ocr: a.texto_ocr,
+        },
+    };
+    Adjunto {
+        nombre: a.nombre,
+        contenido,
     }
 }
 
@@ -2112,7 +2197,10 @@ mod pruebas {
         assert_eq!(dias_semana_etiquetas().len(), 7);
     }
 
-    fn servidor_http_simulado(status: u16, cuerpo: String) -> (String, std::thread::JoinHandle<()>) {
+    fn servidor_http_con_captura(
+        status: u16,
+        cuerpo: String,
+    ) -> (String, std::thread::JoinHandle<String>) {
         use std::io::{Read, Write};
         use std::net::TcpListener;
 
@@ -2121,9 +2209,34 @@ mod pruebas {
         let url = format!("http://{addr}");
 
         let handle = std::thread::spawn(move || {
+            let mut recibido = String::new();
             if let Ok((mut stream, _)) = listener.accept() {
-                let mut buf = [0u8; 8192];
-                let _ = stream.read(&mut buf);
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+                let mut buf = [0u8; 65536];
+                while let Ok(n) = stream.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    recibido.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    if let Some(fin_hdr) = recibido.find("\r\n\r\n") {
+                        let cabeceras = &recibido[..fin_hdr];
+                        let content_len = cabeceras
+                            .lines()
+                            .find_map(|l| {
+                                let (k, v) = l.split_once(':')?;
+                                if k.eq_ignore_ascii_case("content-length") {
+                                    v.trim().parse::<usize>().ok()
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or(0);
+                        let cuerpo_len = recibido.len() - (fin_hdr + 4);
+                        if cuerpo_len >= content_len {
+                            break;
+                        }
+                    }
+                }
                 let razon = match status {
                     200 => "OK",
                     401 => "Unauthorized",
@@ -2137,8 +2250,17 @@ mod pruebas {
                 let _ = stream.write_all(resp.as_bytes());
                 let _ = stream.flush();
             }
+            recibido
         });
         (url, handle)
+    }
+
+    fn servidor_http_simulado(status: u16, cuerpo: String) -> (String, std::thread::JoinHandle<()>) {
+        let (url, handle) = servidor_http_con_captura(status, cuerpo);
+        let plano = std::thread::spawn(move || {
+            let _ = handle.join();
+        });
+        (url, plano)
     }
 
     #[test]
@@ -2232,8 +2354,13 @@ hora = "18:00"
         assert!(cfg0.api_key.is_empty());
 
         // Sin clave, enviar_al_agente falla de forma legible sin red.
-        let err_sin_clave =
-            enviar_al_agente(ruta_datos.clone(), ruta_cfg.clone(), "hola".into()).unwrap_err();
+        let err_sin_clave = enviar_al_agente(
+            ruta_datos.clone(),
+            ruta_cfg.clone(),
+            "hola".into(),
+            vec![],
+        )
+        .unwrap_err();
         assert!(err_sin_clave.to_string().contains("clave"));
 
         // Validación con error.
@@ -2260,6 +2387,7 @@ hora = "18:00"
             url,
             "modelo-local".into(),
             "sk-test".into(),
+            false,
             0,
             "".into(),
             "".into(),
@@ -2271,6 +2399,7 @@ hora = "18:00"
             ruta_datos.clone(),
             ruta_cfg.clone(),
             "agrega dos tareas".into(),
+            vec![],
         )
         .expect("enviar al agente");
         let _ = handle.join();
@@ -2299,15 +2428,171 @@ hora = "18:00"
             url_401,
             "m".into(),
             "sk-mal".into(),
+            false,
             0,
             "".into(),
             "".into(),
             "".into(),
         )
         .expect("guardar 401");
-        let err_401 = enviar_al_agente(ruta_datos, ruta_cfg, "hola".into()).unwrap_err();
+        let err_401 =
+            enviar_al_agente(ruta_datos, ruta_cfg, "hola".into(), vec![]).unwrap_err();
         let _ = h401.join();
         assert!(err_401.to_string().contains("401"));
+    }
+
+    fn pdf_prueba(paginas: &[&str]) -> Vec<u8> {
+        use std::fmt::Write as _;
+        let mut out = Vec::new();
+        out.extend_from_slice(b"%PDF-1.4\n");
+        let num_pags = paginas.len().max(1);
+        let total_objs = 3 + num_pags * 2;
+        let mut offsets = vec![0usize];
+        let mut kids = String::new();
+        for i in 0..num_pags {
+            let _ = write!(kids, "{} 0 R ", 4 + i * 2);
+        }
+        offsets.push(out.len());
+        out.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        offsets.push(out.len());
+        out.extend_from_slice(
+            format!("2 0 obj\n<< /Type /Pages /Kids [ {kids}] /Count {num_pags} >>\nendobj\n")
+                .as_bytes(),
+        );
+        offsets.push(out.len());
+        out.extend_from_slice(
+            b"3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        );
+        for (i, texto) in paginas.iter().enumerate() {
+            let page_id = 4 + i * 2;
+            let content_id = page_id + 1;
+            let stream = if texto.is_empty() {
+                String::new()
+            } else {
+                format!("BT /F1 12 Tf 72 720 Td ({texto}) Tj ET\n")
+            };
+            offsets.push(out.len());
+            out.extend_from_slice(
+                format!(
+                    "{page_id} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents {content_id} 0 R >>\nendobj\n"
+                )
+                .as_bytes(),
+            );
+            offsets.push(out.len());
+            out.extend_from_slice(
+                format!(
+                    "{content_id} 0 obj\n<< /Length {} >>\nstream\n{stream}endstream\nendobj\n",
+                    stream.len()
+                )
+                .as_bytes(),
+            );
+        }
+        let xref_pos = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", total_objs + 1).as_bytes());
+        for off in offsets.iter().skip(1) {
+            out.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(
+            format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n", total_objs + 1)
+                .as_bytes(),
+        );
+        out
+    }
+
+    #[test]
+    fn adjuntos_ffi_texto_pdf_vision_y_envio_simulado() {
+        let dir = TempDir::new().expect("tempdir");
+        let ruta_datos = ruta_temp(&dir);
+        let ruta_cfg = dir.path().join("agente.toml").to_string_lossy().into_owned();
+        cargar(ruta_datos.clone()).expect("cargar");
+
+        // Límites expuestos.
+        let lim = limites_adjuntos();
+        assert_eq!(lim.max_adjuntos, 5);
+        assert_eq!(lim.max_paginas_pdf, 20);
+        assert_eq!(lim.lado_largo_imagen, 1568);
+        assert_eq!(lim.calidad_jpeg, 85);
+
+        // PDF con una página con texto y otra vacía: texto_de_pdf + paginas_sin_texto.
+        let pdf = pdf_prueba(&["Parcial de Control", ""]);
+
+        let pags = texto_de_pdf(pdf.clone()).expect("texto de pdf");
+        assert_eq!(pags.len(), 2);
+        assert!(pags[0].contains("Parcial de Control"));
+        assert_eq!(paginas_sin_texto(pags), vec![1]);
+        assert!(texto_de_pdf(b"basura".to_vec()).is_err());
+
+        // agente_ve_imagenes según proveedor y casilla de Otro.
+        let respuesta_json =
+            r#"{"choices":[{"message":{"role":"assistant","content":"{\"respuesta\":\"Recibido\",\"acciones\":[]}"}}]}"#
+                .to_string();
+        let (url_txt, h_txt) = servidor_http_con_captura(200, respuesta_json.clone());
+        guardar_agente_config(
+            ruta_cfg.clone(),
+            3,
+            url_txt,
+            "m".into(),
+            "sk-test".into(),
+            false,
+            0,
+            "".into(),
+            "".into(),
+            "".into(),
+        )
+        .expect("config sin vision");
+        assert!(!agente_ve_imagenes(ruta_cfg.clone()));
+
+        let resp_txt = enviar_al_agente(
+            ruta_datos.clone(),
+            ruta_cfg.clone(),
+            "".into(),
+            vec![AdjuntoFfi {
+                nombre: "control.pdf".into(),
+                tipo: TipoAdjuntoFfi::Pdf,
+                bytes: pdf,
+                paginas_jpeg: vec![],
+                texto_ocr: Some("Entrega 5 diciembre".into()),
+            }],
+        )
+        .expect("envío sin visión");
+        assert_eq!(resp_txt.respuesta, "Recibido");
+        let recibido_txt = h_txt.join().expect("join");
+        assert!(recibido_txt.contains("Parcial de Control"), "{recibido_txt}");
+        assert!(recibido_txt.contains("Entrega 5 diciembre"), "{recibido_txt}");
+
+        // Con Otro + ve_imagenes = true manda image_url data URL.
+        let (url_vis, h_vis) = servidor_http_con_captura(200, respuesta_json);
+        guardar_agente_config(
+            ruta_cfg.clone(),
+            3,
+            url_vis,
+            "m-vision".into(),
+            "sk-test".into(),
+            true,
+            0,
+            "".into(),
+            "".into(),
+            "".into(),
+        )
+        .expect("config con vision");
+        assert!(agente_ve_imagenes(ruta_cfg.clone()));
+
+        let resp_vis = enviar_al_agente(
+            ruta_datos,
+            ruta_cfg,
+            "mira la foto".into(),
+            vec![AdjuntoFfi {
+                nombre: "tablero.jpg".into(),
+                tipo: TipoAdjuntoFfi::Imagen,
+                bytes: vec![0xFF, 0xD8, 0xFF, 0xD9],
+                paginas_jpeg: vec![],
+                texto_ocr: None,
+            }],
+        )
+        .expect("envío con visión");
+        assert_eq!(resp_vis.respuesta, "Recibido");
+        let recibido_vis = h_vis.join().expect("join");
+        assert!(recibido_vis.contains("data:image/jpeg;base64,"), "{recibido_vis}");
     }
 
     #[test]
@@ -2333,6 +2618,7 @@ hora = "18:00"
             "".into(),
             "".into(),
             "sk-agent".into(),
+            false,
             0,
             url,
             "whisper-1".into(),
