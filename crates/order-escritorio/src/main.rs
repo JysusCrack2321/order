@@ -1,5 +1,6 @@
 //! ORDER — horario, tareas y recordatorios en un solo binario.
 
+mod adjuntos;
 mod grabacion;
 mod puente;
 mod sistema;

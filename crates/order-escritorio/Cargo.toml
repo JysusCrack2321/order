@@ -20,6 +20,10 @@ notify-rust = "4"
 png = "0.18"
 cpal = "0.18"
 hound = "3.5"
+rfd = "0.18"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+kamadak-exif = "0.6"
+tempfile = "3"
 
 [dev-dependencies]
 tempfile = "3"

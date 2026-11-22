@@ -10,8 +10,10 @@
 //! nada y el error sale en el banner rojo mientras el formulario sigue abierto
 //! con lo que el usuario había escrito.
 
+use crate::adjuntos;
 use crate::grabacion::{self, Grabacion};
 use order_core::agente::acciones::{self, Accion};
+use order_core::agente::adjuntos::{Adjunto, MAX_ADJUNTOS};
 use order_core::agente::cliente::{self, ErrorAgente};
 use order_core::agente::config::{self, AgenteConfig, Proveedor, VozProveedor};
 use order_core::agente::contexto;
@@ -118,6 +120,10 @@ struct Estado {
     grabacion: Option<Grabacion>,
     /// Reloj del indicador rojo de la barra.
     temporizador: Option<slint::Timer>,
+    /// Adjuntos preparados para el próximo mensaje al agente: `(id, adjunto, es_pdf)`.
+    adjuntos: Vec<(i32, Adjunto, bool)>,
+    siguiente_adjunto_id: i32,
+    leyendo_archivo: bool,
 }
 
 impl Estado {
@@ -142,6 +148,9 @@ impl Estado {
             aviso: String::new(),
             grabacion: None,
             temporizador: None,
+            adjuntos: Vec::new(),
+            siguiente_adjunto_id: 1,
+            leyendo_archivo: false,
         }
     }
 }
@@ -199,6 +208,8 @@ struct Vista {
     agente_nota: SharedString,
     agente_grabando: bool,
     agente_tiempo: SharedString,
+    agente_adjuntos: Vec<AdjuntoUI>,
+    agente_leyendo: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -574,6 +585,22 @@ fn conectar(ui: &AppWindow) {
     ui.on_agente_aplicar_todas(move || {
         let Some(ui) = debil.upgrade() else { return };
         aplicar_todas(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_agente_adjuntar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        adjuntar_archivos(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_agente_quitar_adjunto(move |id: i32| {
+        let Some(ui) = debil.upgrade() else { return };
+        con_estado(|estado| {
+            estado.adjuntos.retain(|(item_id, _, _)| *item_id != id);
+            estado.aviso.clear();
+        });
+        actualizar(&ui);
     });
 
     let debil = ui.as_weak();
@@ -1134,6 +1161,7 @@ fn abrir_agente(ui: &AppWindow) {
     ui.set_a_modelo(agente.modelo.into());
     ui.set_a_key(agente.api_key.into());
     ui.set_a_ver_key(false);
+    ui.set_a_ve_imagenes(agente.ve_imagenes);
     ui.set_a_voz_proveedor(agente.voz.proveedor.codigo());
     ui.set_v_url(agente.voz.url_base.into());
     ui.set_v_modelo(agente.voz.modelo.into());
@@ -1148,7 +1176,7 @@ fn abrir_agente(ui: &AppWindow) {
 
 /// Guarda la sección del agente; vuelve a Ajustes.
 fn guardar_agente(ui: &AppWindow) {
-    let agente = match formularios::validar_agente(
+    let mut agente = match formularios::validar_agente(
         ui.get_a_proveedor(),
         &ui.get_a_url(),
         &ui.get_a_modelo(),
@@ -1168,6 +1196,7 @@ fn guardar_agente(ui: &AppWindow) {
             return;
         }
     };
+    agente.ve_imagenes = ui.get_a_ve_imagenes();
 
     match config::guardar(&agente) {
         Ok(()) => {
@@ -1191,15 +1220,112 @@ fn guardar_agente(ui: &AppWindow) {
     }
 }
 
+/// Abre el selector del sistema y prepara los adjuntos en un hilo.
+fn adjuntar_archivos(ui: &AppWindow) {
+    let ocupado = con_estado(|estado| estado.pensando || estado.leyendo_archivo);
+    if ocupado {
+        return;
+    }
+    let actuales = con_estado(|estado| estado.adjuntos.len());
+    if actuales >= MAX_ADJUNTOS {
+        con_estado(|estado| {
+            estado.aviso = format!(
+                "Puedes adjuntar como máximo {MAX_ADJUNTOS} archivos por mensaje."
+            );
+        });
+        actualizar(ui);
+        return;
+    }
+
+    let agente = con_estado(|estado| estado.agente.clone());
+    let debil = ui.as_weak();
+    std::thread::spawn(move || {
+        let rutas = adjuntos::elegir_archivos();
+        if rutas.is_empty() {
+            return;
+        }
+
+        let debil_inicio = debil.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = debil_inicio.upgrade() {
+                con_estado(|estado| {
+                    estado.leyendo_archivo = true;
+                    estado.aviso.clear();
+                    estado.error = None;
+                });
+                actualizar(&ui);
+            }
+        });
+
+        let disponibles = MAX_ADJUNTOS.saturating_sub(actuales);
+        let mut preparados = Vec::new();
+        let mut avisos = Vec::new();
+        let mut error_lectura = None;
+
+        if rutas.len() > disponibles {
+            avisos.push(format!(
+                "Solo se agregaron {disponibles} archivos (máximo {MAX_ADJUNTOS} por mensaje)."
+            ));
+        }
+
+        for ruta in rutas.into_iter().take(disponibles) {
+            match adjuntos::preparar_archivo(&ruta, &agente) {
+                Ok(res) => {
+                    if let Some(av) = res.aviso {
+                        avisos.push(av);
+                    }
+                    preparados.push((res.adjunto, res.es_pdf));
+                }
+                Err(err) => {
+                    error_lectura = Some(err);
+                    break;
+                }
+            }
+        }
+
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = debil.upgrade() {
+                con_estado(|estado| {
+                    estado.leyendo_archivo = false;
+                    for (adjunto, es_pdf) in preparados {
+                        let id = estado.siguiente_adjunto_id;
+                        estado.siguiente_adjunto_id += 1;
+                        estado.adjuntos.push((id, adjunto, es_pdf));
+                    }
+                    if let Some(err) = error_lectura {
+                        estado.aviso = err;
+                    } else if !avisos.is_empty() {
+                        estado.aviso = avisos.join(" ");
+                    }
+                });
+                actualizar(&ui);
+            }
+        });
+    });
+}
+
 /// Manda la pregunta al modelo en un hilo y vuelve al bucle de la ventana.
 fn enviar_agente(ui: &AppWindow) {
-    if con_estado(|estado| estado.pensando) {
+    if con_estado(|estado| estado.pensando || estado.leyendo_archivo) {
         return;
     }
-    let pregunta = ui.get_agente_texto().trim().to_string();
-    if pregunta.is_empty() {
+    let pregunta_escrita = ui.get_agente_texto().trim().to_string();
+    let adjuntos_enviar: Vec<Adjunto> = con_estado(|estado| {
+        estado
+            .adjuntos
+            .iter()
+            .map(|(_, adj, _)| adj.clone())
+            .collect()
+    });
+    if pregunta_escrita.is_empty() && adjuntos_enviar.is_empty() {
         return;
     }
+    let pregunta = if pregunta_escrita.is_empty() {
+        "Revisa los archivos adjuntos y propón las tareas, clases o recordatorios correspondientes."
+            .to_string()
+    } else {
+        pregunta_escrita
+    };
     let agente = con_estado(|estado| estado.agente.clone());
     if !agente.lista() {
         con_estado(|estado| {
@@ -1233,7 +1359,7 @@ fn enviar_agente(ui: &AppWindow) {
 
     let debil = ui.as_weak();
     std::thread::spawn(move || {
-        let salida = cliente::consultar(&agente, &contexto, &pregunta, &[]);
+        let salida = cliente::consultar(&agente, &contexto, &pregunta, &adjuntos_enviar);
         // Nadie más toca el estado de la ventana: se vuelve al hilo principal.
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = debil.upgrade() {
@@ -1267,6 +1393,7 @@ fn recibir_agente(ui: &AppWindow, salida: Result<String, ErrorAgente>) {
                     estado.respuesta = respuesta;
                     estado.acciones = lectura.acciones;
                     estado.nota.clear();
+                    estado.adjuntos.clear();
                 });
                 // El texto ya se envió: el campo queda libre para la siguiente.
                 ui.set_agente_texto("".into());
@@ -1527,6 +1654,8 @@ fn actualizar(ui: &AppWindow) {
     ui.set_agente_nota(vista.agente_nota);
     ui.set_agente_grabando(vista.agente_grabando);
     ui.set_agente_tiempo(vista.agente_tiempo);
+    ui.set_agente_adjuntos(ModelRc::new(VecModel::from(vista.agente_adjuntos)));
+    ui.set_agente_leyendo(vista.agente_leyendo);
 }
 
 fn construir_vista() -> Vista {
@@ -1685,6 +1814,16 @@ fn construir_vista() -> Vista {
                 .map(|grabacion| formato_tiempo(grabacion.segundos()))
                 .unwrap_or_default()
                 .into(),
+            agente_adjuntos: estado
+                .adjuntos
+                .iter()
+                .map(|(id, adj, es_pdf)| AdjuntoUI {
+                    id: *id,
+                    nombre: adj.nombre.clone().into(),
+                    es_pdf: *es_pdf,
+                })
+                .collect(),
+            agente_leyendo: estado.leyendo_archivo,
         }
     })
 }

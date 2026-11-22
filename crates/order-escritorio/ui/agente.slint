@@ -14,6 +14,13 @@ export struct AccionUI {
     descripcion: string,
 }
 
+/// Un archivo adjunto en espera de enviarse con el mensaje al agente.
+export struct AdjuntoUI {
+    id: int,
+    nombre: string,
+    es-pdf: bool,
+}
+
 /// Campo de texto con el botón de enviar. Enter también envía.
 export component BarraAgente inherits Rectangle {
     in-out property <string> texto;
@@ -22,11 +29,16 @@ export component BarraAgente inherits Rectangle {
     // Grabación de voz en curso y su tiempo ("0:07").
     in property <bool> grabando: false;
     in property <string> tiempo: "";
+    // Adjuntos preparados y estado de lectura.
+    in property <[AdjuntoUI]> adjuntos: [];
+    in property <bool> leyendo: false;
 
     callback enviar();
     callback grabar();
+    callback adjuntar();
+    callback quitar-adjunto(int);
 
-    height: Tema.alto-barra-agente;
+    height: Tema.alto-barra-agente + (root.adjuntos.length > 0 || root.leyendo ? Tema.alto-fila-adjuntos : 0px);
     background: Tema.fondo-panel;
 
     Rectangle {
@@ -36,96 +48,190 @@ export component BarraAgente inherits Rectangle {
         background: Tema.borde;
     }
 
-    HorizontalLayout {
+    VerticalLayout {
         x: Tema.espacio-xl;
         y: Tema.linea;
         width: parent.width - 2 * Tema.espacio-xl;
         height: parent.height - Tema.linea;
-        spacing: Tema.espacio-sm;
-        cross-axis-alignment: center;
+        spacing: 0;
 
-        Text {
-            text: "AGENTE";
-            font-family: Tema.fuente-titulos;
-            font-size: Tema.tamano-hora;
-            letter-spacing: Tema.letra-seccion;
-            color: Tema.acento;
-        }
+        if root.adjuntos.length > 0 || root.leyendo : HorizontalLayout {
+            height: Tema.alto-fila-adjuntos;
+            spacing: Tema.espacio-xs;
+            alignment: start;
 
-        Rectangle {
-            horizontal-stretch: 1;
-            height: Tema.alto-campo;
-            border-radius: Tema.radio-pequeno;
-            background: Tema.fondo-campo;
-            border-width: Tema.linea;
-            border-color: entrada.has-focus ? Tema.acento-suave : Tema.borde-campo;
+            for adj in root.adjuntos : VerticalLayout {
+                alignment: center;
 
-            entrada := TextInput {
-                x: Tema.espacio-sm;
-                width: parent.width - 2 * Tema.espacio-sm;
-                height: parent.height;
-                vertical-alignment: center;
-                text <=> root.texto;
-                color: Tema.texto;
-                font-size: Tema.tamano-pequeno;
-                single-line: true;
-                accepted => { root.enviar(); }
+                Rectangle {
+                    height: Tema.alto-pildora-adjunto;
+                    border-radius: Tema.radio-pequeno;
+                    background: Tema.acento-tenue;
+                    border-width: Tema.linea;
+                    border-color: Tema.acento-suave;
+
+                    HorizontalLayout {
+                        padding-left: Tema.espacio-sm;
+                        padding-right: Tema.espacio-xs;
+                        spacing: Tema.espacio-xs;
+                        cross-axis-alignment: center;
+
+                        Text {
+                            max-width: Tema.ancho-max-pildora-adjunto;
+                            text: (adj.es-pdf ? "PDF · " : "") + adj.nombre;
+                            font-size: Tema.tamano-hora;
+                            color: Tema.texto;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            width: Tema.alto-check;
+                            height: Tema.alto-check;
+                            border-radius: Tema.radio-pequeno;
+
+                            Text {
+                                width: parent.width;
+                                height: parent.height;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                text: "✕";
+                                font-size: Tema.tamano-hora;
+                                color: quitar-ta.has-hover ? Tema.acento : Tema.texto-suave;
+                            }
+
+                            quitar-ta := TouchArea {
+                                enabled: !root.pensando && !root.leyendo;
+                                mouse-cursor: pointer;
+                                clicked => { root.quitar-adjunto(adj.id); }
+                            }
+                        }
+                    }
+                }
             }
 
-            if root.texto == "" && !entrada.has-focus : Text {
-                x: Tema.espacio-sm;
-                width: parent.width - 2 * Tema.espacio-sm;
-                height: parent.height;
+            if root.leyendo : Text {
+                text: "leyendo archivo…";
+                font-size: Tema.tamano-hora;
+                color: Tema.texto-suave;
                 vertical-alignment: center;
-                text: root.aviso == "" ? "Pídele algo: «taller de control para el viernes»" : root.aviso;
-                color: root.aviso == "" ? Tema.texto-tenue : Tema.texto-error;
-                font-size: Tema.tamano-pequeno;
-                overflow: elide;
             }
         }
 
-        // Micrófono: clic para grabar, clic para detener y transcribir.
-        Rectangle {
-            width: Tema.ancho-boton-mic;
-            height: Tema.alto-campo;
-            border-radius: Tema.radio-pequeno;
-            border-width: Tema.linea;
-            border-color: root.grabando ? Tema.vencida : (mic.has-hover ? Tema.acento-suave : Tema.borde-campo);
-            background: root.grabando ? Tema.fondo-error : Tema.fondo-campo;
+        HorizontalLayout {
+            height: Tema.alto-barra-agente - Tema.linea;
+            spacing: Tema.espacio-sm;
+            cross-axis-alignment: center;
 
             Text {
-                width: parent.width;
-                height: parent.height;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                text: root.grabando ? "■" : "◉";
-                font-size: Tema.tamano-seccion;
-                color: root.grabando ? Tema.vencida-texto : Tema.texto-suave;
+                text: "AGENTE";
+                font-family: Tema.fuente-titulos;
+                font-size: Tema.tamano-hora;
+                letter-spacing: Tema.letra-seccion;
+                color: Tema.acento;
             }
 
-            mic := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { root.grabar(); }
+            // Botón 📎 para adjuntar PDF o imagen.
+            Rectangle {
+                width: Tema.ancho-boton-adjuntar;
+                height: Tema.alto-campo;
+                border-radius: Tema.radio-pequeno;
+                border-width: Tema.linea;
+                border-color: root.adjuntos.length > 0 ? Tema.acento : (adj-ta.has-hover ? Tema.acento-suave : Tema.borde-campo);
+                background: root.adjuntos.length > 0 ? Tema.acento-tenue : Tema.fondo-campo;
+
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    text: "📎";
+                    font-size: Tema.tamano-texto;
+                    color: root.adjuntos.length > 0 ? Tema.acento : Tema.texto-suave;
+                }
+
+                adj-ta := TouchArea {
+                    enabled: !root.pensando && !root.leyendo && !root.grabando;
+                    mouse-cursor: pointer;
+                    clicked => { root.adjuntar(); }
+                }
             }
-        }
 
-        if root.grabando : Text {
-            text: root.tiempo;
-            font-size: Tema.tamano-hora;
-            color: Tema.vencida-texto;
-        }
+            Rectangle {
+                horizontal-stretch: 1;
+                height: Tema.alto-campo;
+                border-radius: Tema.radio-pequeno;
+                background: Tema.fondo-campo;
+                border-width: Tema.linea;
+                border-color: entrada.has-focus ? Tema.acento-suave : Tema.borde-campo;
 
-        if root.pensando : Text {
-            text: "pensando…";
-            font-size: Tema.tamano-hora;
-            color: Tema.texto-tenue;
-        }
+                entrada := TextInput {
+                    x: Tema.espacio-sm;
+                    width: parent.width - 2 * Tema.espacio-sm;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    text <=> root.texto;
+                    color: Tema.texto;
+                    font-size: Tema.tamano-pequeno;
+                    single-line: true;
+                    accepted => { root.enviar(); }
+                }
 
-        Boton {
-            texto: "Enviar";
-            principal: true;
-            width: Tema.ancho-boton-agente;
-            clicked => { root.enviar(); }
+                if root.texto == "" && !entrada.has-focus : Text {
+                    x: Tema.espacio-sm;
+                    width: parent.width - 2 * Tema.espacio-sm;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    text: root.aviso == "" ? "Pídele algo: «taller de control para el viernes»" : root.aviso;
+                    color: root.aviso == "" ? Tema.texto-tenue : Tema.texto-error;
+                    font-size: Tema.tamano-pequeno;
+                    overflow: elide;
+                }
+            }
+
+            // Micrófono: clic para grabar, clic para detener y transcribir.
+            Rectangle {
+                width: Tema.ancho-boton-mic;
+                height: Tema.alto-campo;
+                border-radius: Tema.radio-pequeno;
+                border-width: Tema.linea;
+                border-color: root.grabando ? Tema.vencida : (mic.has-hover ? Tema.acento-suave : Tema.borde-campo);
+                background: root.grabando ? Tema.fondo-error : Tema.fondo-campo;
+
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    text: root.grabando ? "■" : "◉";
+                    font-size: Tema.tamano-seccion;
+                    color: root.grabando ? Tema.vencida-texto : Tema.texto-suave;
+                }
+
+                mic := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.grabar(); }
+                }
+            }
+
+            if root.grabando : Text {
+                text: root.tiempo;
+                font-size: Tema.tamano-hora;
+                color: Tema.vencida-texto;
+            }
+
+            if root.pensando : Text {
+                text: "pensando…";
+                font-size: Tema.tamano-hora;
+                color: Tema.texto-tenue;
+            }
+
+            Boton {
+                texto: "Enviar";
+                principal: true;
+                width: Tema.ancho-boton-agente;
+                clicked => { root.enviar(); }
+            }
         }
     }
 }
