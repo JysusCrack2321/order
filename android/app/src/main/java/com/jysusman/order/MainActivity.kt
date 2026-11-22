@@ -495,6 +495,7 @@ private fun OrderApp(
                     aviso = estado.agenteAviso,
                     avisoEsError = estado.agenteAvisoEsError,
                     adjuntos = estado.agenteAdjuntos,
+                    hayConversacion = estado.agenteHayConversacion,
                     alCambiarTexto = { repositorio.actualizarTextoAgente(it) },
                     alGrabar = {
                         if (grabandoVoz) {
@@ -530,6 +531,7 @@ private fun OrderApp(
                         }
                     },
                     alQuitarAdjunto = { id -> repositorio.quitarAdjunto(id) },
+                    alNuevaConversacion = { scope.launch { repositorio.nuevaConversacion() } },
                     alEnviar = { scope.launch { repositorio.enviarAlAgente() } },
                 )
                 val pie = estado.resumen?.pie ?: estado.inicio?.pie

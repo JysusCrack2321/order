@@ -151,6 +151,37 @@ class RepositorioTest {
     }
 
     @Test
+    fun nuevaConversacionLlamaAlPuenteYLimpiaEstado() = runTest {
+        val fake = FakePuenteOrder()
+        val repo = Repositorio(
+            puente = fake,
+            carpetaInicial = "/tmp/order-conv",
+            dispatcherIo = UnconfinedTestDispatcher(testScheduler),
+            asegurarCarpeta = {},
+            rutaConfigAgente = "/tmp/agente.toml",
+        )
+        repo.cargarInicial()
+        assertTrue(!repo.estado.value.agenteHayConversacion)
+
+        fake.respuestaAgente = RespuestaAgenteFfi(
+            respuesta = "Propongo una tarea.",
+            acciones = listOf(AccionVistaFfi("a-1", "Crear tarea 1")),
+            nota = null,
+        )
+        repo.actualizarTextoAgente("pon un taller el viernes")
+        repo.enviarAlAgente()
+        assertTrue(repo.estado.value.agenteHayConversacion)
+        assertTrue(repo.estado.value.agentePanelAbierto)
+
+        repo.nuevaConversacion()
+        assertEquals(1, fake.llamadasNuevaConversacion)
+        assertTrue(!repo.estado.value.agenteHayConversacion)
+        assertTrue(!repo.estado.value.agentePanelAbierto)
+        assertEquals("", repo.estado.value.agenteRespuesta)
+        assertTrue(repo.estado.value.agenteAcciones.isEmpty())
+    }
+
+    @Test
     fun vozGrabacionVaciaNoEnviaYTranscripcionPasaAlCampo() = runTest {
         val fake = FakePuenteOrder()
         val repo = Repositorio(
@@ -189,6 +220,8 @@ class FakePuenteOrder : PuenteOrder {
     var veImagenes: Boolean = false
     var paginasPdfFake: List<String> = listOf("Texto página 1")
     var ultimosAdjuntosEnviados: List<AdjuntoFfi> = emptyList()
+    var hayConversacionActiva: Boolean = false
+    var llamadasNuevaConversacion: Int = 0
     var conflictos: List<ConflictoFfi> = emptyList()
     var advertencias: List<String> = emptyList()
     var ultimaRutaCargada: String = ""
@@ -412,6 +445,9 @@ class FakePuenteOrder : PuenteOrder {
     ): RespuestaAgenteFfi {
         ultimosAdjuntosEnviados = adjuntos
         fallarAgente?.let { throw it }
+        if (respuestaAgente.nota == null) {
+            hayConversacionActiva = true
+        }
         return respuestaAgente
     }
 
@@ -425,6 +461,13 @@ class FakePuenteOrder : PuenteOrder {
         accionIds: List<String>,
     ): ResultadoAplicarTodasFfi =
         ResultadoAplicarTodasFfi(accionIds.size.toUInt(), cargar(rutaDatos), null)
+
+    override fun nuevaConversacion() {
+        llamadasNuevaConversacion++
+        hayConversacionActiva = false
+    }
+
+    override fun hayConversacion(): Boolean = hayConversacionActiva
 
     override fun wavDePcm16(muestras: List<Short>, frecuencia: UInt): ByteArray =
         ByteArray(44 + muestras.size * 2)

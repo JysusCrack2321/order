@@ -73,6 +73,7 @@ data class EstadoOrder(
     val agenteRespuesta: String = "",
     val agenteNota: String = "",
     val agenteAcciones: List<AccionVistaFfi> = emptyList(),
+    val agenteHayConversacion: Boolean = false,
 )
 
 /**
@@ -570,11 +571,13 @@ class Repositorio(
 
         val res = withContext(dispatcherIo) {
             runCatching {
-                puente.enviarAlAgente(actual.rutaArchivo, rutaConfigAgente, pregunta, adjuntosFfi)
+                val resp = puente.enviarAlAgente(actual.rutaArchivo, rutaConfigAgente, pregunta, adjuntosFfi)
+                val hayConv = puente.hayConversacion()
+                resp to hayConv
             }
         }
 
-        res.onSuccess { resp ->
+        res.onSuccess { (resp, hayConv) ->
             _estado.update {
                 it.copy(
                     agentePensando = false,
@@ -584,6 +587,7 @@ class Repositorio(
                     agenteNota = resp.nota.orEmpty(),
                     agenteTexto = if (resp.nota == null) "" else it.agenteTexto,
                     agenteAdjuntos = if (resp.nota == null) emptyList() else it.agenteAdjuntos,
+                    agenteHayConversacion = hayConv,
                 )
             }
         }.onFailure { err ->
@@ -596,6 +600,24 @@ class Repositorio(
                     agenteNota = "",
                 )
             }
+        }
+    }
+
+    suspend fun nuevaConversacion() {
+        if (_estado.value.agentePensando) return
+        withContext(dispatcherIo) {
+            runCatching { puente.nuevaConversacion() }
+        }
+        _estado.update {
+            it.copy(
+                agenteHayConversacion = false,
+                agentePanelAbierto = false,
+                agenteRespuesta = "",
+                agenteNota = "",
+                agenteAcciones = emptyList(),
+                agenteAviso = "",
+                agenteAvisoEsError = false,
+            )
         }
     }
 

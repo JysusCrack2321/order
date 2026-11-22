@@ -59,11 +59,13 @@ fun BarraAgente(
     aviso: String,
     avisoEsError: Boolean = false,
     adjuntos: List<AdjuntoPendiente> = emptyList(),
+    hayConversacion: Boolean = false,
     alCambiarTexto: (String) -> Unit,
     alGrabar: () -> Unit = {},
     alElegirArchivo: () -> Unit = {},
     alTomarFoto: () -> Unit = {},
     alQuitarAdjunto: (String) -> Unit = {},
+    alNuevaConversacion: () -> Unit = {},
     alEnviar: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -77,6 +79,39 @@ fun BarraAgente(
             .background(OrderTema.FondoPanel),
     ) {
         HorizontalDivider(color = OrderTema.Borde, thickness = OrderTema.Linea)
+        if (hayConversacion) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = OrderTema.EspacioMd,
+                        end = OrderTema.EspacioMd,
+                        top = OrderTema.EspacioXs,
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "Conversación activa",
+                    fontSize = OrderTema.TamanoHora,
+                    color = OrderTema.TextoTenue,
+                )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(OrderTema.RadioPequeno))
+                        .border(OrderTema.Linea, OrderTema.Borde, RoundedCornerShape(OrderTema.RadioPequeno))
+                        .clickable(enabled = !ocupado, onClick = alNuevaConversacion)
+                        .padding(horizontal = OrderTema.EspacioSm, vertical = OrderTema.EspacioXs),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "Nueva conversación",
+                        fontSize = OrderTema.TamanoHora,
+                        color = if (ocupado) OrderTema.TextoTenue else OrderTema.TextoSuave,
+                    )
+                }
+            }
+        }
         if (leyendoArchivo) {
             Row(
                 modifier = Modifier
