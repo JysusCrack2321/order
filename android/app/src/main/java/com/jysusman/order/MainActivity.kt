@@ -488,6 +488,7 @@ private fun OrderApp(
                 BarraAgente(
                     texto = estado.agenteTexto,
                     pensando = estado.agentePensando,
+                    compactando = estado.agenteCompactando,
                     transcribiendo = estado.agenteTranscribiendo,
                     leyendoArchivo = estado.agenteLeyendoArchivo,
                     grabando = grabandoVoz,

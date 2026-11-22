@@ -209,6 +209,41 @@ class RepositorioTest {
         assertEquals("Por favor agrega taller para el viernes", repo.estado.value.agenteTexto)
         assertEquals("", repo.estado.value.agenteAviso)
     }
+
+    @Test
+    fun historialGuardadoYCompactacionSeReflejanEnEstado() = runTest {
+        val fake = FakePuenteOrder().apply {
+            hayConversacionActiva = true
+            necesitaCompactarFlag = true
+        }
+        var compactandoDuranteEnvio = false
+        val repo = Repositorio(
+            puente = fake,
+            carpetaInicial = "/tmp/order-hist",
+            dispatcherIo = UnconfinedTestDispatcher(testScheduler),
+            asegurarCarpeta = {},
+            rutaConfigAgente = "/tmp/agente.toml",
+        )
+        fake.alEnviar = {
+            compactandoDuranteEnvio = repo.estado.value.agenteCompactando
+        }
+
+        // Tras "reiniciar", cargarInicial detecta la conversación guardada.
+        repo.cargarInicial()
+        assertTrue(repo.estado.value.agenteHayConversacion)
+
+        // Al enviar con necesitaCompactar = true, activa agenteCompactando durante la llamada y lo apaga al volver.
+        repo.actualizarTextoAgente("y el martes?")
+        repo.enviarAlAgente()
+        assertTrue(compactandoDuranteEnvio)
+        assertTrue(!repo.estado.value.agenteCompactando)
+        assertTrue(!repo.estado.value.agentePensando)
+
+        // Guardar límite de contexto lo reenvía al puente.
+        val err = repo.guardarAgenteConfig(0, "", "", "sk", false, "15000", 0, "", "", "")
+        assertNull(err)
+        assertEquals("15000", fake.ultimoLimiteGuardado)
+    }
 }
 
 class FakePuenteOrder : PuenteOrder {
@@ -221,6 +256,9 @@ class FakePuenteOrder : PuenteOrder {
     var paginasPdfFake: List<String> = listOf("Texto página 1")
     var ultimosAdjuntosEnviados: List<AdjuntoFfi> = emptyList()
     var hayConversacionActiva: Boolean = false
+    var necesitaCompactarFlag: Boolean = false
+    var ultimoLimiteGuardado: String = ""
+    var alEnviar: (() -> Unit)? = null
     var llamadasNuevaConversacion: Int = 0
     var conflictos: List<ConflictoFfi> = emptyList()
     var advertencias: List<String> = emptyList()
@@ -404,7 +442,7 @@ class FakePuenteOrder : PuenteOrder {
     override fun proveedoresAgente(): List<ProveedorInfoFfi> = emptyList()
     override fun proveedoresVoz(): List<VozProveedorInfoFfi> = emptyList()
     override fun leerAgenteConfig(rutaConfig: String): AgenteConfigFfi =
-        AgenteConfigFfi(0, "https://api.deepseek.com", "deepseek-v4-flash", "", veImagenes, 0, "https://api.openai.com/v1", "whisper-1", "")
+        AgenteConfigFfi(0, "https://api.deepseek.com", "deepseek-v4-flash", "", veImagenes, 60000u, 0, "https://api.openai.com/v1", "whisper-1", "")
 
     override fun guardarAgenteConfig(
         rutaConfig: String,
@@ -413,11 +451,15 @@ class FakePuenteOrder : PuenteOrder {
         modelo: String,
         apiKey: String,
         veImagenes: Boolean,
+        limiteContexto: String,
         vozProveedor: Int,
         vozUrl: String,
         vozModelo: String,
         vozKey: String,
-    ): AgenteConfigFfi = leerAgenteConfig(rutaConfig)
+    ): AgenteConfigFfi {
+        ultimoLimiteGuardado = limiteContexto
+        return leerAgenteConfig(rutaConfig)
+    }
 
     override fun agenteVeImagenes(rutaConfig: String): Boolean = veImagenes
 
@@ -443,6 +485,7 @@ class FakePuenteOrder : PuenteOrder {
         texto: String,
         adjuntos: List<AdjuntoFfi>,
     ): RespuestaAgenteFfi {
+        alEnviar?.invoke()
         ultimosAdjuntosEnviados = adjuntos
         fallarAgente?.let { throw it }
         if (respuestaAgente.nota == null) {
@@ -462,12 +505,16 @@ class FakePuenteOrder : PuenteOrder {
     ): ResultadoAplicarTodasFfi =
         ResultadoAplicarTodasFfi(accionIds.size.toUInt(), cargar(rutaDatos), null)
 
+    override fun necesitaCompactar(rutaConfig: String): Boolean = necesitaCompactarFlag
+
     override fun nuevaConversacion() {
         llamadasNuevaConversacion++
         hayConversacionActiva = false
     }
 
     override fun hayConversacion(): Boolean = hayConversacionActiva
+
+    override fun hayConversacionEn(rutaConfig: String): Boolean = hayConversacionActiva
 
     override fun wavDePcm16(muestras: List<Short>, frecuencia: UInt): ByteArray =
         ByteArray(44 + muestras.size * 2)

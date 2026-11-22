@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -42,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import com.jysusman.order.datos.PreferenciasOrder
@@ -72,6 +74,7 @@ fun HojaAjustesAgente(
     var apiKey by remember { mutableStateOf("") }
     var verKey by remember { mutableStateOf(false) }
     var veImagenes by remember { mutableStateOf(false) }
+    var limiteContexto by remember { mutableStateOf("60000") }
 
     var vozProveedor by remember { mutableIntStateOf(0) }
     var vozUrlBase by remember { mutableStateOf("") }
@@ -93,6 +96,7 @@ fun HojaAjustesAgente(
             modelo = cfg.modelo
             apiKey = cfg.apiKey
             veImagenes = cfg.veImagenes
+            limiteContexto = cfg.limiteContextoTokens.toString()
             vozProveedor = cfg.vozProveedor
             vozUrlBase = cfg.vozUrlBase
             vozModelo = cfg.vozModelo
@@ -315,6 +319,17 @@ fun HojaAjustesAgente(
                     mal = campoMal == 4,
                 )
             }
+            CampoTextoAgente(
+                etiqueta = "Límite de contexto (tokens)",
+                valor = limiteContexto,
+                alCambiar = {
+                    limiteContexto = it
+                    if (campoMal == 6) campoMal = 0
+                },
+                pista = "60000",
+                mal = campoMal == 6,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            )
             if (proveedorActual?.urlClave == null) {
                 Row(
                     modifier = Modifier
@@ -371,6 +386,7 @@ fun HojaAjustesAgente(
                             modelo = modelo,
                             apiKey = apiKey,
                             veImagenes = veImagenes,
+                            limiteContexto = limiteContexto,
                             vozProveedor = vozProveedor,
                             vozUrl = vozUrlBase,
                             vozModelo = vozModelo,
@@ -380,7 +396,7 @@ fun HojaAjustesAgente(
                             PreferenciasOrder.guardarUsarVozAndroid(context, usarVozAndroid)
                             alVolver()
                         } else {
-                            if (err.campo in 1..4) avanzado = true
+                            if (err.campo in 1..4 || err.campo == 6) avanzado = true
                             campoMal = err.campo
                             errorMsg = err.mensaje
                         }
@@ -465,6 +481,7 @@ private fun CampoTextoAgente(
     alCambiar: (String) -> Unit,
     pista: String,
     mal: Boolean,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(OrderTema.EspacioXs)) {
         Text(
@@ -484,6 +501,7 @@ private fun CampoTextoAgente(
                 )
             },
             singleLine = true,
+            keyboardOptions = keyboardOptions,
             colors = OutlinedTextFieldDefaults.colors(
                 focusedContainerColor = OrderTema.FondoCampo,
                 unfocusedContainerColor = OrderTema.FondoCampo,

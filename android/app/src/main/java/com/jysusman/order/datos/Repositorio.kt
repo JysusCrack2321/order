@@ -64,6 +64,7 @@ data class EstadoOrder(
     val materias: List<MateriaConTonoFfi> = emptyList(),
     val agenteTexto: String = "",
     val agentePensando: Boolean = false,
+    val agenteCompactando: Boolean = false,
     val agenteTranscribiendo: Boolean = false,
     val agenteLeyendoArchivo: Boolean = false,
     val agenteAdjuntos: List<AdjuntoPendiente> = emptyList(),
@@ -170,6 +171,14 @@ class Repositorio(
             }
 
             resultado.onSuccess { lectura ->
+                val hayConvGuardada = if (rutaConfigAgente.isNotBlank()) {
+                    withContext(dispatcherIo) {
+                        runCatching { puente.hayConversacionEn(rutaConfigAgente) }
+                            .getOrDefault(_estado.value.agenteHayConversacion)
+                    }
+                } else {
+                    _estado.value.agenteHayConversacion
+                }
                 _estado.update {
                     it.copy(
                         cargando = false,
@@ -182,6 +191,7 @@ class Repositorio(
                         semana = lectura.semana,
                         pendientes = lectura.pendientes,
                         materias = lectura.materias,
+                        agenteHayConversacion = hayConvGuardada,
                     )
                 }
                 withContext(dispatcherIo) { onDatosActualizados() }
@@ -558,9 +568,14 @@ class Repositorio(
         if ((pregunta.isEmpty() && adjuntosFfi.isEmpty()) || actual.agentePensando || actual.agenteLeyendoArchivo) return
         if (rutaConfigAgente.isBlank() || actual.rutaArchivo.isBlank()) return
 
+        val compactando = withContext(dispatcherIo) {
+            runCatching { puente.necesitaCompactar(rutaConfigAgente) }.getOrDefault(false)
+        }
+
         _estado.update {
             it.copy(
                 agentePensando = true,
+                agenteCompactando = compactando,
                 agentePanelAbierto = false,
                 agenteRespuesta = "",
                 agenteNota = "",
@@ -572,7 +587,7 @@ class Repositorio(
         val res = withContext(dispatcherIo) {
             runCatching {
                 val resp = puente.enviarAlAgente(actual.rutaArchivo, rutaConfigAgente, pregunta, adjuntosFfi)
-                val hayConv = puente.hayConversacion()
+                val hayConv = puente.hayConversacionEn(rutaConfigAgente)
                 resp to hayConv
             }
         }
@@ -581,6 +596,7 @@ class Repositorio(
             _estado.update {
                 it.copy(
                     agentePensando = false,
+                    agenteCompactando = false,
                     agentePanelAbierto = true,
                     agenteRespuesta = resp.respuesta,
                     agenteAcciones = resp.acciones,
@@ -594,6 +610,7 @@ class Repositorio(
             _estado.update {
                 it.copy(
                     agentePensando = false,
+                    agenteCompactando = false,
                     agentePanelAbierto = true,
                     agenteRespuesta = mensajeDeError(err),
                     agenteAcciones = emptyList(),
@@ -749,6 +766,7 @@ class Repositorio(
         modelo: String,
         apiKey: String,
         veImagenes: Boolean,
+        limiteContexto: String,
         vozProveedor: Int,
         vozUrl: String,
         vozModelo: String,
@@ -763,6 +781,7 @@ class Repositorio(
                     modelo,
                     apiKey,
                     veImagenes,
+                    limiteContexto,
                     vozProveedor,
                     vozUrl,
                     vozModelo,

@@ -127,6 +127,7 @@ interface PuenteOrder {
         modelo: String,
         apiKey: String,
         veImagenes: Boolean,
+        limiteContexto: String,
         vozProveedor: Int,
         vozUrl: String,
         vozModelo: String,
@@ -147,8 +148,10 @@ interface PuenteOrder {
     fun aplicarAccion(rutaDatos: String, accionId: String): ResumenArchivoFfi
     fun descartarAccion(accionId: String)
     fun aplicarTodas(rutaDatos: String, accionIds: List<String>): ResultadoAplicarTodasFfi
+    fun necesitaCompactar(rutaConfig: String): Boolean
     fun nuevaConversacion()
     fun hayConversacion(): Boolean
+    fun hayConversacionEn(rutaConfig: String): Boolean
 
     fun wavDePcm16(muestras: List<Short>, frecuencia: UInt): ByteArray
     fun transcribir(rutaConfig: String, wav: ByteArray): String
@@ -310,6 +313,7 @@ class PuenteOrderNativo : PuenteOrder {
         modelo: String,
         apiKey: String,
         veImagenes: Boolean,
+        limiteContexto: String,
         vozProveedor: Int,
         vozUrl: String,
         vozModelo: String,
@@ -321,6 +325,7 @@ class PuenteOrderNativo : PuenteOrder {
         modelo,
         apiKey,
         veImagenes,
+        limiteContexto,
         vozProveedor,
         vozUrl,
         vozModelo,
@@ -358,9 +363,15 @@ class PuenteOrderNativo : PuenteOrder {
         accionIds: List<String>,
     ): ResultadoAplicarTodasFfi = com.jysusman.order.ffi.aplicarTodas(rutaDatos, accionIds)
 
+    override fun necesitaCompactar(rutaConfig: String): Boolean =
+        com.jysusman.order.ffi.necesitaCompactar(rutaConfig)
+
     override fun nuevaConversacion() = com.jysusman.order.ffi.nuevaConversacion()
 
     override fun hayConversacion(): Boolean = com.jysusman.order.ffi.hayConversacion()
+
+    override fun hayConversacionEn(rutaConfig: String): Boolean =
+        com.jysusman.order.ffi.hayConversacionEn(rutaConfig)
 
     override fun wavDePcm16(muestras: List<Short>, frecuencia: UInt): ByteArray =
         com.jysusman.order.ffi.wavDePcm16(muestras, frecuencia)

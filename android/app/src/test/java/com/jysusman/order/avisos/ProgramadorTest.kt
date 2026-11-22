@@ -204,7 +204,7 @@ private class FakePuenteAvisos(
     override fun proveedoresAgente(): List<ProveedorInfoFfi> = emptyList()
     override fun proveedoresVoz(): List<VozProveedorInfoFfi> = emptyList()
     override fun leerAgenteConfig(rutaConfig: String): AgenteConfigFfi = throw UnsupportedOperationException()
-    override fun guardarAgenteConfig(rutaConfig: String, proveedor: Int, url: String, modelo: String, apiKey: String, veImagenes: Boolean, vozProveedor: Int, vozUrl: String, vozModelo: String, vozKey: String): AgenteConfigFfi = throw UnsupportedOperationException()
+    override fun guardarAgenteConfig(rutaConfig: String, proveedor: Int, url: String, modelo: String, apiKey: String, veImagenes: Boolean, limiteContexto: String, vozProveedor: Int, vozUrl: String, vozModelo: String, vozKey: String): AgenteConfigFfi = throw UnsupportedOperationException()
     override fun agenteVeImagenes(rutaConfig: String): Boolean = false
     override fun textoDePdf(bytes: ByteArray): List<String> = emptyList()
     override fun paginasSinTexto(paginas: List<String>): List<UInt> = emptyList()
@@ -213,8 +213,10 @@ private class FakePuenteAvisos(
     override fun aplicarAccion(rutaDatos: String, accionId: String): ResumenArchivoFfi = throw UnsupportedOperationException()
     override fun descartarAccion(accionId: String) {}
     override fun aplicarTodas(rutaDatos: String, accionIds: List<String>): ResultadoAplicarTodasFfi = throw UnsupportedOperationException()
+    override fun necesitaCompactar(rutaConfig: String): Boolean = false
     override fun nuevaConversacion() {}
     override fun hayConversacion(): Boolean = false
+    override fun hayConversacionEn(rutaConfig: String): Boolean = false
     override fun wavDePcm16(muestras: List<Short>, frecuencia: UInt): ByteArray = ByteArray(0)
     override fun transcribir(rutaConfig: String, wav: ByteArray): String = ""
 }

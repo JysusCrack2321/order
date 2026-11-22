@@ -52,6 +52,7 @@ import com.jysusman.order.ui.theme.OrderTema
 fun BarraAgente(
     texto: String,
     pensando: Boolean,
+    compactando: Boolean = false,
     transcribiendo: Boolean = false,
     leyendoArchivo: Boolean = false,
     grabando: Boolean = false,
@@ -336,9 +337,11 @@ fun BarraAgente(
                         color = OrderTema.Acento,
                     )
                     Text(
-                        text = "pensando…",
+                        text = if (compactando) "Compactando conversación…" else "pensando…",
                         fontSize = OrderTema.TamanoHora,
                         color = OrderTema.TextoTenue,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             } else {
