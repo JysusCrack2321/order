@@ -32,6 +32,10 @@ fun BannersEstado(
     conflicto: ConflictoFfi?,
     onQuedarActual: () -> Unit,
     onUsarOtra: () -> Unit,
+    faltaPermisoNotificaciones: Boolean = false,
+    onAbrirAjustesNotificaciones: () -> Unit = {},
+    faltaPermisoAlarmaExacta: Boolean = false,
+    onAbrirAjustesAlarmaExacta: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -59,6 +63,66 @@ fun BannersEstado(
                 onQuedarActual = onQuedarActual,
                 onUsarOtra = onUsarOtra,
             )
+        }
+        if (faltaPermisoNotificaciones) {
+            BannerAccionAviso(
+                mensaje = "Los avisos están desactivados sin permiso de notificaciones.",
+                textoBoton = "Activar notificaciones",
+                onClick = onAbrirAjustesNotificaciones,
+            )
+        }
+        if (faltaPermisoAlarmaExacta) {
+            BannerAccionAviso(
+                mensaje = "Sin permiso de alarmas exactas los avisos pueden llegar con retraso.",
+                textoBoton = "Permitir alarmas",
+                onClick = onAbrirAjustesAlarmaExacta,
+            )
+        }
+    }
+}
+
+@Composable
+private fun BannerAccionAviso(
+    mensaje: String,
+    textoBoton: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .background(OrderTema.FondoAviso),
+    ) {
+        Box(
+            modifier = Modifier
+                .width(OrderTema.AnchoMarca)
+                .fillMaxHeight()
+                .background(OrderTema.BordeAviso)
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = OrderTema.EspacioMd, vertical = OrderTema.EspacioSm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(OrderTema.EspacioSm),
+        ) {
+            Text(
+                text = mensaje,
+                fontSize = OrderTema.TamanoPequeno,
+                color = OrderTema.TextoAviso,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(
+                onClick = onClick,
+                shape = RoundedCornerShape(OrderTema.Radio),
+                border = BorderStroke(OrderTema.Linea, OrderTema.BordeAviso),
+            ) {
+                Text(
+                    text = textoBoton,
+                    fontSize = OrderTema.TamanoHora,
+                    color = OrderTema.TextoAviso,
+                )
+            }
         }
     }
 }

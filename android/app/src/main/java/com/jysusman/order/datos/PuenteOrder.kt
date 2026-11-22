@@ -2,6 +2,8 @@ package com.jysusman.order.datos
 
 import com.jysusman.order.ffi.AjustesFormFfi
 import com.jysusman.order.ffi.AnioMesFfi
+import com.jysusman.order.ffi.AvisoFfi
+import com.jysusman.order.ffi.AvisoProgramableFfi
 import com.jysusman.order.ffi.CalendarioMesFfi
 import com.jysusman.order.ffi.ClaseFormFfi
 import com.jysusman.order.ffi.ConflictoFfi
@@ -96,6 +98,16 @@ interface PuenteOrder {
     fun formatearHora12(hora12: Int, minuto: Int, tarde: Boolean): String
     fun parsearHora12(texto: String): Hora12Ffi
     fun diasSemanaEtiquetas(): List<String>
+
+    fun proximosAvisos(
+        ruta: String,
+        desdeIso: String,
+        hastaIso: String,
+        registroRuta: String,
+    ): List<AvisoProgramableFfi>
+
+    fun anotarAviso(registroRuta: String, clave: String)
+    fun resumenDelDia(ruta: String, ahoraIso: String, registroRuta: String): AvisoFfi?
 }
 
 class PuenteOrderNativo : PuenteOrder {
@@ -223,4 +235,18 @@ class PuenteOrderNativo : PuenteOrder {
 
     override fun diasSemanaEtiquetas(): List<String> =
         com.jysusman.order.ffi.diasSemanaEtiquetas()
+
+    override fun proximosAvisos(
+        ruta: String,
+        desdeIso: String,
+        hastaIso: String,
+        registroRuta: String,
+    ): List<AvisoProgramableFfi> =
+        com.jysusman.order.ffi.proximosAvisos(ruta, desdeIso, hastaIso, registroRuta)
+
+    override fun anotarAviso(registroRuta: String, clave: String) =
+        com.jysusman.order.ffi.anotarAviso(registroRuta, clave)
+
+    override fun resumenDelDia(ruta: String, ahoraIso: String, registroRuta: String): AvisoFfi? =
+        com.jysusman.order.ffi.resumenDelDia(ruta, ahoraIso, registroRuta)
 }

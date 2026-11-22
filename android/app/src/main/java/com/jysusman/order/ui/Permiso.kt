@@ -1,8 +1,10 @@
 package com.jysusman.order.ui
 
+import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.Settings
 import androidx.compose.foundation.BorderStroke
@@ -28,6 +30,42 @@ import androidx.compose.ui.text.font.FontWeight
 import com.jysusman.order.ui.theme.OrderTema
 
 fun tienePermisoArchivos(): Boolean = Environment.isExternalStorageManager()
+
+fun tienePermisoAlarmaExacta(context: Context): Boolean {
+    val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return true
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        alarmManager.canScheduleExactAlarms()
+    } else {
+        true
+    }
+}
+
+fun abrirAjustesNotificaciones(context: Context) {
+    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+    }
+    val detalleApp = Intent(
+        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        Uri.parse("package:${context.packageName}"),
+    )
+    runCatching { context.startActivity(intent) }
+        .onFailure { runCatching { context.startActivity(detalleApp) } }
+}
+
+fun abrirAjustesAlarmaExacta(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        val intent = Intent(
+            Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+            Uri.parse("package:${context.packageName}"),
+        )
+        val detalleApp = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.parse("package:${context.packageName}"),
+        )
+        runCatching { context.startActivity(intent) }
+            .onFailure { runCatching { context.startActivity(detalleApp) } }
+    }
+}
 
 fun abrirAjustesPermisoArchivos(context: Context) {
     val especifico = Intent(

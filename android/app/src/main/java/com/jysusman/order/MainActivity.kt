@@ -1,9 +1,12 @@
 package com.jysusman.order
 
-import android.content.Context
+import android.Manifest
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,12 +52,19 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.jysusman.order.avisos.Canales
+import com.jysusman.order.avisos.Programador
+import com.jysusman.order.avisos.TrabajoRespaldo
 import com.jysusman.order.datos.ObservadorCarpeta
+import com.jysusman.order.datos.PreferenciasOrder
 import com.jysusman.order.datos.PuenteOrderNativo
 import com.jysusman.order.datos.Repositorio
+import com.jysusman.order.datos.RutasPrivadas
 import com.jysusman.order.ffi.TipoFechaFfi
 import com.jysusman.order.ui.BannersEstado
 import com.jysusman.order.ui.PantallaPermisoArchivos
+import com.jysusman.order.ui.abrirAjustesAlarmaExacta
+import com.jysusman.order.ui.abrirAjustesNotificaciones
 import com.jysusman.order.ui.abrirAjustesPermisoArchivos
 import com.jysusman.order.ui.dia.DiaPantalla
 import com.jysusman.order.ui.formularios.ContenedorFormularioSheet
@@ -67,8 +77,11 @@ import com.jysusman.order.ui.selectores.SelectorMateriaDialog
 import com.jysusman.order.ui.semana.SemanaPantalla
 import com.jysusman.order.ui.theme.OrderTema
 import com.jysusman.order.ui.theme.OrderTheme
+import com.jysusman.order.ui.tienePermisoAlarmaExacta
 import com.jysusman.order.ui.tienePermisoArchivos
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 enum class Pestana(val titulo: String, val icono: ImageVector) {
@@ -87,23 +100,29 @@ private enum class SelectorFiltro {
     HoraHasta,
 }
 
-private const val PREFS_ORDER = "order_prefs"
-private const val CLAVE_CARPETA = "carpeta_datos"
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val prefs = getSharedPreferences(PREFS_ORDER, Context.MODE_PRIVATE)
+        Canales.asegurarCanales(this)
+        TrabajoRespaldo.programar(this)
+
         val puente = PuenteOrderNativo()
-        val carpetaInicial = prefs.getString(CLAVE_CARPETA, null)
-        val repositorio = Repositorio(puente = puente, carpetaInicial = carpetaInicial)
+        val carpetaInicial = PreferenciasOrder.carpetaDatos(this)
+        val programador = Programador.crear(applicationContext)
+        val repositorio = Repositorio(
+            puente = puente,
+            carpetaInicial = carpetaInicial,
+            rutaRegistroAvisos = RutasPrivadas.registroAvisos(applicationContext),
+            onDatosActualizados = { programador.reprogramar() },
+        )
 
         setContent {
             OrderTheme {
                 OrderApp(
                     repositorio = repositorio,
+                    programador = programador,
                     alCambiarCarpeta = { nueva ->
-                        prefs.edit().putString(CLAVE_CARPETA, nueva).apply()
+                        PreferenciasOrder.guardarCarpetaDatos(this, nueva)
                     },
                 )
             }
@@ -114,6 +133,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun OrderApp(
     repositorio: Repositorio,
+    programador: Programador,
     alCambiarCarpeta: (String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -122,9 +142,32 @@ private fun OrderApp(
     val estado by repositorio.estado.collectAsStateWithLifecycle()
 
     var permisoOk by remember { mutableStateOf(tienePermisoArchivos()) }
+    var avisosActivos by remember { mutableStateOf(PreferenciasOrder.avisosActivos(context)) }
+    var permisoNotifOk by remember { mutableStateOf(Canales.tienePermisoNotificaciones(context)) }
+    var permisoAlarmaExactaOk by remember { mutableStateOf(tienePermisoAlarmaExacta(context)) }
+    var notifSolicitada by rememberSaveable { mutableStateOf(false) }
+
     var pestana by rememberSaveable { mutableIntStateOf(0) }
     var formularioActivo by remember { mutableStateOf<FormularioActivo?>(null) }
     var selectorFiltro by remember { mutableStateOf(SelectorFiltro.Ninguno) }
+
+    val lanzadorNotif = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { concedido ->
+        permisoNotifOk = concedido && Canales.tienePermisoNotificaciones(context)
+    }
+
+    suspend fun mostrarResumenSiToca() {
+        if (!avisosActivos || !Canales.tienePermisoNotificaciones(context)) return
+        val resumen = repositorio.resumenDelDia() ?: return
+        Canales.mostrarNotificacion(
+            context = context,
+            clave = resumen.clave,
+            titulo = resumen.titulo,
+            cuerpo = resumen.cuerpo,
+            esRecordatorio = false,
+        )
+    }
 
     // Recarga al volver a primer plano (vuelta de Ajustes del permiso o Syncthing).
     DisposableEffect(lifecycleOwner) {
@@ -132,8 +175,13 @@ private fun OrderApp(
             if (event == Lifecycle.Event.ON_RESUME) {
                 val ahoraTienePermiso = tienePermisoArchivos()
                 permisoOk = ahoraTienePermiso
+                permisoNotifOk = Canales.tienePermisoNotificaciones(context)
+                permisoAlarmaExactaOk = tienePermisoAlarmaExacta(context)
                 if (ahoraTienePermiso) {
-                    scope.launch { repositorio.recargar() }
+                    scope.launch {
+                        repositorio.recargar()
+                        mostrarResumenSiToca()
+                    }
                 }
             }
         }
@@ -141,10 +189,18 @@ private fun OrderApp(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Carga inicial al tener permiso.
+    // Carga inicial al tener permiso y petición única de POST_NOTIFICATIONS.
     LaunchedEffect(permisoOk) {
         if (permisoOk) {
+            if (!notifSolicitada &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                !Canales.tienePermisoNotificaciones(context)
+            ) {
+                notifSolicitada = true
+                lanzadorNotif.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
             repositorio.cargarInicial()
+            mostrarResumenSiToca()
         }
     }
 
@@ -222,6 +278,10 @@ private fun OrderApp(
                     conflicto = estado.conflictos.firstOrNull(),
                     onQuedarActual = { scope.launch { repositorio.resolverConflicto(usarOtra = false) } },
                     onUsarOtra = { scope.launch { repositorio.resolverConflicto(usarOtra = true) } },
+                    faltaPermisoNotificaciones = avisosActivos && !permisoNotifOk,
+                    onAbrirAjustesNotificaciones = { abrirAjustesNotificaciones(context) },
+                    faltaPermisoAlarmaExacta = avisosActivos && !permisoAlarmaExactaOk,
+                    onAbrirAjustesAlarmaExacta = { abrirAjustesAlarmaExacta(context) },
                 )
             }
         },
@@ -367,6 +427,14 @@ private fun OrderApp(
             materias = estado.materias,
             carpetaActual = estado.carpetaDatos,
             alCambiarCarpeta = alCambiarCarpeta,
+            avisosActivos = avisosActivos,
+            alCambiarAvisosActivos = { activos ->
+                avisosActivos = activos
+                PreferenciasOrder.guardarAvisosActivos(context, activos)
+                scope.launch {
+                    withContext(Dispatchers.IO) { programador.reprogramar() }
+                }
+            },
             alAbrirFormulario = { formularioActivo = it },
             alCerrar = { formularioActivo = null },
         )

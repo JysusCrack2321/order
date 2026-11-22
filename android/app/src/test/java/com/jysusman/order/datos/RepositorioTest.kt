@@ -2,6 +2,8 @@ package com.jysusman.order.datos
 
 import com.jysusman.order.ffi.AjustesFormFfi
 import com.jysusman.order.ffi.AnioMesFfi
+import com.jysusman.order.ffi.AvisoFfi
+import com.jysusman.order.ffi.AvisoProgramableFfi
 import com.jysusman.order.ffi.CalendarioMesFfi
 import com.jysusman.order.ffi.ClaseFormFfi
 import com.jysusman.order.ffi.ConflictoFfi
@@ -258,4 +260,16 @@ private class FakePuenteOrder : PuenteOrder {
     override fun parsearHora12(texto: String): Hora12Ffi = Hora12Ffi(7u, 0u, false, "7:00 a. m.")
     override fun diasSemanaEtiquetas(): List<String> =
         listOf("Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom")
+
+    override fun proximosAvisos(
+        ruta: String,
+        desdeIso: String,
+        hastaIso: String,
+        registroRuta: String,
+    ): List<AvisoProgramableFfi> = emptyList()
+
+    override fun anotarAviso(registroRuta: String, clave: String) {}
+
+    override fun resumenDelDia(ruta: String, ahoraIso: String, registroRuta: String): AvisoFfi? =
+        null
 }

@@ -28,6 +28,8 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -73,6 +75,8 @@ fun ContenedorFormularioSheet(
     materias: List<MateriaConTonoFfi>,
     carpetaActual: String,
     alCambiarCarpeta: (String) -> Unit,
+    avisosActivos: Boolean = true,
+    alCambiarAvisosActivos: (Boolean) -> Unit = {},
     alAbrirFormulario: (FormularioActivo) -> Unit,
     alCerrar: () -> Unit,
 ) {
@@ -111,6 +115,8 @@ fun ContenedorFormularioSheet(
                 repositorio = repositorio,
                 carpetaActual = carpetaActual,
                 alCambiarCarpeta = alCambiarCarpeta,
+                avisosActivos = avisosActivos,
+                alCambiarAvisosActivos = alCambiarAvisosActivos,
                 alNuevoRecordatorio = {
                     alAbrirFormulario(FormularioActivo.Recordatorio(id = null, volverAjustes = true))
                 },
@@ -584,6 +590,8 @@ private fun HojaAjustes(
     repositorio: Repositorio,
     carpetaActual: String,
     alCambiarCarpeta: (String) -> Unit,
+    avisosActivos: Boolean,
+    alCambiarAvisosActivos: (Boolean) -> Unit,
     alNuevoRecordatorio: () -> Unit,
     alEditarRecordatorio: (String) -> Unit,
     alCerrar: () -> Unit,
@@ -592,6 +600,7 @@ private fun HojaAjustes(
     var listo by remember { mutableStateOf(false) }
 
     var carpetaTexto by remember(carpetaActual) { mutableStateOf(carpetaActual) }
+    var avisosLocal by remember(avisosActivos) { mutableStateOf(avisosActivos) }
     var sinSemestre by remember { mutableStateOf(false) }
     var inicioIso by remember { mutableStateOf("") }
     var finIso by remember { mutableStateOf("") }
@@ -634,6 +643,9 @@ private fun HojaAjustes(
                     alCambiarCarpeta(carpetaLimpia)
                     repositorio.cambiarCarpeta(carpetaLimpia)
                 }
+                if (avisosLocal != avisosActivos) {
+                    alCambiarAvisosActivos(avisosLocal)
+                }
                 val err = repositorio.guardarAjustes(
                     sinSemestre = sinSemestre,
                     inicioIso = inicioIso,
@@ -656,6 +668,38 @@ private fun HojaAjustes(
             alCambiar = { carpetaTexto = it },
             pista = "/storage/emulated/0/ORDER",
         )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { avisosLocal = !avisosLocal },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Avisos en este dispositivo",
+                    fontSize = OrderTema.TamanoPequeno,
+                    color = OrderTema.Texto,
+                )
+                Text(
+                    text = "Muestra notificaciones programadas de tareas y recordatorios.",
+                    fontSize = OrderTema.TamanoHora,
+                    color = OrderTema.TextoTenue,
+                )
+            }
+            Switch(
+                checked = avisosLocal,
+                onCheckedChange = { avisosLocal = it },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = OrderTema.Fondo,
+                    checkedTrackColor = OrderTema.Acento,
+                    uncheckedThumbColor = OrderTema.TextoSuave,
+                    uncheckedTrackColor = OrderTema.FondoCampo,
+                    uncheckedBorderColor = OrderTema.Borde,
+                ),
+            )
+        }
 
         Row(
             verticalAlignment = Alignment.CenterVertically,

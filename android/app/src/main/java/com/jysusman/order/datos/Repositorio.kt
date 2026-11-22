@@ -2,6 +2,7 @@ package com.jysusman.order.datos
 
 import com.jysusman.order.ffi.AjustesFormFfi
 import com.jysusman.order.ffi.AnioMesFfi
+import com.jysusman.order.ffi.AvisoFfi
 import com.jysusman.order.ffi.CalendarioMesFfi
 import com.jysusman.order.ffi.ClaseFormFfi
 import com.jysusman.order.ffi.ConflictoFfi
@@ -65,6 +66,8 @@ class Repositorio(
     carpetaInicial: String? = null,
     private val dispatcherIo: CoroutineDispatcher = Dispatchers.IO,
     private val asegurarCarpeta: (File) -> Unit = { dir -> dir.mkdirs() },
+    private val rutaRegistroAvisos: String = "",
+    private val onDatosActualizados: () -> Unit = {},
 ) {
     private val mutex = Mutex()
 
@@ -158,6 +161,7 @@ class Repositorio(
                         materias = lectura.materias,
                     )
                 }
+                withContext(dispatcherIo) { onDatosActualizados() }
             }.onFailure { err ->
                 val conflictosActuales = withContext(dispatcherIo) {
                     runCatching { puente.detectarConflictos(actual.rutaArchivo) }
@@ -386,6 +390,14 @@ class Repositorio(
                 .getOrDefault(texto.trim())
         }
 
+    suspend fun resumenDelDia(): AvisoFfi? {
+        val rutaDatos = _estado.value.rutaArchivo
+        if (rutaDatos.isBlank() || rutaRegistroAvisos.isBlank()) return null
+        return withContext(dispatcherIo) {
+            runCatching { puente.resumenDelDia(rutaDatos, "", rutaRegistroAvisos) }.getOrNull()
+        }
+    }
+
     // --- Ayudantes internos ------------------------------------------------
 
     private suspend fun ejecutarEscritura(
@@ -421,6 +433,7 @@ class Repositorio(
                             materias = lectura.materias,
                         )
                     }
+                    withContext(dispatcherIo) { onDatosActualizados() }
                     true
                 },
                 onFailure = { err ->
@@ -465,6 +478,7 @@ class Repositorio(
                             materias = lectura.materias,
                         )
                     }
+                    withContext(dispatcherIo) { onDatosActualizados() }
                     null
                 },
                 onFailure = { err ->
