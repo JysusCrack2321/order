@@ -199,6 +199,7 @@ export component AppWindow inherits Window {
     in property <string> error: "";
     in property <[string]> advertencias: [];
     in property <string> conflicto-texto: "";
+    in property <string> moodle-banner: "";
     in property <string> pie: "";
 
     in property <[DiaUI]> dias;
@@ -246,7 +247,7 @@ export component AppWindow inherits Window {
     in property <bool> pm-filtro-activo: false;
 
     // --- Estado del formulario abierto -----------------------------------
-    // 0 = ninguno · 1 = tarea · 2 = clase · 3 = ajustes · 4 = recordatorio
+    // 0 = ninguno · 1 = tarea · 2 = clase · 3 = ajustes · 4 = recordatorio · 5 = agente · 6 = moodle
     in-out property <int> formulario: 0;
     in property <string> form-encabezado: "";
     in property <string> form-sub: "";
@@ -267,6 +268,7 @@ export component AppWindow inherits Window {
     in-out property <string> f-fin: "";
     in-out property <string> f-lugar: "";
     in-out property <bool> f-hecha: false;
+    in property <string> f-enlace: "";
 
     // Días de la clase: se eligen varios (al menos uno).
     in-out property <bool> f-lun: false;
@@ -345,6 +347,17 @@ export component AppWindow inherits Window {
     // Sección "Avanzado": URL y modelo a mano. Cerrada salvo con "Otro".
     in-out property <bool> a-avanzado: false;
 
+    // --- Ajustes → Moodle -------------------------------------------------
+    in property <bool> moodle-conectado: false;
+    in property <bool> moodle-requiere-reingreso: false;
+    in property <string> moodle-estado-texto: "";
+    in property <bool> moodle-ocupado: false;
+    in property <string> moodle-aviso: "";
+    in-out property <string> m-sitio: "micampus.unal.edu.co";
+    in-out property <string> m-usuario: "";
+    in-out property <string> m-contrasena: "";
+    in-out property <bool> m-ver-pass: false;
+
     // --- Selector abierto (fecha, hora o materia) -------------------------
     // 0 = ninguno · 1 = fecha · 2 = hora · 3 = materia. `sel-campo` dice qué
     // campo del formulario se está llenando; el significado lo pone puente.rs.
@@ -414,6 +427,11 @@ export component AppWindow inherits Window {
     callback conexion-otro-proveedor();
     callback conexion-cerrar();
     callback abrir-agente();
+    callback abrir-moodle();
+    callback moodle-conectar();
+    callback moodle-sincronizar();
+    callback moodle-desconectar();
+    callback abrir-enlace-tarea();
     callback elegir-proveedor(int);
     callback elegir-voz-proveedor(int);
     callback conseguir-clave(int);
@@ -542,6 +560,14 @@ export component AppWindow inherits Window {
                 mensaje: root.conflicto-texto;
                 quedar-actual => { root.conflicto-quedar-actual(); }
                 usar-otra => { root.conflicto-usar-otra(); }
+            }
+
+            if root.moodle-banner != "" : Banner {
+                titulo: root.moodle-banner;
+                lineas: [];
+                fondo-color: Tema.fondo-aviso;
+                filo: Tema.borde-aviso;
+                tinta: Tema.texto-aviso;
             }
 
             // --- Contenido ------------------------------------------------
@@ -729,7 +755,7 @@ export component AppWindow inherits Window {
             if root.formulario == 1 : Marco {
                 encabezado: root.form-encabezado;
                 sub: root.form-edita ? "Los cambios se guardan en order.toml." : "Se agrega al final de order.toml.";
-                alto-panel: Tema.alto-panel-tarea;
+                alto-panel: root.form-edita && root.f-enlace != "" ? Tema.alto-panel-tarea-enlace : Tema.alto-panel-tarea;
                 error: root.form-error;
                 confirma: root.form-confirma;
                 pregunta-confirma: "¿Borrar esta tarea del archivo?";
@@ -798,6 +824,12 @@ export component AppWindow inherits Window {
                             color: Tema.texto-suave;
                             vertical-alignment: center;
                         }
+                    }
+
+                    if root.form-edita && root.f-enlace != "" : Boton {
+                        texto: "Abrir en Moodle";
+                        width: Tema.ancho-boton-largo;
+                        clicked => { root.abrir-enlace-tarea(); }
                     }
                 }
             }
@@ -1041,6 +1073,12 @@ export component AppWindow inherits Window {
                             texto: "Agente…";
                             width: Tema.ancho-boton-clase;
                             clicked => { root.abrir-agente(); }
+                        }
+
+                        Boton {
+                            texto: root.moodle-requiere-reingreso ? "Moodle !" : "Moodle…";
+                            width: Tema.ancho-boton-clase;
+                            clicked => { root.abrir-moodle(); }
                         }
                     }
                 }
@@ -1314,6 +1352,89 @@ export component AppWindow inherits Window {
                                     vertical-alignment: center;
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // --- Moodle ---------------------------------------------------
+            if root.formulario == 6 : Marco {
+                encabezado: "Moodle";
+                sub: "Sincroniza entregas automáticamente. Solo guarda el token.";
+                alto-panel: Tema.alto-panel-moodle;
+                ancho-panel: Tema.ancho-formulario-ancho;
+                error: root.form-error;
+                confirma: false;
+                puede-borrar: false;
+                texto-cancelar: "Volver";
+                texto-guardar: (!root.moodle-conectado || root.moodle-requiere-reingreso)
+                    ? (root.moodle-ocupado ? "Conectando…" : "Conectar")
+                    : (root.moodle-ocupado ? "Sincronizando…" : "Sincronizar ahora");
+                mostrar-guardar: !root.moodle-ocupado;
+
+                guardar => {
+                    if !root.moodle-conectado || root.moodle-requiere-reingreso {
+                        root.moodle-conectar();
+                    } else {
+                        root.moodle-sincronizar();
+                    }
+                }
+                cancelar => { root.cancelar-formulario(); }
+                pedir-borrar => { }
+                confirmar-borrado => { }
+                no-borrar => { }
+
+                VerticalLayout {
+                    spacing: Tema.espacio-md;
+
+                    if root.moodle-conectado : Text {
+                        text: root.moodle-estado-texto;
+                        wrap: word-wrap;
+                        font-size: Tema.tamano-pequeno;
+                        color: root.moodle-requiere-reingreso ? Tema.texto-aviso : Tema.texto;
+                    }
+
+                    if !root.moodle-conectado || root.moodle-requiere-reingreso : VerticalLayout {
+                        spacing: Tema.espacio-md;
+
+                        Campo {
+                            etiqueta: "Sitio de Moodle";
+                            texto <=> root.m-sitio;
+                            pista: "micampus.unal.edu.co";
+                            apagado: root.moodle-ocupado;
+                        }
+
+                        Campo {
+                            etiqueta: "Usuario";
+                            texto <=> root.m-usuario;
+                            pista: "usuario";
+                            apagado: root.moodle-ocupado;
+                        }
+
+                        CampoClave {
+                            etiqueta: "Contraseña";
+                            texto <=> root.m-contrasena;
+                            pista: "••••••••";
+                            ver: root.m-ver-pass;
+                            alternar => { root.m-ver-pass = !root.m-ver-pass; }
+                        }
+                    }
+
+                    if root.moodle-aviso != "" : Text {
+                        text: root.moodle-aviso;
+                        wrap: word-wrap;
+                        font-size: Tema.tamano-pequeno;
+                        color: Tema.texto-suave;
+                    }
+
+                    if root.moodle-conectado : HorizontalLayout {
+                        spacing: Tema.espacio-sm;
+
+                        Boton {
+                            texto: "Desconectar";
+                            peligro: true;
+                            width: Tema.ancho-boton-form;
+                            clicked => { root.moodle-desconectar(); }
                         }
                     }
                 }

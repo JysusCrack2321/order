@@ -27,6 +27,7 @@ use order_core::filtros::{Filtro, TipoFecha};
 use order_core::modelo::{
     self, Ajustes, Clase, Datos, Dia, ErrorDatos, FORMATO_FECHA, Recordatorio, Tarea,
 };
+use order_core::moodle::{self, EstadoMoodle};
 use order_core::ops;
 use order_core::presentacion::formularios::{
     self, codigo_fecha, fecha_del_codigo, interpretar_fecha, interpretar_hora, opcional,
@@ -67,6 +68,7 @@ enum Edicion {
     Recordatorio(String),
     Ajustes,
     Agente,
+    Moodle,
 }
 
 /// Qué selector está abierto y qué campo del formulario llena.
@@ -135,6 +137,10 @@ struct Estado {
     conexion_conectando: bool,
     conexion_estado_texto: String,
     conexion_estado_error: bool,
+    // --- Moodle ---------------------------------------------------------
+    moodle: EstadoMoodle,
+    moodle_ocupado: bool,
+    moodle_aviso: String,
 }
 
 fn ruta_conversacion() -> std::path::PathBuf {
@@ -172,6 +178,9 @@ impl Estado {
             conexion_conectando: false,
             conexion_estado_texto: String::new(),
             conexion_estado_error: false,
+            moodle: moodle::config::estado_de(&moodle::config::ruta()),
+            moodle_ocupado: false,
+            moodle_aviso: String::new(),
         }
     }
 }
@@ -237,6 +246,12 @@ struct Vista {
     conexion_conectando: bool,
     conexion_estado_texto: SharedString,
     conexion_estado_error: bool,
+    moodle_banner: SharedString,
+    moodle_conectado: bool,
+    moodle_requiere_reingreso: bool,
+    moodle_estado_texto: SharedString,
+    moodle_ocupado: bool,
+    moodle_aviso: SharedString,
 }
 
 // ---------------------------------------------------------------------------
@@ -341,6 +356,13 @@ pub fn mostrar_advertencias(advertencias: &[ErrorDatos]) {
 /// Banner de conflictos de Syncthing: muestra el primero pendiente, si hay.
 pub fn mostrar_conflictos(lista: Vec<Conflicto>) {
     con_estado(|estado| estado.conflictos = lista);
+    actualizar_si_existe();
+}
+
+/// Relee el estado de Moodle desde `moodle.toml` y actualiza la ventana.
+pub fn refrescar_moodle() {
+    let moodle = moodle::config::estado_de(&moodle::config::ruta());
+    con_estado(|estado| estado.moodle = moodle);
     actualizar_si_existe();
 }
 
@@ -668,6 +690,39 @@ fn conectar(ui: &AppWindow) {
     });
 
     let debil = ui.as_weak();
+    ui.on_abrir_moodle(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        abrir_moodle(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_moodle_conectar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        conectar_moodle(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_moodle_sincronizar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        sincronizar_moodle(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_moodle_desconectar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        desconectar_moodle(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_abrir_enlace_tarea(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        let enlace = ui.get_f_enlace().to_string();
+        if !enlace.trim().is_empty() {
+            crate::sistema::abrir_en_navegador(enlace.trim());
+        }
+    });
+
+    let debil = ui.as_weak();
     ui.on_conexion_abrir_studio(move || {
         let Some(_ui) = debil.upgrade() else { return };
         crate::sistema::abrir_en_navegador(&textos_conexion_agente().url_studio);
@@ -868,7 +923,7 @@ fn mover_dia(debil: &Weak<AppWindow>, delta_dias: i64) {
 // ---------------------------------------------------------------------------
 
 fn abrir_tarea(ui: &AppWindow, tarea: Option<&Tarea>) {
-    let (id, titulo, materia, fecha, hora, hecha) = match tarea {
+    let (id, titulo, materia, fecha, hora, hecha, enlace) = match tarea {
         Some(t) => (
             t.id.clone(),
             t.titulo.clone(),
@@ -876,6 +931,7 @@ fn abrir_tarea(ui: &AppWindow, tarea: Option<&Tarea>) {
             t.vence.format(FORMATO_FECHA).to_string(),
             hora_texto(t.vence.time()),
             t.hecha,
+            t.enlace.clone().unwrap_or_default(),
         ),
         None => (
             String::new(),
@@ -886,6 +942,7 @@ fn abrir_tarea(ui: &AppWindow, tarea: Option<&Tarea>) {
                 .to_string(),
             hora_texto(hora(23, 59)),
             false,
+            String::new(),
         ),
     };
 
@@ -904,6 +961,7 @@ fn abrir_tarea(ui: &AppWindow, tarea: Option<&Tarea>) {
     ui.set_f_fecha(fecha.into());
     ui.set_f_hora(hora.into());
     ui.set_f_hecha(hecha);
+    ui.set_f_enlace(enlace.into());
     abrir_panel(ui, 1);
 }
 
@@ -1003,7 +1061,10 @@ fn abrir_panel(ui: &AppWindow, cual: i32) {
 fn cancelar(ui: &AppWindow) {
     let volver_ajustes = con_estado(|estado| {
         estado.volver_ajustes
-            && matches!(estado.edicion, Edicion::Recordatorio(_) | Edicion::Agente)
+            && matches!(
+                estado.edicion,
+                Edicion::Recordatorio(_) | Edicion::Agente | Edicion::Moodle
+            )
     });
     ui.set_form_confirma(false);
     ui.set_form_error("".into());
@@ -1030,7 +1091,7 @@ fn guardar(ui: &AppWindow) {
         Edicion::Recordatorio(_) => guardar_recordatorio(ui),
         Edicion::Ajustes => guardar_ajustes(ui),
         Edicion::Agente => guardar_agente(ui),
-        Edicion::Ninguna => {}
+        Edicion::Moodle | Edicion::Ninguna => {}
     }
 }
 
@@ -1335,6 +1396,176 @@ fn guardar_agente(ui: &AppWindow) {
             actualizar(ui);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Moodle
+// ---------------------------------------------------------------------------
+
+fn abrir_moodle(ui: &AppWindow) {
+    let ruta_moodle = moodle::config::ruta();
+    let est = moodle::config::estado_de(&ruta_moodle);
+    con_estado(|estado| {
+        estado.moodle = est.clone();
+        estado.moodle_aviso.clear();
+        estado.edicion = Edicion::Moodle;
+        estado.volver_ajustes = true;
+    });
+    ui.set_m_sitio(est.sitio.into());
+    ui.set_m_contrasena("".into());
+    ui.set_m_ver_pass(false);
+    ui.set_form_encabezado("Moodle".into());
+    ui.set_form_edita(false);
+    abrir_panel(ui, 6);
+}
+
+fn conectar_moodle(ui: &AppWindow) {
+    if con_estado(|estado| estado.moodle_ocupado) {
+        return;
+    }
+    let sitio = ui.get_m_sitio().to_string();
+    let usuario = ui.get_m_usuario().to_string();
+    let contrasena = ui.get_m_contrasena().to_string();
+
+    if sitio.trim().is_empty() || usuario.trim().is_empty() || contrasena.is_empty() {
+        falta(ui, 0, "Escribe sitio, usuario y contraseña.");
+        return;
+    }
+
+    ui.set_form_error("".into());
+    con_estado(|estado| {
+        estado.moodle_ocupado = true;
+        estado.moodle_aviso = "Conectando y sincronizando…".to_string();
+    });
+    actualizar(ui);
+
+    let debil = ui.as_weak();
+    let ruta_datos = almacen().ruta;
+    std::thread::spawn(move || {
+        let ruta_moodle = moodle::config::ruta();
+        let res_con = moodle::conectar(&ruta_moodle, &sitio, &usuario, &contrasena);
+        let resultado = match res_con {
+            Ok(_) => {
+                let hoy = Local::now().date_naive();
+                let sync = moodle::sincronizar_ahora(&ruta_datos, &ruta_moodle, hoy);
+                let datos = Almacen { ruta: ruta_datos }.cargar().ok();
+                let est = moodle::config::estado_de(&ruta_moodle);
+                Ok((est, sync, datos))
+            }
+            Err(err) => Err(err.to_string()),
+        };
+
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = debil.upgrade() else { return };
+            match resultado {
+                Ok((est, sync, datos)) => {
+                    ui.set_m_contrasena("".into());
+                    ui.set_m_ver_pass(false);
+                    ui.set_form_error("".into());
+                    if let Some(ref d) = datos {
+                        crate::sistema::publicar(d);
+                    }
+                    con_estado(|estado| {
+                        estado.moodle_ocupado = false;
+                        estado.moodle = est;
+                        if let Some(d) = datos {
+                            estado.datos = Some(d);
+                        }
+                        estado.moodle_aviso = match sync {
+                            Ok(r) => format!(
+                                "Sincronizado: {} creadas, {} actualizadas.",
+                                r.creadas, r.actualizadas
+                            ),
+                            Err(e) => format!("Conectado, pero no se pudo sincronizar: {e}"),
+                        };
+                    });
+                }
+                Err(msg) => {
+                    con_estado(|estado| {
+                        estado.moodle_ocupado = false;
+                        estado.moodle_aviso.clear();
+                    });
+                    ui.set_form_error(msg.into());
+                }
+            }
+            actualizar(&ui);
+        });
+    });
+}
+
+fn sincronizar_moodle(ui: &AppWindow) {
+    if con_estado(|estado| estado.moodle_ocupado) {
+        return;
+    }
+    ui.set_form_error("".into());
+    con_estado(|estado| {
+        estado.moodle_ocupado = true;
+        estado.moodle_aviso = "Sincronizando…".to_string();
+    });
+    actualizar(ui);
+
+    let debil = ui.as_weak();
+    let ruta_datos = almacen().ruta;
+    std::thread::spawn(move || {
+        let ruta_moodle = moodle::config::ruta();
+        let hoy = Local::now().date_naive();
+        let sync = moodle::sincronizar_ahora(&ruta_datos, &ruta_moodle, hoy);
+        let datos = if sync.is_ok() {
+            Almacen { ruta: ruta_datos }.cargar().ok()
+        } else {
+            None
+        };
+        let est = moodle::config::estado_de(&ruta_moodle);
+
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = debil.upgrade() else { return };
+            if let Some(ref d) = datos {
+                crate::sistema::publicar(d);
+            }
+            con_estado(|estado| {
+                estado.moodle_ocupado = false;
+                estado.moodle = est;
+                if let Some(d) = datos {
+                    estado.datos = Some(d);
+                }
+                match sync {
+                    Ok(r) => {
+                        estado.moodle_aviso = format!(
+                            "Listo: {} creadas, {} actualizadas, {} completadas.",
+                            r.creadas, r.actualizadas, r.hechas
+                        );
+                        ui.set_form_error("".into());
+                    }
+                    Err(err) => {
+                        estado.moodle_aviso.clear();
+                        ui.set_form_error(err.to_string().into());
+                    }
+                }
+            });
+            actualizar(&ui);
+        });
+    });
+}
+
+fn desconectar_moodle(ui: &AppWindow) {
+    if con_estado(|estado| estado.moodle_ocupado) {
+        return;
+    }
+    let ruta_moodle = moodle::config::ruta();
+    if let Err(err) = moodle::config::borrar_en(&ruta_moodle) {
+        ui.set_form_error(err.into());
+        return;
+    }
+    let est = moodle::config::estado_de(&ruta_moodle);
+    ui.set_m_contrasena("".into());
+    ui.set_m_ver_pass(false);
+    ui.set_form_error("".into());
+    ui.set_m_sitio(est.sitio.clone().into());
+    con_estado(|estado| {
+        estado.moodle = est;
+        estado.moodle_aviso = "Desconectado de Moodle.".to_string();
+    });
+    actualizar(ui);
 }
 
 /// Abre el selector del sistema y prepara los adjuntos en un hilo.
@@ -2020,6 +2251,12 @@ fn actualizar(ui: &AppWindow) {
     ui.set_conexion_conectando(vista.conexion_conectando);
     ui.set_conexion_estado_texto(vista.conexion_estado_texto);
     ui.set_conexion_estado_error(vista.conexion_estado_error);
+    ui.set_moodle_banner(vista.moodle_banner);
+    ui.set_moodle_conectado(vista.moodle_conectado);
+    ui.set_moodle_requiere_reingreso(vista.moodle_requiere_reingreso);
+    ui.set_moodle_estado_texto(vista.moodle_estado_texto);
+    ui.set_moodle_ocupado(vista.moodle_ocupado);
+    ui.set_moodle_aviso(vista.moodle_aviso);
 }
 
 fn construir_vista() -> Vista {
@@ -2194,6 +2431,16 @@ fn construir_vista() -> Vista {
             conexion_conectando: estado.conexion_conectando,
             conexion_estado_texto: estado.conexion_estado_texto.clone().into(),
             conexion_estado_error: estado.conexion_estado_error,
+            moodle_banner: if estado.moodle.requiere_reingreso {
+                "Vuelve a iniciar sesión en Moodle (Ajustes → Moodle).".into()
+            } else {
+                "".into()
+            },
+            moodle_conectado: estado.moodle.conectado,
+            moodle_requiere_reingreso: estado.moodle.requiere_reingreso,
+            moodle_estado_texto: estado.moodle.texto_estado.clone().into(),
+            moodle_ocupado: estado.moodle_ocupado,
+            moodle_aviso: estado.moodle_aviso.clone().into(),
         }
     })
 }

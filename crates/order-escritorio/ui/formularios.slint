@@ -334,6 +334,10 @@ export component Marco inherits Rectangle {
     in property <bool> puede-borrar: false;
     /// Texto del botón principal ("Guardar" por defecto).
     in property <string> texto-guardar: "Guardar";
+    /// Texto del botón secundario ("Cancelar" por defecto).
+    in property <string> texto-cancelar: "Cancelar";
+    /// Muestra u oculta el botón principal.
+    in property <bool> mostrar-guardar: true;
 
     callback guardar();
     callback cancelar();
@@ -447,11 +451,11 @@ export component Marco inherits Rectangle {
                 Rectangle { horizontal-stretch: 1; }
 
                 Boton {
-                    texto: "Cancelar";
+                    texto: root.texto-cancelar;
                     clicked => { root.cancelar(); }
                 }
 
-                Boton {
+                if root.mostrar-guardar : Boton {
                     texto: root.texto-guardar;
                     principal: true;
                     clicked => { root.guardar(); }

@@ -522,3 +522,35 @@ fn registro() -> Registro {
         _ => Registro::por_defecto(),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Sincronización periódica (Moodle)
+// ---------------------------------------------------------------------------
+
+/// Intervalo de sincronización automática en segundo plano (3 horas).
+const INTERVALO_SYNC: Duration = Duration::from_secs(3 * 3600);
+
+/// Sincroniza al abrir la app y luego cada 3 horas en un hilo aparte.
+/// Los fallos sin red se silencian; los cambios refrescan la ventana vía event loop.
+pub fn arrancar_sincronizacion(almacen: Almacen) {
+    thread::spawn(move || loop {
+        let ruta_moodle = order_core::moodle::config::ruta();
+        if order_core::moodle::config::cargar_de(&ruta_moodle).conectado() {
+            let hoy = Local::now().date_naive();
+            match order_core::moodle::sincronizar_ahora(&almacen.ruta, &ruta_moodle, hoy) {
+                Ok(resumen) => {
+                    if resumen.creadas > 0 || resumen.actualizadas > 0 || resumen.hechas > 0 {
+                        let clon = almacen.clone();
+                        let _ = slint::invoke_from_event_loop(move || leer_y_mostrar(&clon));
+                    }
+                    let _ = slint::invoke_from_event_loop(puente::refrescar_moodle);
+                }
+                Err(order_core::moodle::ErrorMoodle::TokenInvalido) => {
+                    let _ = slint::invoke_from_event_loop(puente::refrescar_moodle);
+                }
+                Err(_) => {}
+            }
+        }
+        thread::sleep(INTERVALO_SYNC);
+    });
+}
