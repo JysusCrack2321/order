@@ -55,3 +55,6 @@ Aplicación Android nativa (Kotlin + Jetpack Compose) respaldada por el núcleo 
 - Al abrir la app por primera vez solicita **Acceso a todos los archivos** (`MANAGE_EXTERNAL_STORAGE`) para leer y escribir `/storage/emulated/0/ORDER/order.toml` (compatible con Syncthing-Fork).
 - Si la carpeta o el archivo no existen, se crean automáticamente con el contenido de ejemplo.
 - La carpeta de datos se puede cambiar desde **Ajustes** dentro de la app.
+- **Notificaciones y alarmas exactas** (`POST_NOTIFICATIONS`, `SCHEDULE_EXACT_ALARM` / `USE_EXACT_ALARM`, `RECEIVE_BOOT_COMPLETED`): para mostrar avisos de tareas y recordatorios a su hora aunque la app esté cerrada o el teléfono se reinicie (si faltan permisos, la app muestra un banner para activarlos y usa alarmas inexactas de respaldo). Se pueden desactivar en **Ajustes → Avisos en este dispositivo**.
+- **Red y micrófono** (`INTERNET`, `RECORD_AUDIO`): solo se usan cuando envías una petición al agente o grabas una nota de voz para transcribir con Whisper.
+- Las claves de API (`agente.toml`) y el registro de avisos enviados (`enviados.txt`) viven en el almacenamiento privado de la app (`filesDir`), nunca en la carpeta sincronizada.
