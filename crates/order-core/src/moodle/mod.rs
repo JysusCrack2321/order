@@ -1,9 +1,16 @@
-//! Integración con Moodle: tipos, emparejado de materias y sincronización.
+//! Integración con Moodle: tipos, emparejado de materias, cliente y sincronización.
 
+pub mod cliente;
+pub mod config;
 pub mod sincronizar;
 
+use crate::almacen::Almacen;
 use crate::modelo;
-use chrono::NaiveDateTime;
+use chrono::{Local, NaiveDate, NaiveDateTime};
+use std::path::Path;
+
+pub use cliente::ErrorMoodle;
+pub use config::{EstadoMoodle, MoodleConfig};
 
 /// Evento de entrega o actividad obtenido de Moodle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +43,60 @@ pub struct ResumenSync {
     pub creadas: u32,
     pub actualizadas: u32,
     pub hechas: u32,
+}
+
+/// Inicia sesión contra Moodle y guarda `moodle.toml` (solo token, nunca contraseña).
+pub fn conectar(
+    ruta_moodle: &Path,
+    sitio: &str,
+    usuario: &str,
+    contrasena: &str,
+) -> Result<EstadoMoodle, ErrorMoodle> {
+    let cfg = cliente::iniciar_sesion(sitio, usuario, contrasena)?;
+    config::guardar_en(ruta_moodle, &cfg).map_err(ErrorMoodle::Servidor)?;
+    Ok(config::estado_de(ruta_moodle))
+}
+
+/// Descarga eventos de Moodle, aplica las reglas de sincronización sobre `order.toml`
+/// (solo si hay cambios) y actualiza `ultima_sincronizacion` en `moodle.toml`.
+pub fn sincronizar_ahora(
+    ruta_datos: &Path,
+    ruta_moodle: &Path,
+    hoy: NaiveDate,
+) -> Result<ResumenSync, ErrorMoodle> {
+    let mut cfg = config::cargar_de(ruta_moodle);
+    if !cfg.conectado() {
+        return Err(ErrorMoodle::NoConfigurado);
+    }
+
+    let eventos = match cliente::obtener_eventos(&cfg, hoy) {
+        Ok(ev) => ev,
+        Err(ErrorMoodle::TokenInvalido) => {
+            cfg.token_invalido = true;
+            let _ = config::guardar_en(ruta_moodle, &cfg);
+            return Err(ErrorMoodle::TokenInvalido);
+        }
+        Err(err) => return Err(err),
+    };
+
+    let almacen = Almacen {
+        ruta: ruta_datos.to_path_buf(),
+    };
+    let datos = almacen
+        .cargar()
+        .map_err(|e| ErrorMoodle::Servidor(e.to_string()))?;
+
+    let cambios = sincronizar::aplicar(&datos, &eventos, hoy);
+    if cambios.hay_cambios() {
+        almacen
+            .modificar(|doc| cambios.aplicar_en_doc(doc))
+            .map_err(|e| ErrorMoodle::Servidor(e.to_string()))?;
+    }
+
+    cfg.anotar_sincronizacion(Local::now().naive_local());
+    config::guardar_en(ruta_moodle, &cfg).map_err(ErrorMoodle::Servidor)?;
+
+    Ok(cambios.resumen())
 }
 
 /// Quita el esquema (`https://` / `http://`) y barras finales del sitio de Moodle.
