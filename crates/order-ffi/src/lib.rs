@@ -433,6 +433,7 @@ pub struct AgenteConfigFfi {
     pub modelo: String,
     pub api_key: String,
     pub ve_imagenes: bool,
+    pub limite_contexto_tokens: u32,
     pub voz_proveedor: i32,
     pub voz_url_base: String,
     pub voz_modelo: String,
@@ -1230,11 +1231,44 @@ struct AccionPendiente {
     descripcion: String,
 }
 
+struct EstadoConversacion {
+    ruta_cargada: Option<PathBuf>,
+    conv: Conversacion,
+}
+
+impl EstadoConversacion {
+    fn nuevo() -> Self {
+        Self {
+            ruta_cargada: None,
+            conv: Conversacion::nueva(),
+        }
+    }
+
+    fn asegurar(&mut self, ruta_config: &str) -> Option<PathBuf> {
+        let limpio = ruta_config.trim();
+        if limpio.is_empty() {
+            return None;
+        }
+        let ruta_conv = Conversacion::ruta_junto_a(Path::new(limpio));
+        if self.ruta_cargada.as_ref() != Some(&ruta_conv) {
+            self.conv = Conversacion::cargar_de(&ruta_conv);
+            self.ruta_cargada = Some(ruta_conv.clone());
+        }
+        Some(ruta_conv)
+    }
+
+    fn guardar(&self) {
+        if let Some(ruta) = &self.ruta_cargada {
+            let _ = self.conv.guardar_en(ruta);
+        }
+    }
+}
+
 static SIGUIENTE_ACCION_ID: AtomicU64 = AtomicU64::new(1);
 static ACCIONES_PENDIENTES: LazyLock<Mutex<HashMap<String, AccionPendiente>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-static CONVERSACION: LazyLock<Mutex<Conversacion>> =
-    LazyLock::new(|| Mutex::new(Conversacion::nueva()));
+static CONVERSACION: LazyLock<Mutex<EstadoConversacion>> =
+    LazyLock::new(|| Mutex::new(EstadoConversacion::nuevo()));
 
 #[uniffi::export]
 pub fn proveedores_agente() -> Vec<ProveedorInfoFfi> {
@@ -1282,6 +1316,7 @@ pub fn validar_agente(
     url: String,
     modelo: String,
     api_key: String,
+    limite_contexto: String,
     voz_proveedor: i32,
     voz_url: String,
     voz_modelo: String,
@@ -1297,6 +1332,7 @@ pub fn validar_agente(
         &voz_modelo,
         &voz_key,
     )?;
+    formularios::validar_limite_contexto(&limite_contexto)?;
     Ok(())
 }
 
@@ -1308,6 +1344,7 @@ pub fn guardar_agente_config(
     modelo: String,
     api_key: String,
     ve_imagenes: bool,
+    limite_contexto: String,
     voz_proveedor: i32,
     voz_url: String,
     voz_modelo: String,
@@ -1323,6 +1360,7 @@ pub fn guardar_agente_config(
         &voz_modelo,
         &voz_key,
     )?;
+    cfg.limite_contexto_tokens = formularios::validar_limite_contexto(&limite_contexto)?;
     cfg.ve_imagenes = ve_imagenes;
     config::guardar_en(Path::new(&ruta_config), &cfg)
         .map_err(|mensaje| ErrorFfi::Operacion { mensaje })?;
@@ -1399,33 +1437,91 @@ pub fn enviar_al_agente(
 
     let nombres_adjuntos: Vec<String> = adjuntos.iter().map(|a| a.nombre.clone()).collect();
     let adjuntos_core: Vec<Adjunto> = adjuntos.into_iter().map(adjunto_de_ffi).collect();
-    let conv_snapshot = CONVERSACION
+    let mut conv_snapshot = CONVERSACION
         .lock()
-        .map(|guard| guard.clone())
+        .map(|mut guard| {
+            guard.asegurar(&ruta_config);
+            guard.conv.clone()
+        })
         .unwrap_or_else(|_| Conversacion::nueva());
-    let salida = cliente::consultar(
+
+    if conv_snapshot.necesita_compactar(cfg.limite_contexto_tokens) {
+        if let Ok(resumen_compactado) = cliente::compactar(&cfg, &conv_snapshot) {
+            conv_snapshot.aplicar_compactacion(&resumen_compactado);
+            if let Ok(mut guard) = CONVERSACION.lock() {
+                guard.asegurar(&ruta_config);
+                guard.conv.aplicar_compactacion(&resumen_compactado);
+                guard.guardar();
+            }
+        }
+    }
+
+    let salida = match cliente::consultar(
         &cfg,
         &resumen_ctx,
         pregunta_efectiva,
         &adjuntos_core,
         &conv_snapshot,
-    )
-    .map_err(|e| ErrorFfi::Operacion {
-        mensaje: e.to_string(),
-    })?;
+    ) {
+        Ok(texto) => texto,
+        Err(err)
+            if cliente::es_error_contexto_largo(&err)
+                && conv_snapshot.texto_para_compactar().is_some() =>
+        {
+            if let Ok(resumen_compactado) = cliente::compactar(&cfg, &conv_snapshot) {
+                conv_snapshot.aplicar_compactacion(&resumen_compactado);
+                if let Ok(mut guard) = CONVERSACION.lock() {
+                    guard.asegurar(&ruta_config);
+                    guard.conv.aplicar_compactacion(&resumen_compactado);
+                    guard.guardar();
+                }
+            }
+            cliente::consultar(
+                &cfg,
+                &resumen_ctx,
+                pregunta_efectiva,
+                &adjuntos_core,
+                &conv_snapshot,
+            )
+            .map_err(|e| ErrorFfi::Operacion {
+                mensaje: e.to_string(),
+            })?
+        }
+        Err(err) => {
+            return Err(ErrorFfi::Operacion {
+                mensaje: err.to_string(),
+            });
+        }
+    };
 
     Ok(construir_respuesta_agente(
         &datos,
         &salida,
         pregunta_efectiva,
         &nombres_adjuntos,
+        &adjuntos_core,
     ))
+}
+
+#[uniffi::export]
+pub fn necesita_compactar(ruta_config: String) -> bool {
+    let cfg = config::cargar_de(Path::new(&ruta_config));
+    CONVERSACION
+        .lock()
+        .map(|mut guard| {
+            guard.asegurar(&ruta_config);
+            guard.conv.necesita_compactar(cfg.limite_contexto_tokens)
+        })
+        .unwrap_or(false)
 }
 
 #[uniffi::export]
 pub fn nueva_conversacion() {
     if let Ok(mut guard) = CONVERSACION.lock() {
-        *guard = Conversacion::nueva();
+        guard.conv = Conversacion::nueva();
+        if let Some(ruta) = &guard.ruta_cargada {
+            Conversacion::borrar_de(ruta);
+        }
     }
     if let Ok(mut guard) = ACCIONES_PENDIENTES.lock() {
         guard.clear();
@@ -1436,7 +1532,18 @@ pub fn nueva_conversacion() {
 pub fn hay_conversacion() -> bool {
     CONVERSACION
         .lock()
-        .map(|guard| !guard.esta_vacia())
+        .map(|guard| !guard.conv.esta_vacia())
+        .unwrap_or(false)
+}
+
+#[uniffi::export]
+pub fn hay_conversacion_en(ruta_config: String) -> bool {
+    CONVERSACION
+        .lock()
+        .map(|mut guard| {
+            guard.asegurar(&ruta_config);
+            !guard.conv.esta_vacia()
+        })
         .unwrap_or(false)
 }
 
@@ -1461,8 +1568,9 @@ pub fn aplicar_accion(ruta_datos: String, accion_id: String) -> Result<ResumenAr
     if let Ok(mut guard) = ACCIONES_PENDIENTES.lock() {
         guard.remove(&accion_id);
     }
-    if let Ok(mut conv) = CONVERSACION.lock() {
-        conv.anotar_resultado(&pendiente.1, true);
+    if let Ok(mut guard) = CONVERSACION.lock() {
+        guard.conv.anotar_resultado(&pendiente.1, true);
+        guard.guardar();
     }
 
     let ahora = Local::now().naive_local();
@@ -1476,8 +1584,9 @@ pub fn descartar_accion(accion_id: String) {
         .ok()
         .and_then(|mut guard| guard.remove(&accion_id));
     if let Some(pendiente) = descartada {
-        if let Ok(mut conv) = CONVERSACION.lock() {
-            conv.anotar_resultado(&pendiente.descripcion, false);
+        if let Ok(mut guard) = CONVERSACION.lock() {
+            guard.conv.anotar_resultado(&pendiente.descripcion, false);
+            guard.guardar();
         }
     }
 }
@@ -1520,10 +1629,11 @@ pub fn aplicar_todas(
             guard.remove(id);
         }
     }
-    if let Ok(mut conv) = CONVERSACION.lock() {
+    if let Ok(mut guard) = CONVERSACION.lock() {
         for (_, _, descripcion) in acciones_pares.iter().take(resultado.aplicadas) {
-            conv.anotar_resultado(descripcion, true);
+            guard.conv.anotar_resultado(descripcion, true);
         }
+        guard.guardar();
     }
 
     let ahora = Local::now().naive_local();
@@ -1581,6 +1691,7 @@ fn agente_config_a_ffi(cfg: &AgenteConfig) -> AgenteConfigFfi {
         modelo: cfg.modelo.clone(),
         api_key: cfg.api_key.clone(),
         ve_imagenes: cfg.ve_imagenes,
+        limite_contexto_tokens: cfg.limite_contexto_tokens,
         voz_proveedor: cfg.voz.proveedor.codigo(),
         voz_url_base: cfg.voz.url_base.clone(),
         voz_modelo: cfg.voz.modelo.clone(),
@@ -1611,6 +1722,7 @@ fn construir_respuesta_agente(
     crudo: &str,
     pregunta: &str,
     nombres_adjuntos: &[String],
+    adjuntos_core: &[Adjunto],
 ) -> RespuestaAgenteFfi {
     match acciones::parsear(crudo) {
         Ok(lectura) => {
@@ -1635,19 +1747,34 @@ fn construir_respuesta_agente(
                     vistas.push(AccionVistaFfi { id, descripcion });
                 }
             }
-            if let Ok(mut conv) = CONVERSACION.lock() {
-                conv.tomar_resultados();
-                conv.registrar_turno(pregunta, nombres_adjuntos, &respuesta);
+            let docs = adjuntos::documentos_de_adjuntos(adjuntos_core);
+            let mut retirados = Vec::new();
+            if let Ok(mut guard) = CONVERSACION.lock() {
+                guard.conv.tomar_resultados();
+                for (nombre, texto) in docs {
+                    retirados.extend(guard.conv.agregar_documento(&nombre, &texto));
+                }
+                guard.conv.registrar_turno(pregunta, nombres_adjuntos, &respuesta);
+                guard.guardar();
             }
+            let nota = if retirados.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "Se retiró de la memoria el documento antiguo {} por superar el límite de 200 000 caracteres.",
+                    retirados.join(", ")
+                ))
+            };
             RespuestaAgenteFfi {
                 respuesta,
                 acciones: vistas,
-                nota: None,
+                nota,
             }
         }
         Err(mensaje) => {
-            if let Ok(mut conv) = CONVERSACION.lock() {
-                conv.tomar_resultados();
+            if let Ok(mut guard) = CONVERSACION.lock() {
+                guard.conv.tomar_resultados();
+                guard.guardar();
             }
             RespuestaAgenteFfi {
                 respuesta: crudo.to_string(),
@@ -2453,6 +2580,7 @@ hora = "18:00"
             "sin-esquema".into(),
             "m".into(),
             "sk-1".into(),
+            "60000".into(),
             0,
             "".into(),
             "".into(),
@@ -2472,6 +2600,7 @@ hora = "18:00"
             "modelo-local".into(),
             "sk-test".into(),
             false,
+            "60000".into(),
             0,
             "".into(),
             "".into(),
@@ -2513,6 +2642,7 @@ hora = "18:00"
             "m".into(),
             "sk-mal".into(),
             false,
+            "60000".into(),
             0,
             "".into(),
             "".into(),
@@ -2620,6 +2750,7 @@ hora = "18:00"
             "m".into(),
             "sk-test".into(),
             false,
+            "60000".into(),
             0,
             "".into(),
             "".into(),
@@ -2655,6 +2786,7 @@ hora = "18:00"
             "m-vision".into(),
             "sk-test".into(),
             true,
+            "60000".into(),
             0,
             "".into(),
             "".into(),
@@ -2705,6 +2837,7 @@ hora = "18:00"
             "".into(),
             "sk-agent".into(),
             false,
+            "60000".into(),
             0,
             url,
             "whisper-1".into(),
@@ -2738,6 +2871,7 @@ hora = "18:00"
             "m".into(),
             "sk-test".into(),
             false,
+            "60000".into(),
             0,
             "".into(),
             "".into(),
@@ -2770,6 +2904,7 @@ hora = "18:00"
             "m".into(),
             "sk-test".into(),
             false,
+            "60000".into(),
             0,
             "".into(),
             "".into(),
@@ -2811,6 +2946,7 @@ hora = "18:00"
             "m".into(),
             "sk-test".into(),
             false,
+            "60000".into(),
             0,
             "".into(),
             "".into(),
@@ -2820,9 +2956,204 @@ hora = "18:00"
 
         let _resp3 = enviar_al_agente(ruta_datos, ruta_cfg, "hola".into(), vec![]).expect("tercera");
         let recibido3 = h3.join().expect("join 3");
-        assert!(!recibido3.contains("Resumen de la conversación:"), "{recibido3}");
-        assert!(!recibido3.contains("Últimos intercambios:"), "{recibido3}");
-        assert!(!recibido3.contains("Qué pasó con tus propuestas:"), "{recibido3}");
+        assert!(!recibido3.contains("## Resumen de lo hablado antes"), "{recibido3}");
+        assert!(!recibido3.contains("## Conversación"), "{recibido3}");
+        assert!(!recibido3.contains("## Qué pasó con tus propuestas"), "{recibido3}");
         nueva_conversacion();
+    }
+
+    fn servidor_http_secuencia(
+        respuestas: Vec<(u16, String)>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local");
+        let addr = listener.local_addr().expect("local_addr");
+        let url = format!("http://{addr}");
+
+        let handle = std::thread::spawn(move || {
+            let mut recibidos = Vec::with_capacity(respuestas.len());
+            for (status, cuerpo) in respuestas {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+                    let mut recibido = String::new();
+                    let mut buf = [0u8; 65536];
+                    while let Ok(n) = stream.read(&mut buf) {
+                        if n == 0 {
+                            break;
+                        }
+                        recibido.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        if let Some(fin_hdr) = recibido.find("\r\n\r\n") {
+                            let cabeceras = &recibido[..fin_hdr];
+                            let content_len = cabeceras
+                                .lines()
+                                .find_map(|l| {
+                                    let (k, v) = l.split_once(':')?;
+                                    if k.eq_ignore_ascii_case("content-length") {
+                                        v.trim().parse::<usize>().ok()
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or(0);
+                            let cuerpo_len = recibido.len() - (fin_hdr + 4);
+                            if cuerpo_len >= content_len {
+                                break;
+                            }
+                        }
+                    }
+                    let razon = match status {
+                        200 => "OK",
+                        401 => "Unauthorized",
+                        429 => "Too Many Requests",
+                        _ => "Error",
+                    };
+                    let resp = format!(
+                        "HTTP/1.1 {status} {razon}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{cuerpo}",
+                        cuerpo.len()
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                    let _ = stream.flush();
+                    recibidos.push(recibido);
+                }
+            }
+            recibidos
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn ffi_documentos_sobreviven_compactacion_umbral_bajo_y_reinicio() {
+        let _guard = PRUEBA_AGENTE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        nueva_conversacion();
+
+        let dir = TempDir::new().expect("tempdir");
+        let ruta_datos = ruta_temp(&dir);
+        let ruta_cfg = dir.path().join("agente.toml").to_string_lossy().into_owned();
+        let ruta_conv = Conversacion::ruta_junto_a(Path::new(&ruta_cfg));
+        cargar(ruta_datos.clone()).expect("cargar");
+
+        let ok_resp = |msg: &str| {
+            format!(
+                r#"{{"choices":[{{"message":{{"role":"assistant","content":"{{\"respuesta\":\"{msg}\",\"acciones\":[]}}"}}}}]}}"#
+            )
+        };
+        let compact_resp =
+            r#"{"choices":[{"message":{"role":"assistant","content":"1. Quiere ver horario de Control."}}]}"#
+                .to_string();
+
+        // 6 turnos (12 mensajes), el primero con PDF adjunto; luego en el 7mo turno
+        // debe ejecutarse primero una llamada de compactación y luego la petición.
+        let mut respuestas = vec![
+            (200, ok_resp("Horario recibido.")),
+            (200, ok_resp("Turno 2")),
+            (200, ok_resp("Turno 3")),
+            (200, ok_resp("Turno 4")),
+            (200, ok_resp("Turno 5")),
+            (200, ok_resp("Turno 6")),
+            (200, compact_resp),
+            (200, ok_resp("Turno 7 con resumen")),
+        ];
+        let (url, handle) = servidor_http_secuencia(std::mem::take(&mut respuestas));
+        guardar_agente_config(
+            ruta_cfg.clone(),
+            3,
+            url,
+            "m".into(),
+            "sk-test".into(),
+            false,
+            "25".into(),
+            0,
+            "".into(),
+            "".into(),
+            "".into(),
+        )
+        .expect("config");
+
+        let pdf = pdf_prueba(&["LUNES Control 11:00 - 13:00"]);
+        enviar_al_agente(
+            ruta_datos.clone(),
+            ruta_cfg.clone(),
+            "guarda este horario".into(),
+            vec![AdjuntoFfi {
+                nombre: "horario.pdf".into(),
+                tipo: TipoAdjuntoFfi::Pdf,
+                bytes: pdf,
+                paginas_jpeg: vec![],
+                texto_ocr: None,
+            }],
+        )
+        .expect("turno 1");
+        assert!(ruta_conv.exists(), "conversacion.json debe guardarse");
+
+        for i in 2..=6 {
+            enviar_al_agente(
+                ruta_datos.clone(),
+                ruta_cfg.clone(),
+                format!("pregunta {i} con suficiente texto para pasar el umbral"),
+                vec![],
+            )
+            .expect("turno intermedio");
+        }
+        assert!(necesita_compactar(ruta_cfg.clone()));
+
+        let resp7 = enviar_al_agente(
+            ruta_datos.clone(),
+            ruta_cfg.clone(),
+            "y el martes?".into(),
+            vec![],
+        )
+        .expect("turno 7");
+        assert_eq!(resp7.respuesta, "Turno 7 con resumen");
+
+        let peticiones = handle.join().expect("join secuencia");
+        assert_eq!(peticiones.len(), 8, "6 turnos + 1 compactación + 1 turno");
+        // Turno 2 lleva el documento del turno 1.
+        assert!(peticiones[1].contains("## Documentos de la conversación"));
+        assert!(peticiones[1].contains("LUNES Control 11:00 - 13:00"));
+        // Llamada 7 (índice 6) es la compactación.
+        assert!(peticiones[6].contains("Resume esta conversación"));
+        // Llamada 8 (índice 7) lleva el resumen compactado y conserva el documento.
+        assert!(peticiones[7].contains("## Resumen de lo hablado antes"));
+        assert!(peticiones[7].contains("1. Quiere ver horario de Control."));
+        assert!(peticiones[7].contains("LUNES Control 11:00 - 13:00"));
+
+        // Simular reinicio de la app vaciando la memoria global y recargando desde archivo.
+        if let Ok(mut guard) = CONVERSACION.lock() {
+            *guard = EstadoConversacion::nuevo();
+        }
+        assert!(hay_conversacion_en(ruta_cfg.clone()));
+
+        let (url_re, h_re) = servidor_http_con_captura(200, ok_resp("Tras reinicio"));
+        guardar_agente_config(
+            ruta_cfg.clone(),
+            3,
+            url_re,
+            "m".into(),
+            "sk-test".into(),
+            false,
+            "60000".into(),
+            0,
+            "".into(),
+            "".into(),
+            "".into(),
+        )
+        .expect("config reinicio");
+        enviar_al_agente(
+            ruta_datos,
+            ruta_cfg.clone(),
+            "sigues recordando el horario?".into(),
+            vec![],
+        )
+        .expect("tras reinicio");
+        let rec_re = h_re.join().expect("join reinicio");
+        assert!(rec_re.contains("LUNES Control 11:00 - 13:00"), "{rec_re}");
+        assert!(rec_re.contains("1. Quiere ver horario de Control."), "{rec_re}");
+
+        // Nueva conversación borra conversacion.json.
+        nueva_conversacion();
+        assert!(!ruta_conv.exists());
+        assert!(!hay_conversacion_en(ruta_cfg));
     }
 }
