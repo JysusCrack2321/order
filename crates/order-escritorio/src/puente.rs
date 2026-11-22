@@ -17,6 +17,7 @@ use order_core::agente::adjuntos::{Adjunto, MAX_ADJUNTOS};
 use order_core::agente::cliente::{self, ErrorAgente};
 use order_core::agente::config::{self, AgenteConfig, Proveedor, VozProveedor};
 use order_core::agente::contexto;
+use order_core::agente::conversacion::Conversacion;
 use order_core::agente::voz;
 use order_core::almacen::Almacen;
 use order_core::conflictos::{self, Conflicto};
@@ -124,6 +125,8 @@ struct Estado {
     adjuntos: Vec<(i32, Adjunto, bool)>,
     siguiente_adjunto_id: i32,
     leyendo_archivo: bool,
+    /// Memoria corta de la conversación con el agente.
+    conversacion: Conversacion,
 }
 
 impl Estado {
@@ -151,6 +154,7 @@ impl Estado {
             adjuntos: Vec::new(),
             siguiente_adjunto_id: 1,
             leyendo_archivo: false,
+            conversacion: Conversacion::nueva(),
         }
     }
 }
@@ -210,6 +214,7 @@ struct Vista {
     agente_tiempo: SharedString,
     agente_adjuntos: Vec<AdjuntoUI>,
     agente_leyendo: bool,
+    agente_hay_conversacion: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -598,6 +603,23 @@ fn conectar(ui: &AppWindow) {
         let Some(ui) = debil.upgrade() else { return };
         con_estado(|estado| {
             estado.adjuntos.retain(|(item_id, _, _)| *item_id != id);
+            estado.aviso.clear();
+        });
+        actualizar(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_agente_nueva_conversacion(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        if con_estado(|estado| estado.pensando) {
+            return;
+        }
+        con_estado(|estado| {
+            estado.conversacion = Conversacion::nueva();
+            estado.panel = false;
+            estado.respuesta.clear();
+            estado.acciones.clear();
+            estado.nota.clear();
             estado.aviso.clear();
         });
         actualizar(&ui);
@@ -1346,6 +1368,11 @@ fn enviar_agente(ui: &AppWindow) {
         ahora.naive_local(),
         &format!("UTC{}", ahora.format("%:z")),
     );
+    let nombres_adjuntos: Vec<String> = adjuntos_enviar
+        .iter()
+        .map(|adj| adj.nombre.clone())
+        .collect();
+    let conv_snapshot = con_estado(|estado| estado.conversacion.clone());
     con_estado(|estado| {
         estado.pensando = true;
         estado.panel = false;
@@ -1359,18 +1386,29 @@ fn enviar_agente(ui: &AppWindow) {
 
     let debil = ui.as_weak();
     std::thread::spawn(move || {
-        let salida = cliente::consultar(&agente, &contexto, &pregunta, &adjuntos_enviar);
+        let salida = cliente::consultar(
+            &agente,
+            &contexto,
+            &pregunta,
+            &adjuntos_enviar,
+            &conv_snapshot,
+        );
         // Nadie más toca el estado de la ventana: se vuelve al hilo principal.
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = debil.upgrade() {
-                recibir_agente(&ui, salida);
+                recibir_agente(&ui, &pregunta, &nombres_adjuntos, salida);
             }
         });
     });
 }
 
 /// Llega la respuesta (o el error) del hilo del cliente.
-fn recibir_agente(ui: &AppWindow, salida: Result<String, ErrorAgente>) {
+fn recibir_agente(
+    ui: &AppWindow,
+    pregunta: &str,
+    nombres_adjuntos: &[String],
+    salida: Result<String, ErrorAgente>,
+) {
     con_estado(|estado| estado.pensando = false);
     match salida {
         Err(error) => {
@@ -1389,6 +1427,13 @@ fn recibir_agente(ui: &AppWindow, salida: Result<String, ErrorAgente>) {
                     lectura.respuesta
                 };
                 con_estado(|estado| {
+                    estado.conversacion.tomar_resultados();
+                    estado.conversacion.registrar_turno(
+                        pregunta,
+                        nombres_adjuntos,
+                        &respuesta,
+                        lectura.resumen,
+                    );
                     estado.panel = true;
                     estado.respuesta = respuesta;
                     estado.acciones = lectura.acciones;
@@ -1400,6 +1445,7 @@ fn recibir_agente(ui: &AppWindow, salida: Result<String, ErrorAgente>) {
             }
             Err(mensaje) => {
                 con_estado(|estado| {
+                    estado.conversacion.tomar_resultados();
                     estado.panel = true;
                     estado.respuesta = texto;
                     estado.acciones.clear();
@@ -1412,8 +1458,15 @@ fn recibir_agente(ui: &AppWindow, salida: Result<String, ErrorAgente>) {
 }
 
 fn aplicar_accion(ui: &AppWindow, indice: i32) {
-    let accion = con_estado(|estado| estado.acciones.get(indice.max(0) as usize).cloned());
-    let Some(accion) = accion else { return };
+    let pendiente = con_estado(|estado| {
+        let vacio = datos_vacios();
+        let datos = estado.datos.as_ref().unwrap_or(&vacio);
+        estado
+            .acciones
+            .get(indice.max(0) as usize)
+            .map(|accion| (accion.clone(), accion.descripcion(datos)))
+    });
+    let Some((accion, descripcion)) = pendiente else { return };
 
     match acciones::aplicar(&almacen(), &accion) {
         Ok(datos) => {
@@ -1421,7 +1474,11 @@ fn aplicar_accion(ui: &AppWindow, indice: i32) {
             con_estado(|estado| {
                 estado.datos = Some(datos);
                 estado.error = None;
-                estado.acciones.remove(indice.max(0) as usize);
+                estado.conversacion.anotar_resultado(&descripcion, true);
+                let idx = indice.max(0) as usize;
+                if idx < estado.acciones.len() {
+                    estado.acciones.remove(idx);
+                }
                 if estado.acciones.is_empty() {
                     estado.panel = false;
                     estado.respuesta.clear();
@@ -1437,7 +1494,11 @@ fn descartar_accion(ui: &AppWindow, indice: i32) {
     con_estado(|estado| {
         let indice = indice.max(0) as usize;
         if indice < estado.acciones.len() {
-            estado.acciones.remove(indice);
+            let accion = estado.acciones.remove(indice);
+            let vacio = datos_vacios();
+            let datos = estado.datos.as_ref().unwrap_or(&vacio);
+            let descripcion = accion.descripcion(datos);
+            estado.conversacion.anotar_resultado(&descripcion, false);
         }
         if estado.acciones.is_empty() {
             estado.panel = false;
@@ -1449,7 +1510,16 @@ fn descartar_accion(ui: &AppWindow, indice: i32) {
 
 /// Aplica en orden; si una falla, se detiene y dice cuántas quedaron hechas.
 fn aplicar_todas(ui: &AppWindow) {
-    let pendientes = con_estado(|estado| estado.acciones.clone());
+    let (pendientes, descripciones) = con_estado(|estado| {
+        let vacio = datos_vacios();
+        let datos = estado.datos.as_ref().unwrap_or(&vacio);
+        let descs: Vec<String> = estado
+            .acciones
+            .iter()
+            .map(|accion| accion.descripcion(datos))
+            .collect();
+        (estado.acciones.clone(), descs)
+    });
     let resultado = acciones::aplicar_todas(&almacen(), &pendientes);
     if let Some(datos) = resultado.ultimos_datos {
         crate::sistema::publicar(&datos);
@@ -1457,6 +1527,9 @@ fn aplicar_todas(ui: &AppWindow) {
             estado.datos = Some(datos);
             estado.error = None;
             let quitar = resultado.aplicadas.min(estado.acciones.len());
+            for desc in descripciones.iter().take(quitar) {
+                estado.conversacion.anotar_resultado(desc, true);
+            }
             estado.acciones.drain(..quitar);
         });
     }
@@ -1656,6 +1729,7 @@ fn actualizar(ui: &AppWindow) {
     ui.set_agente_tiempo(vista.agente_tiempo);
     ui.set_agente_adjuntos(ModelRc::new(VecModel::from(vista.agente_adjuntos)));
     ui.set_agente_leyendo(vista.agente_leyendo);
+    ui.set_agente_hay_conversacion(vista.agente_hay_conversacion);
 }
 
 fn construir_vista() -> Vista {
@@ -1824,6 +1898,7 @@ fn construir_vista() -> Vista {
                 })
                 .collect(),
             agente_leyendo: estado.leyendo_archivo,
+            agente_hay_conversacion: !estado.conversacion.esta_vacia(),
         }
     })
 }

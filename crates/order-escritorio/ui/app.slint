@@ -308,6 +308,7 @@ export component AppWindow inherits Window {
     in property <string> agente-tiempo: "";
     in property <[AdjuntoUI]> agente-adjuntos: [];
     in property <bool> agente-leyendo: false;
+    in property <bool> agente-hay-conversacion: false;
     // Ajustes → Agente (el proveedor va por fichas, 0–3).
     in-out property <int> a-proveedor: 0;
     in-out property <string> a-url: "";
@@ -385,6 +386,7 @@ export component AppWindow inherits Window {
     callback agente-aplicar-todas();
     callback agente-adjuntar();
     callback agente-quitar-adjunto(int);
+    callback agente-nueva-conversacion();
     callback abrir-agente();
     callback elegir-proveedor(int);
     callback elegir-voz-proveedor(int);
@@ -622,10 +624,12 @@ export component AppWindow inherits Window {
                 tiempo: root.agente-tiempo;
                 adjuntos: root.agente-adjuntos;
                 leyendo: root.agente-leyendo;
+                hay-conversacion: root.agente-hay-conversacion;
                 enviar => { root.agente-enviar(); }
                 grabar => { root.grabar-voz(); }
                 adjuntar => { root.agente-adjuntar(); }
                 quitar-adjunto(id) => { root.agente-quitar-adjunto(id); }
+                nueva-conversacion => { root.agente-nueva-conversacion(); }
             }
 
             // --- Pie ------------------------------------------------------

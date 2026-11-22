@@ -32,11 +32,13 @@ export component BarraAgente inherits Rectangle {
     // Adjuntos preparados y estado de lectura.
     in property <[AdjuntoUI]> adjuntos: [];
     in property <bool> leyendo: false;
+    in property <bool> hay-conversacion: false;
 
     callback enviar();
     callback grabar();
     callback adjuntar();
     callback quitar-adjunto(int);
+    callback nueva-conversacion();
 
     height: Tema.alto-barra-agente + (root.adjuntos.length > 0 || root.leyendo ? Tema.alto-fila-adjuntos : 0px);
     background: Tema.fondo-panel;
@@ -231,6 +233,12 @@ export component BarraAgente inherits Rectangle {
                 principal: true;
                 width: Tema.ancho-boton-agente;
                 clicked => { root.enviar(); }
+            }
+
+            if root.hay-conversacion : Boton {
+                texto: "Nueva conversación";
+                width: Tema.ancho-boton-nueva-conversacion;
+                clicked => { root.nueva-conversacion(); }
             }
         }
     }
