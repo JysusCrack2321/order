@@ -24,6 +24,7 @@ use order_core::agente::voz;
 use order_core::almacen::Almacen;
 use order_core::conflictos::{self, Conflicto};
 use order_core::filtros::{Filtro, TipoFecha};
+use order_core::ical::{self, config::CalendarioVista};
 use order_core::modelo::{
     self, Ajustes, Clase, Datos, Dia, ErrorDatos, FORMATO_FECHA, Recordatorio, Tarea,
 };
@@ -51,6 +52,7 @@ slint::include_modules!();
 /// Los del formulario usan 1–4 (ver `campo-mal` en app.slint); los filtros de
 /// Pendientes van aparte para no confundirse con ellos.
 const CAMPO_MATERIA: i32 = 1;
+const CAMPO_CAL_MATERIA: i32 = 4;
 const CAMPO_FILTRO_MATERIA: i32 = 21;
 const CAMPO_FILTRO_DESDE: i32 = 22;
 const CAMPO_FILTRO_HASTA: i32 = 23;
@@ -69,6 +71,7 @@ enum Edicion {
     Ajustes,
     Agente,
     Moodle,
+    Calendarios,
 }
 
 /// Qué selector está abierto y qué campo del formulario llena.
@@ -141,6 +144,12 @@ struct Estado {
     moodle: EstadoMoodle,
     moodle_ocupado: bool,
     moodle_aviso: String,
+    // --- Calendarios iCal -----------------------------------------------
+    calendarios: Vec<CalendarioVista>,
+    ical_ocupado: bool,
+    ical_aviso: String,
+    ical_oferta: String,
+    ical_descartadas: std::collections::HashSet<String>,
 }
 
 fn ruta_conversacion() -> std::path::PathBuf {
@@ -181,6 +190,11 @@ impl Estado {
             moodle: moodle::config::estado_de(&moodle::config::ruta()),
             moodle_ocupado: false,
             moodle_aviso: String::new(),
+            calendarios: ical::config::listar_de(&ical::config::ruta()),
+            ical_ocupado: false,
+            ical_aviso: String::new(),
+            ical_oferta: String::new(),
+            ical_descartadas: std::collections::HashSet::new(),
         }
     }
 }
@@ -252,6 +266,10 @@ struct Vista {
     moodle_estado_texto: SharedString,
     moodle_ocupado: bool,
     moodle_aviso: SharedString,
+    calendarios: Vec<CalendarioUI>,
+    ical_ocupado: bool,
+    ical_aviso: SharedString,
+    ical_oferta: SharedString,
 }
 
 // ---------------------------------------------------------------------------
@@ -275,6 +293,7 @@ pub fn mostrar_ventana() {
             }
         }
         if let Some(ui) = celda.as_ref() {
+            revisar_portapapeles_ical();
             actualizar(ui);
             if let Err(error) = ui.show() {
                 eprintln!("ORDER: no se pudo mostrar la ventana: {error}");
@@ -363,6 +382,13 @@ pub fn mostrar_conflictos(lista: Vec<Conflicto>) {
 pub fn refrescar_moodle() {
     let moodle = moodle::config::estado_de(&moodle::config::ruta());
     con_estado(|estado| estado.moodle = moodle);
+    actualizar_si_existe();
+}
+
+/// Relee la lista de calendarios desde `calendarios.toml` y actualiza la ventana.
+pub fn refrescar_calendarios() {
+    let calendarios = ical::config::listar_de(&ical::config::ruta());
+    con_estado(|estado| estado.calendarios = calendarios);
     actualizar_si_existe();
 }
 
@@ -711,6 +737,48 @@ fn conectar(ui: &AppWindow) {
     ui.on_moodle_desconectar(move || {
         let Some(ui) = debil.upgrade() else { return };
         desconectar_moodle(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_abrir_calendarios(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        abrir_calendarios(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_ical_agregar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        agregar_ical(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_ical_quitar(move |id: SharedString| {
+        let Some(ui) = debil.upgrade() else { return };
+        quitar_ical(&ui, &id);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_ical_sincronizar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        sincronizar_todo_desde_calendarios(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_ical_oferta_aceptar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        aceptar_oferta_ical(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_ical_oferta_rechazar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        con_estado(|estado| {
+            let oferta = std::mem::take(&mut estado.ical_oferta);
+            if !oferta.is_empty() {
+                estado.ical_descartadas.insert(oferta);
+            }
+        });
+        actualizar(&ui);
     });
 
     let debil = ui.as_weak();
@@ -1063,7 +1131,7 @@ fn cancelar(ui: &AppWindow) {
         estado.volver_ajustes
             && matches!(
                 estado.edicion,
-                Edicion::Recordatorio(_) | Edicion::Agente | Edicion::Moodle
+                Edicion::Recordatorio(_) | Edicion::Agente | Edicion::Moodle | Edicion::Calendarios
             )
     });
     ui.set_form_confirma(false);
@@ -1091,7 +1159,7 @@ fn guardar(ui: &AppWindow) {
         Edicion::Recordatorio(_) => guardar_recordatorio(ui),
         Edicion::Ajustes => guardar_ajustes(ui),
         Edicion::Agente => guardar_agente(ui),
-        Edicion::Moodle | Edicion::Ninguna => {}
+        Edicion::Moodle | Edicion::Calendarios | Edicion::Ninguna => {}
     }
 }
 
@@ -1510,12 +1578,19 @@ fn sincronizar_moodle(ui: &AppWindow) {
         let ruta_moodle = moodle::config::ruta();
         let hoy = Local::now().date_naive();
         let sync = moodle::sincronizar_ahora(&ruta_datos, &ruta_moodle, hoy);
-        let datos = if sync.is_ok() {
+        let ruta_cal = ical::config::ruta();
+        let sync_cal = if !ical::config::cargar_de(&ruta_cal).calendarios.is_empty() {
+            Some(ical::sincronizar_calendarios(&ruta_datos, &ruta_cal, hoy))
+        } else {
+            None
+        };
+        let datos = if sync.is_ok() || sync_cal.as_ref().is_some_and(|r| r.is_ok()) {
             Almacen { ruta: ruta_datos }.cargar().ok()
         } else {
             None
         };
         let est = moodle::config::estado_de(&ruta_moodle);
+        let cals = ical::config::listar_de(&ruta_cal);
 
         let _ = slint::invoke_from_event_loop(move || {
             let Some(ui) = debil.upgrade() else { return };
@@ -1525,14 +1600,21 @@ fn sincronizar_moodle(ui: &AppWindow) {
             con_estado(|estado| {
                 estado.moodle_ocupado = false;
                 estado.moodle = est;
+                estado.calendarios = cals;
                 if let Some(d) = datos {
                     estado.datos = Some(d);
                 }
                 match sync {
                     Ok(r) => {
+                        let extra_cal = match sync_cal {
+                            Some(Ok(rc)) => (rc.creadas, rc.actualizadas),
+                            _ => (0, 0),
+                        };
                         estado.moodle_aviso = format!(
                             "Listo: {} creadas, {} actualizadas, {} completadas.",
-                            r.creadas, r.actualizadas, r.hechas
+                            r.creadas + extra_cal.0,
+                            r.actualizadas + extra_cal.1,
+                            r.hechas
                         );
                         ui.set_form_error("".into());
                     }
@@ -1566,6 +1648,217 @@ fn desconectar_moodle(ui: &AppWindow) {
         estado.moodle_aviso = "Desconectado de Moodle.".to_string();
     });
     actualizar(ui);
+}
+
+// ---------------------------------------------------------------------------
+// Calendarios iCal
+// ---------------------------------------------------------------------------
+
+fn revisar_portapapeles_ical() {
+    let Some(candidato) = crate::sistema::leer_portapapeles() else {
+        return;
+    };
+    if !ical::parece_url_ical(&candidato) {
+        return;
+    }
+    let id = ical::hash_corto_url(&candidato);
+    let ruta_cal = ical::config::ruta();
+    let ya_existe = ical::config::cargar_de(&ruta_cal)
+        .calendarios
+        .iter()
+        .any(|c| c.id == id);
+    if ya_existe {
+        return;
+    }
+    con_estado(|estado| {
+        if !estado.ical_descartadas.contains(&candidato) {
+            estado.ical_oferta = candidato;
+        }
+    });
+}
+
+fn abrir_calendarios(ui: &AppWindow) {
+    let cals = ical::config::listar_de(&ical::config::ruta());
+    con_estado(|estado| {
+        estado.calendarios = cals;
+        estado.ical_aviso.clear();
+        estado.edicion = Edicion::Calendarios;
+        estado.volver_ajustes = true;
+    });
+    ui.set_c_url("".into());
+    ui.set_c_nombre("".into());
+    ui.set_c_materia("".into());
+    ui.set_form_encabezado("Calendarios".into());
+    ui.set_form_edita(false);
+    abrir_panel(ui, 7);
+}
+
+fn agregar_ical(ui: &AppWindow) {
+    if con_estado(|estado| estado.ical_ocupado) {
+        return;
+    }
+    let url = ui.get_c_url().to_string();
+    let nombre = ui.get_c_nombre().to_string();
+    let materia = ui.get_c_materia().to_string();
+    if url.trim().is_empty() {
+        falta(ui, 0, "Pega la dirección iCal (.ics o webcal://).");
+        return;
+    }
+
+    ui.set_form_error("".into());
+    con_estado(|estado| {
+        estado.ical_ocupado = true;
+        estado.ical_aviso = "Descargando y sincronizando…".to_string();
+    });
+    actualizar(ui);
+
+    let debil = ui.as_weak();
+    let ruta_datos = almacen().ruta;
+    std::thread::spawn(move || {
+        let ruta_cal = ical::config::ruta();
+        let res_add = ical::agregar_calendario(&ruta_cal, &url, Some(&nombre), Some(&materia));
+        let resultado = match res_add {
+            Ok(_) => {
+                let hoy = Local::now().date_naive();
+                let sync = ical::sincronizar_calendarios(&ruta_datos, &ruta_cal, hoy);
+                let datos = Almacen { ruta: ruta_datos }.cargar().ok();
+                let cals = ical::config::listar_de(&ruta_cal);
+                Ok((cals, sync, datos))
+            }
+            Err(err) => Err(err),
+        };
+
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = debil.upgrade() else { return };
+            match resultado {
+                Ok((cals, sync, datos)) => {
+                    ui.set_c_url("".into());
+                    ui.set_c_nombre("".into());
+                    ui.set_c_materia("".into());
+                    ui.set_form_error("".into());
+                    if let Some(ref d) = datos {
+                        crate::sistema::publicar(d);
+                    }
+                    con_estado(|estado| {
+                        estado.ical_ocupado = false;
+                        estado.calendarios = cals;
+                        estado.ical_oferta.clear();
+                        if let Some(d) = datos {
+                            estado.datos = Some(d);
+                        }
+                        estado.ical_aviso = match sync {
+                            Ok(r) => format!(
+                                "Calendario agregado ({} tareas creadas).",
+                                r.creadas
+                            ),
+                            Err(e) => format!("Agregado, pero no se pudo sincronizar: {e}"),
+                        };
+                    });
+                }
+                Err(msg) => {
+                    con_estado(|estado| {
+                        estado.ical_ocupado = false;
+                        estado.ical_aviso.clear();
+                    });
+                    ui.set_form_error(msg.into());
+                }
+            }
+            actualizar(&ui);
+        });
+    });
+}
+
+fn quitar_ical(ui: &AppWindow, id: &str) {
+    if con_estado(|estado| estado.ical_ocupado) {
+        return;
+    }
+    let ruta_cal = ical::config::ruta();
+    if let Err(err) = ical::quitar_calendario(&ruta_cal, id) {
+        ui.set_form_error(err.into());
+        return;
+    }
+    let cals = ical::config::listar_de(&ruta_cal);
+    con_estado(|estado| {
+        estado.calendarios = cals;
+        estado.ical_aviso = "Calendario quitado (las tareas existentes se conservan).".to_string();
+    });
+    actualizar(ui);
+}
+
+fn sincronizar_todo_desde_calendarios(ui: &AppWindow) {
+    if con_estado(|estado| estado.ical_ocupado) {
+        return;
+    }
+    ui.set_form_error("".into());
+    con_estado(|estado| {
+        estado.ical_ocupado = true;
+        estado.ical_aviso = "Sincronizando…".to_string();
+    });
+    actualizar(ui);
+
+    let debil = ui.as_weak();
+    let ruta_datos = almacen().ruta;
+    std::thread::spawn(move || {
+        let hoy = Local::now().date_naive();
+        let ruta_cal = ical::config::ruta();
+        let ruta_moodle = moodle::config::ruta();
+
+        let sync_cal = ical::sincronizar_calendarios(&ruta_datos, &ruta_cal, hoy);
+        let sync_moodle = if moodle::config::cargar_de(&ruta_moodle).conectado() {
+            Some(moodle::sincronizar_ahora(&ruta_datos, &ruta_moodle, hoy))
+        } else {
+            None
+        };
+
+        let datos = Almacen { ruta: ruta_datos }.cargar().ok();
+        let cals = ical::config::listar_de(&ruta_cal);
+        let est_moodle = moodle::config::estado_de(&ruta_moodle);
+
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = debil.upgrade() else { return };
+            if let Some(ref d) = datos {
+                crate::sistema::publicar(d);
+            }
+            con_estado(|estado| {
+                estado.ical_ocupado = false;
+                estado.calendarios = cals;
+                estado.moodle = est_moodle;
+                if let Some(d) = datos {
+                    estado.datos = Some(d);
+                }
+                match sync_cal {
+                    Ok(rc) => {
+                        let (mc, ma, mh) = match sync_moodle {
+                            Some(Ok(rm)) => (rm.creadas, rm.actualizadas, rm.hechas),
+                            _ => (0, 0, 0),
+                        };
+                        estado.ical_aviso = format!(
+                            "Listo: {} creadas, {} actualizadas, {} completadas.",
+                            rc.creadas + mc,
+                            rc.actualizadas + ma,
+                            rc.hechas + mh
+                        );
+                        ui.set_form_error("".into());
+                    }
+                    Err(err) => {
+                        estado.ical_aviso.clear();
+                        ui.set_form_error(err.into());
+                    }
+                }
+            });
+            actualizar(&ui);
+        });
+    });
+}
+
+fn aceptar_oferta_ical(ui: &AppWindow) {
+    let url = con_estado(|estado| std::mem::take(&mut estado.ical_oferta));
+    if url.is_empty() {
+        return;
+    }
+    abrir_calendarios(ui);
+    ui.set_c_url(url.into());
+    agregar_ical(ui);
 }
 
 /// Abre el selector del sistema y prepara los adjuntos en un hilo.
@@ -2257,6 +2550,10 @@ fn actualizar(ui: &AppWindow) {
     ui.set_moodle_estado_texto(vista.moodle_estado_texto);
     ui.set_moodle_ocupado(vista.moodle_ocupado);
     ui.set_moodle_aviso(vista.moodle_aviso);
+    ui.set_calendarios(ModelRc::new(VecModel::from(vista.calendarios)));
+    ui.set_ical_ocupado(vista.ical_ocupado);
+    ui.set_ical_aviso(vista.ical_aviso);
+    ui.set_ical_oferta(vista.ical_oferta);
 }
 
 fn construir_vista() -> Vista {
@@ -2441,6 +2738,20 @@ fn construir_vista() -> Vista {
             moodle_estado_texto: estado.moodle.texto_estado.clone().into(),
             moodle_ocupado: estado.moodle_ocupado,
             moodle_aviso: estado.moodle_aviso.clone().into(),
+            calendarios: estado
+                .calendarios
+                .iter()
+                .map(|c| CalendarioUI {
+                    id: c.id.clone().into(),
+                    nombre: c.nombre.clone().into(),
+                    materia: c.materia.clone().into(),
+                    tono: c.tono,
+                    ultima: c.ultima_texto.clone().into(),
+                })
+                .collect(),
+            ical_ocupado: estado.ical_ocupado,
+            ical_aviso: estado.ical_aviso.clone().into(),
+            ical_oferta: estado.ical_oferta.clone().into(),
         }
     })
 }
@@ -2716,6 +3027,7 @@ fn aplicar_materia(ui: &AppWindow, texto: &str) {
     let campo = con_estado(|estado| estado.seleccion.as_ref().map(|s| s.campo));
     match campo {
         Some(CAMPO_MATERIA) => ui.set_f_materia(materia.into()),
+        Some(CAMPO_CAL_MATERIA) => ui.set_c_materia(materia.into()),
         Some(CAMPO_FILTRO_MATERIA) => {
             con_estado(|estado| estado.filtro.materia = opcional(&materia));
         }

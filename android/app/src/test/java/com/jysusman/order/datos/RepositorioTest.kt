@@ -8,6 +8,7 @@ import com.jysusman.order.ffi.AnioMesFfi
 import com.jysusman.order.ffi.AvisoFfi
 import com.jysusman.order.ffi.AvisoProgramableFfi
 import com.jysusman.order.ffi.CalendarioMesFfi
+import com.jysusman.order.ffi.CalendarioVistaFfi
 import com.jysusman.order.ffi.ClaseFormFfi
 import com.jysusman.order.ffi.ConflictoFfi
 import com.jysusman.order.ffi.DiaFfi
@@ -389,6 +390,43 @@ class RepositorioTest {
         repo.desconectarMoodle()
         assertEquals(false, repo.estado.value.moodleEstado?.conectado)
     }
+
+    @Test
+    fun icalPortapapelesAgregarSincronizarYQuitar() = runTest {
+        val fake = FakePuenteOrder()
+        var reprogramaciones = 0
+        val repo = Repositorio(
+            puente = fake,
+            carpetaInicial = "/tmp/order-ical",
+            dispatcherIo = UnconfinedTestDispatcher(testScheduler),
+            asegurarCarpeta = {},
+            rutaConfigCalendarios = "/tmp/calendarios.toml",
+            onDatosActualizados = { reprogramaciones++ },
+        )
+
+        repo.cargarInicial()
+        val baseReprog = reprogramaciones
+
+        // Texto normal del portapapeles no dispara oferta.
+        repo.revisarPortapapelesIcal("https://ejemplo.com")
+        assertNull(repo.estado.value.icalOfertaPortapapeles)
+
+        // Dirección iCal sí dispara la oferta de un toque.
+        val url = "https://calendar.google.com/calendar/ical/abc/public/basic.ics"
+        repo.revisarPortapapelesIcal(url)
+        assertEquals(url, repo.estado.value.icalOfertaPortapapeles)
+
+        fake.resumenIcalSync = ResumenSyncFfi(2u, 0u, 0u)
+        repo.aceptarOfertaIcal()
+        assertNull(repo.estado.value.icalOfertaPortapapeles)
+        assertEquals(1, repo.estado.value.calendarios.size)
+        assertEquals(baseReprog + 1, reprogramaciones)
+
+        // Quitar el calendario deja la lista vacía.
+        val id = repo.estado.value.calendarios.first().id
+        repo.quitarCalendario(id)
+        assertTrue(repo.estado.value.calendarios.isEmpty())
+    }
 }
 
 class FakePuenteOrder : PuenteOrder {
@@ -419,6 +457,8 @@ class FakePuenteOrder : PuenteOrder {
     var fallarMoodleSync: ErrorFfi? = null
     var resumenMoodleSync: ResumenSyncFfi = ResumenSyncFfi(0u, 0u, 0u)
     var moodleEstadoFake: EstadoMoodleFfi = EstadoMoodleFfi(false, "micampus.unal.edu.co", "", "", false)
+    val calendariosFake = mutableListOf<CalendarioVistaFfi>()
+    var resumenIcalSync: ResumenSyncFfi = ResumenSyncFfi(0u, 0u, 0u)
 
     private val tareaEjemplo = TareaFfi(
         id = "t-1",
@@ -743,4 +783,37 @@ class FakePuenteOrder : PuenteOrder {
     override fun moodleDesconectar(rutaConfig: String) {
         moodleEstadoFake = EstadoMoodleFfi(false, "micampus.unal.edu.co", "", "", false)
     }
+
+    override fun pareceUrlIcal(texto: String): Boolean {
+        val t = texto.trim().lowercase()
+        return (t.startsWith("https://") || t.startsWith("webcal://")) &&
+            (t.contains(".ics") || t.contains("calendar.google.com/calendar/ical/") || t.startsWith("webcal://"))
+    }
+
+    override fun calendariosListar(rutaConfig: String): List<CalendarioVistaFfi> =
+        calendariosFake.toList()
+
+    override fun calendarioAgregar(
+        rutaConfig: String,
+        url: String,
+        nombre: String,
+        materia: String,
+    ): CalendarioVistaFfi {
+        val vista = CalendarioVistaFfi(
+            id = "cal-${calendariosFake.size + 1}",
+            nombre = nombre.ifBlank { "Calendario" },
+            materia = materia,
+            tono = 3,
+            ultimaTexto = "sin actualizar",
+        )
+        calendariosFake.add(vista)
+        return vista
+    }
+
+    override fun calendarioQuitar(rutaConfig: String, id: String) {
+        calendariosFake.removeAll { it.id == id }
+    }
+
+    override fun calendariosSincronizar(rutaDatos: String, rutaConfig: String): ResumenSyncFfi =
+        resumenIcalSync
 }

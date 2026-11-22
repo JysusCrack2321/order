@@ -17,6 +17,7 @@ use order_core::almacen::Almacen;
 use order_core::avisos::{self, Registro};
 use order_core::conflictos;
 use order_core::filtros::{Filtro, TipoFecha};
+use order_core::ical;
 use order_core::modelo::{self, Ajustes, Datos, Dia, ErrorDatos, FORMATO_FECHA, Semestre, Tarea};
 use order_core::moodle::{self, EstadoMoodle};
 use order_core::ops;
@@ -547,6 +548,15 @@ pub struct ResumenSyncFfi {
     pub creadas: u32,
     pub actualizadas: u32,
     pub hechas: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CalendarioVistaFfi {
+    pub id: String,
+    pub nombre: String,
+    pub materia: String,
+    pub tono: i32,
+    pub ultima_texto: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -1836,6 +1846,71 @@ pub fn moodle_sincronizar(
 pub fn moodle_desconectar(ruta_config: String) -> Result<(), ErrorFfi> {
     moodle::config::borrar_en(Path::new(&ruta_config)).map_err(|mensaje| ErrorFfi::Operacion {
         mensaje,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Calendarios iCal
+// ---------------------------------------------------------------------------
+
+fn calendario_vista_a_ffi(c: ical::config::CalendarioVista) -> CalendarioVistaFfi {
+    CalendarioVistaFfi {
+        id: c.id,
+        nombre: c.nombre,
+        materia: c.materia,
+        tono: c.tono,
+        ultima_texto: c.ultima_texto,
+    }
+}
+
+#[uniffi::export]
+pub fn parece_url_ical(texto: String) -> bool {
+    ical::parece_url_ical(&texto)
+}
+
+#[uniffi::export]
+pub fn calendarios_listar(ruta_config: String) -> Vec<CalendarioVistaFfi> {
+    ical::config::listar_de(Path::new(&ruta_config))
+        .into_iter()
+        .map(calendario_vista_a_ffi)
+        .collect()
+}
+
+#[uniffi::export]
+pub fn calendario_agregar(
+    ruta_config: String,
+    url: String,
+    nombre: String,
+    materia: String,
+) -> Result<CalendarioVistaFfi, ErrorFfi> {
+    let vista = ical::agregar_calendario(
+        Path::new(&ruta_config),
+        &url,
+        Some(&nombre),
+        Some(&materia),
+    )
+    .map_err(|mensaje| ErrorFfi::Operacion { mensaje })?;
+    Ok(calendario_vista_a_ffi(vista))
+}
+
+#[uniffi::export]
+pub fn calendario_quitar(ruta_config: String, id: String) -> Result<(), ErrorFfi> {
+    ical::quitar_calendario(Path::new(&ruta_config), &id)
+        .map_err(|mensaje| ErrorFfi::Operacion { mensaje })
+}
+
+#[uniffi::export]
+pub fn calendarios_sincronizar(
+    ruta_datos: String,
+    ruta_config: String,
+) -> Result<ResumenSyncFfi, ErrorFfi> {
+    let hoy = Local::now().date_naive();
+    let resumen = ical::sincronizar_calendarios(Path::new(&ruta_datos), Path::new(&ruta_config), hoy)
+        .map_err(|mensaje| ErrorFfi::Operacion { mensaje })?;
+    Ok(ResumenSyncFfi {
+        creadas: resumen.creadas,
+        actualizadas: resumen.actualizadas,
+        hechas: resumen.hechas,
     })
 }
 
@@ -3449,6 +3524,65 @@ hora = "18:00"
 
         moodle_desconectar(ruta_cfg.clone()).expect("desconectar");
         assert!(!moodle_estado(ruta_cfg).conectado);
+
+        parar.store(true, AtomicOrdering::Relaxed);
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn calendarios_ical_ffi() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering as AtomicOrdering},
+        };
+
+        let ics = "BEGIN:VCALENDAR\r\nX-WR-CALNAME:Control\r\nBEGIN:VEVENT\r\nUID:cal-ffi-1\r\nSUMMARY:Entrega iCal\r\nDTSTART:20261127T180000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let parar = Arc::new(AtomicBool::new(false));
+        let parar_h = Arc::clone(&parar);
+        let handle = std::thread::spawn(move || {
+            while !parar_h.load(AtomicOrdering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut buf = [0u8; 1024];
+                        let _ = stream.read(&mut buf);
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/calendar\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{ics}",
+                            ics.len()
+                        );
+                        let _ = stream.write_all(resp.as_bytes());
+                        let _ = stream.flush();
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let dir = TempDir::new().unwrap();
+        let ruta_datos = ruta_temp(&dir);
+        let ruta_cal = dir.path().join("calendarios.toml").to_string_lossy().into_owned();
+        cargar(ruta_datos.clone()).unwrap();
+
+        let url = format!("http://{addr}/basic.ics");
+        assert!(parece_url_ical(url.clone()));
+        assert!(calendarios_listar(ruta_cal.clone()).is_empty());
+
+        let agregado = calendario_agregar(ruta_cal.clone(), url, String::new(), String::new()).unwrap();
+        assert_eq!(agregado.nombre, "Control");
+        assert_eq!(calendarios_listar(ruta_cal.clone()).len(), 1);
+
+        let r = calendarios_sincronizar(ruta_datos.clone(), ruta_cal.clone()).unwrap();
+        assert_eq!(r.creadas, 1);
+
+        calendario_quitar(ruta_cal.clone(), agregado.id).unwrap();
+        assert!(calendarios_listar(ruta_cal).is_empty());
 
         parar.store(true, AtomicOrdering::Relaxed);
         let _ = handle.join();

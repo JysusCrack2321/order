@@ -49,6 +49,9 @@ object RutasPrivadas {
     fun archivoMoodleConfig(context: Context): String =
         File(context.filesDir, "moodle.toml").absolutePath
 
+    fun archivoCalendariosConfig(context: Context): String =
+        File(context.filesDir, "calendarios.toml").absolutePath
+
     fun registroAvisos(context: Context): String =
         File(context.filesDir, "enviados.txt").absolutePath
 }

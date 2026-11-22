@@ -71,6 +71,7 @@ sealed interface FormularioActivo {
     data object Ajustes : FormularioActivo
     data object Agente : FormularioActivo
     data object Moodle : FormularioActivo
+    data object Calendarios : FormularioActivo
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -125,6 +126,7 @@ fun ContenedorFormularioSheet(
                 alCambiarAvisosActivos = alCambiarAvisosActivos,
                 alAbrirAgente = { alAbrirFormulario(FormularioActivo.Agente) },
                 alAbrirMoodle = { alAbrirFormulario(FormularioActivo.Moodle) },
+                alAbrirCalendarios = { alAbrirFormulario(FormularioActivo.Calendarios) },
                 alNuevoRecordatorio = {
                     alAbrirFormulario(FormularioActivo.Recordatorio(id = null, volverAjustes = true))
                 },
@@ -141,6 +143,12 @@ fun ContenedorFormularioSheet(
 
             FormularioActivo.Moodle -> HojaMoodle(
                 repositorio = repositorio,
+                alVolver = { alAbrirFormulario(FormularioActivo.Ajustes) },
+            )
+
+            FormularioActivo.Calendarios -> HojaCalendarios(
+                repositorio = repositorio,
+                materias = materias,
                 alVolver = { alAbrirFormulario(FormularioActivo.Ajustes) },
             )
         }
@@ -633,6 +641,7 @@ private fun HojaAjustes(
     alCambiarAvisosActivos: (Boolean) -> Unit,
     alAbrirAgente: () -> Unit,
     alAbrirMoodle: () -> Unit,
+    alAbrirCalendarios: () -> Unit,
     alNuevoRecordatorio: () -> Unit,
     alEditarRecordatorio: (String) -> Unit,
     alCerrar: () -> Unit,
@@ -894,6 +903,19 @@ private fun HojaAjustes(
         ) {
             Text(
                 text = "Moodle…",
+                fontSize = OrderTema.TamanoPequeno,
+                color = OrderTema.Texto,
+            )
+        }
+
+        OutlinedButton(
+            onClick = alAbrirCalendarios,
+            shape = RoundedCornerShape(OrderTema.Radio),
+            border = BorderStroke(OrderTema.Linea, OrderTema.Borde),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = "Calendarios…",
                 fontSize = OrderTema.TamanoPequeno,
                 color = OrderTema.Texto,
             )

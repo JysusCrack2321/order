@@ -21,13 +21,20 @@ class TrabajoRespaldo(
         Canales.asegurarCanales(applicationContext)
         val puente = PuenteOrderNativo()
         val rutaMoodle = RutasPrivadas.archivoMoodleConfig(applicationContext)
+        val rutaCal = RutasPrivadas.archivoCalendariosConfig(applicationContext)
         val conectado = runCatching { puente.moodleEstado(rutaMoodle).conectado }.getOrDefault(false)
-        if (conectado) {
+        val hayCals = runCatching { puente.calendariosListar(rutaCal).isNotEmpty() }.getOrDefault(false)
+        if (conectado || hayCals) {
             val carpeta = PreferenciasOrder.carpetaDatos(applicationContext)
                 ?: runCatching { puente.carpetaPorDefecto() }.getOrNull().orEmpty()
             if (carpeta.isNotBlank()) {
                 val rutaDatos = Repositorio.rutaEnCarpeta(carpeta)
-                runCatching { puente.moodleSincronizar(rutaDatos, rutaMoodle) }
+                if (conectado) {
+                    runCatching { puente.moodleSincronizar(rutaDatos, rutaMoodle) }
+                }
+                if (hayCals) {
+                    runCatching { puente.calendariosSincronizar(rutaDatos, rutaCal) }
+                }
             }
         }
         Programador.crear(applicationContext).reprogramar()

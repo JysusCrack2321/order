@@ -7,7 +7,7 @@ import { PendientesVista, TareaUI } from "pendientes.slint";
 import { InicioVista } from "inicio.slint";
 import { DiaVista } from "dia.slint";
 import { ClaseInicioUI, ConteoMateriaUI, RecordatorioInicioUI } from "listas.slint";
-import { Marco, Campo, CampoBoton, CampoClave, Chip, Casilla, Boton, Etiqueta, RecordatorioUI } from "formularios.slint";
+import { Marco, Campo, CampoBoton, CampoClave, Chip, Casilla, Boton, Etiqueta, RecordatorioUI, CalendarioUI } from "formularios.slint";
 import { Selector, CeldaDia, MateriaUI } from "selectores.slint";
 import { AccionUI, AdjuntoUI, BarraAgente, PanelAgente, TarjetaConexionAgente } from "agente.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -126,6 +126,8 @@ component Banner inherits Rectangle {
 
 component BannerConflicto inherits Rectangle {
     in property <string> mensaje;
+    in property <string> texto-principal: "Quedarme con la actual";
+    in property <string> texto-secundario: "Usar la otra";
     callback quedar-actual();
     callback usar-otra();
 
@@ -163,7 +165,7 @@ component BannerConflicto inherits Rectangle {
         VerticalLayout {
             alignment: center;
             Boton {
-                texto: "Quedarme con la actual";
+                texto: root.texto-principal;
                 principal: true;
                 width: Tema.ancho-boton-largo;
                 clicked => { root.quedar-actual(); }
@@ -173,7 +175,7 @@ component BannerConflicto inherits Rectangle {
         VerticalLayout {
             alignment: center;
             Boton {
-                texto: "Usar la otra";
+                texto: root.texto-secundario;
                 width: Tema.ancho-boton-form;
                 clicked => { root.usar-otra(); }
             }
@@ -200,6 +202,7 @@ export component AppWindow inherits Window {
     in property <[string]> advertencias: [];
     in property <string> conflicto-texto: "";
     in property <string> moodle-banner: "";
+    in property <string> ical-oferta: "";
     in property <string> pie: "";
 
     in property <[DiaUI]> dias;
@@ -358,7 +361,13 @@ export component AppWindow inherits Window {
     in-out property <string> m-contrasena: "";
     in-out property <bool> m-ver-pass: false;
 
-    // --- Selector abierto (fecha, hora o materia) -------------------------
+    // --- Ajustes → Calendarios --------------------------------------------
+    in property <[CalendarioUI]> calendarios: [];
+    in property <bool> ical-ocupado: false;
+    in property <string> ical-aviso: "";
+    in-out property <string> c-url: "";
+    in-out property <string> c-nombre: "";
+    in-out property <string> c-materia: "";
     // 0 = ninguno · 1 = fecha · 2 = hora · 3 = materia. `sel-campo` dice qué
     // campo del formulario se está llenando; el significado lo pone puente.rs.
     in-out property <int> selector-tipo: 0;
@@ -431,6 +440,12 @@ export component AppWindow inherits Window {
     callback moodle-conectar();
     callback moodle-sincronizar();
     callback moodle-desconectar();
+    callback abrir-calendarios();
+    callback ical-agregar();
+    callback ical-quitar(string);
+    callback ical-sincronizar();
+    callback ical-oferta-aceptar();
+    callback ical-oferta-rechazar();
     callback abrir-enlace-tarea();
     callback elegir-proveedor(int);
     callback elegir-voz-proveedor(int);
@@ -568,6 +583,14 @@ export component AppWindow inherits Window {
                 fondo-color: Tema.fondo-aviso;
                 filo: Tema.borde-aviso;
                 tinta: Tema.texto-aviso;
+            }
+
+            if root.ical-oferta != "" : BannerConflicto {
+                mensaje: "¿Agregar este calendario? " + root.ical-oferta;
+                texto-principal: "Agregar";
+                texto-secundario: "No";
+                quedar-actual => { root.ical-oferta-aceptar(); }
+                usar-otra => { root.ical-oferta-rechazar(); }
             }
 
             // --- Contenido ------------------------------------------------
@@ -1080,6 +1103,12 @@ export component AppWindow inherits Window {
                             width: Tema.ancho-boton-clase;
                             clicked => { root.abrir-moodle(); }
                         }
+
+                        Boton {
+                            texto: "Calendarios…";
+                            width: Tema.ancho-boton-tarea;
+                            clicked => { root.abrir-calendarios(); }
+                        }
                     }
                 }
             }
@@ -1435,6 +1464,140 @@ export component AppWindow inherits Window {
                             peligro: true;
                             width: Tema.ancho-boton-form;
                             clicked => { root.moodle-desconectar(); }
+                        }
+                    }
+                }
+            }
+
+            // --- Calendarios iCal -----------------------------------------
+            if root.formulario == 7 : Marco {
+                encabezado: "Calendarios";
+                sub: "Eventos iCal (.ics / webcal://) como tareas.";
+                alto-panel: Tema.alto-panel-calendarios;
+                ancho-panel: Tema.ancho-formulario-ancho;
+                error: root.form-error;
+                confirma: false;
+                puede-borrar: false;
+                texto-cancelar: "Volver";
+                texto-guardar: root.ical-ocupado ? "Agregando…" : "Agregar calendario";
+                mostrar-guardar: !root.ical-ocupado;
+
+                guardar => { root.ical-agregar(); }
+                cancelar => { root.cancelar-formulario(); }
+                pedir-borrar => { }
+                confirmar-borrado => { }
+                no-borrar => { }
+
+                VerticalLayout {
+                    spacing: Tema.espacio-sm;
+
+                    ScrollView {
+                        height: Tema.alto-lista-calendarios;
+
+                        VerticalLayout {
+                            spacing: 0;
+
+                            for cal in root.calendarios : Rectangle {
+                                height: Tema.alto-fila-compacta;
+
+                                HorizontalLayout {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    padding-left: Tema.espacio-xs;
+                                    padding-right: Tema.espacio-xs;
+                                    spacing: Tema.espacio-sm;
+                                    cross-axis-alignment: center;
+
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        text: cal.materia == "" ? cal.nombre : cal.nombre + " (" + cal.materia + ")";
+                                        font-size: Tema.tamano-pequeno;
+                                        color: cal.materia == "" ? Tema.texto : Tema.materias[cal.tono];
+                                        overflow: elide;
+                                    }
+
+                                    Text {
+                                        text: cal.ultima;
+                                        font-size: Tema.tamano-hora;
+                                        color: Tema.texto-suave;
+                                        overflow: elide;
+                                    }
+
+                                    Boton {
+                                        texto: "Quitar";
+                                        peligro: true;
+                                        width: Tema.ancho-boton-cerrar;
+                                        clicked => { root.ical-quitar(cal.id); }
+                                    }
+                                }
+
+                                Rectangle {
+                                    y: parent.height - Tema.linea;
+                                    width: parent.width;
+                                    height: Tema.linea;
+                                    background: Tema.borde-suave;
+                                }
+                            }
+
+                            if root.calendarios.length == 0 : Text {
+                                height: Tema.alto-fila-compacta;
+                                vertical-alignment: center;
+                                text: "Sin calendarios agregados.";
+                                font-size: Tema.tamano-pequeno;
+                                color: Tema.texto-tenue;
+                            }
+                        }
+                    }
+
+                    Campo {
+                        etiqueta: "Dirección iCal (.ics o webcal://)";
+                        texto <=> root.c-url;
+                        pista: "https://calendar.google.com/calendar/ical/…/basic.ics";
+                        apagado: root.ical-ocupado;
+                    }
+
+                    HorizontalLayout {
+                        spacing: Tema.espacio-md;
+
+                        Campo {
+                            horizontal-stretch: 1;
+                            etiqueta: "Nombre (opcional)";
+                            texto <=> root.c-nombre;
+                            pista: "Universidad";
+                            apagado: root.ical-ocupado;
+                        }
+
+                        CampoBoton {
+                            horizontal-stretch: 1;
+                            etiqueta: "Materia (opcional)";
+                            valor: root.c-materia;
+                            pista: "Automática";
+                            glifo: "▾";
+                            apagado: root.ical-ocupado;
+                            clicked => { root.abrir-materia(4); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Tema.espacio-sm;
+                        cross-axis-alignment: center;
+
+                        Boton {
+                            texto: root.ical-ocupado ? "Sincronizando…" : "Sincronizar ahora";
+                            width: Tema.ancho-boton-largo;
+                            clicked => {
+                                if !root.ical-ocupado {
+                                    root.ical-sincronizar();
+                                }
+                            }
+                        }
+
+                        Text {
+                            horizontal-stretch: 1;
+                            text: root.ical-aviso;
+                            font-size: Tema.tamano-hora;
+                            color: Tema.texto-suave;
+                            overflow: elide;
                         }
                     }
                 }

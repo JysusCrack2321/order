@@ -38,6 +38,9 @@ fun BannersEstado(
     onAbrirAjustesAlarmaExacta: () -> Unit = {},
     moodleRequiereReingreso: Boolean = false,
     onAbrirMoodle: () -> Unit = {},
+    icalOferta: String? = null,
+    onAceptarIcal: () -> Unit = {},
+    onRechazarIcal: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -85,6 +88,15 @@ fun BannersEstado(
                 mensaje = "Vuelve a iniciar sesión en Moodle.",
                 textoBoton = "Moodle",
                 onClick = onAbrirMoodle,
+            )
+        }
+        if (!icalOferta.isNullOrBlank()) {
+            BannerConflicto(
+                mensaje = "¿Agregar este calendario? $icalOferta",
+                textoPrincipal = "Agregar",
+                textoSecundario = "No",
+                onQuedarActual = onAceptarIcal,
+                onUsarOtra = onRechazarIcal,
             )
         }
     }
@@ -182,6 +194,8 @@ private fun BannerTexto(
 @Composable
 private fun BannerConflicto(
     mensaje: String,
+    textoPrincipal: String = "Quedarme con la actual",
+    textoSecundario: String = "Usar la otra",
     onQuedarActual: () -> Unit,
     onUsarOtra: () -> Unit,
 ) {
@@ -223,7 +237,7 @@ private fun BannerConflicto(
                     border = BorderStroke(OrderTema.Linea, OrderTema.AcentoSuave),
                 ) {
                     Text(
-                        text = "Quedarme con la actual",
+                        text = textoPrincipal,
                         fontFamily = OrderTema.FuenteTitulos,
                         fontSize = OrderTema.TamanoHora,
                     )
@@ -234,7 +248,7 @@ private fun BannerConflicto(
                     border = BorderStroke(OrderTema.Linea, OrderTema.Borde),
                 ) {
                     Text(
-                        text = "Usar la otra",
+                        text = textoSecundario,
                         fontSize = OrderTema.TamanoHora,
                         color = OrderTema.TextoSuave,
                     )

@@ -14,6 +14,15 @@ export struct RecordatorioUI {
     hora: string,
 }
 
+/// Un calendario iCal en Ajustes → Calendarios.
+export struct CalendarioUI {
+    id: string,
+    nombre: string,
+    materia: string,
+    tono: int,
+    ultima: string,
+}
+
 /// Título de una tarea. Si está hecha se dibuja una línea encima, del ancho
 /// justo del texto: Slint no trae tachado, así que se pinta.
 export component TituloTachado inherits Rectangle {

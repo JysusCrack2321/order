@@ -6,6 +6,7 @@ pub mod almacen;
 pub mod avisos;
 pub mod conflictos;
 pub mod filtros;
+pub mod ical;
 pub mod modelo;
 pub mod moodle;
 pub mod ops;

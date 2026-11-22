@@ -8,6 +8,7 @@ import com.jysusman.order.ffi.AnioMesFfi
 import com.jysusman.order.ffi.AvisoFfi
 import com.jysusman.order.ffi.AvisoProgramableFfi
 import com.jysusman.order.ffi.CalendarioMesFfi
+import com.jysusman.order.ffi.CalendarioVistaFfi
 import com.jysusman.order.ffi.ClaseFormFfi
 import com.jysusman.order.ffi.ConflictoFfi
 import com.jysusman.order.ffi.DiaFfi
@@ -231,4 +232,9 @@ private class FakePuenteAvisos(
     override fun moodleEstado(rutaConfig: String): EstadoMoodleFfi = EstadoMoodleFfi(false, "micampus.unal.edu.co", "", "", false)
     override fun moodleSincronizar(rutaDatos: String, rutaConfig: String): ResumenSyncFfi = ResumenSyncFfi(0u, 0u, 0u)
     override fun moodleDesconectar(rutaConfig: String) {}
+    override fun pareceUrlIcal(texto: String): Boolean = false
+    override fun calendariosListar(rutaConfig: String): List<CalendarioVistaFfi> = emptyList()
+    override fun calendarioAgregar(rutaConfig: String, url: String, nombre: String, materia: String): CalendarioVistaFfi = throw UnsupportedOperationException()
+    override fun calendarioQuitar(rutaConfig: String, id: String) {}
+    override fun calendariosSincronizar(rutaDatos: String, rutaConfig: String): ResumenSyncFfi = ResumenSyncFfi(0u, 0u, 0u)
 }

@@ -129,6 +129,7 @@ class MainActivity : ComponentActivity() {
             rutaRegistroAvisos = RutasPrivadas.registroAvisos(applicationContext),
             rutaConfigAgente = RutasPrivadas.archivoAgenteConfig(applicationContext),
             rutaConfigMoodle = RutasPrivadas.archivoMoodleConfig(applicationContext),
+            rutaConfigCalendarios = RutasPrivadas.archivoCalendariosConfig(applicationContext),
             onDatosActualizados = { programador.reprogramar() },
             procesadorAdjuntos = ProcesadorAndroid(applicationContext),
         )
@@ -358,6 +359,11 @@ private fun OrderApp(
                         repositorio.revisarPortapapelesAlReanudar(leerPortapapeles(context))
                     }
                 }
+                if (ahoraTienePermiso) {
+                    scope.launch {
+                        repositorio.revisarPortapapelesIcal(leerPortapapeles(context))
+                    }
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -376,7 +382,8 @@ private fun OrderApp(
             }
             repositorio.cargarInicial()
             mostrarResumenSiToca()
-            repositorio.sincronizarMoodle(silencioso = true)
+            repositorio.revisarPortapapelesIcal(leerPortapapeles(context))
+            repositorio.sincronizarTodoSilencioso()
         }
     }
 
@@ -460,6 +467,9 @@ private fun OrderApp(
                     onAbrirAjustesAlarmaExacta = { abrirAjustesAlarmaExacta(context) },
                     moodleRequiereReingreso = estado.moodleEstado?.requiereReingreso == true,
                     onAbrirMoodle = { formularioActivo = FormularioActivo.Moodle },
+                    icalOferta = estado.icalOfertaPortapapeles,
+                    onAceptarIcal = { scope.launch { repositorio.aceptarOfertaIcal() } },
+                    onRechazarIcal = { repositorio.rechazarOfertaIcal() },
                 )
             }
         },

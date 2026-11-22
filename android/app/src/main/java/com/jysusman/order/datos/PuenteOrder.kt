@@ -8,6 +8,7 @@ import com.jysusman.order.ffi.AnioMesFfi
 import com.jysusman.order.ffi.AvisoFfi
 import com.jysusman.order.ffi.AvisoProgramableFfi
 import com.jysusman.order.ffi.CalendarioMesFfi
+import com.jysusman.order.ffi.CalendarioVistaFfi
 import com.jysusman.order.ffi.ClaseFormFfi
 import com.jysusman.order.ffi.ConflictoFfi
 import com.jysusman.order.ffi.DiaFfi
@@ -174,6 +175,18 @@ interface PuenteOrder {
     fun moodleEstado(rutaConfig: String): EstadoMoodleFfi
     fun moodleSincronizar(rutaDatos: String, rutaConfig: String): ResumenSyncFfi
     fun moodleDesconectar(rutaConfig: String)
+
+    fun pareceUrlIcal(texto: String): Boolean
+    fun calendariosListar(rutaConfig: String): List<CalendarioVistaFfi>
+    fun calendarioAgregar(
+        rutaConfig: String,
+        url: String,
+        nombre: String,
+        materia: String,
+    ): CalendarioVistaFfi
+
+    fun calendarioQuitar(rutaConfig: String, id: String)
+    fun calendariosSincronizar(rutaDatos: String, rutaConfig: String): ResumenSyncFfi
 }
 
 class PuenteOrderNativo : PuenteOrder {
@@ -425,4 +438,23 @@ class PuenteOrderNativo : PuenteOrder {
 
     override fun moodleDesconectar(rutaConfig: String) =
         com.jysusman.order.ffi.moodleDesconectar(rutaConfig)
+
+    override fun pareceUrlIcal(texto: String): Boolean =
+        com.jysusman.order.ffi.pareceUrlIcal(texto)
+
+    override fun calendariosListar(rutaConfig: String): List<CalendarioVistaFfi> =
+        com.jysusman.order.ffi.calendariosListar(rutaConfig)
+
+    override fun calendarioAgregar(
+        rutaConfig: String,
+        url: String,
+        nombre: String,
+        materia: String,
+    ): CalendarioVistaFfi = com.jysusman.order.ffi.calendarioAgregar(rutaConfig, url, nombre, materia)
+
+    override fun calendarioQuitar(rutaConfig: String, id: String) =
+        com.jysusman.order.ffi.calendarioQuitar(rutaConfig, id)
+
+    override fun calendariosSincronizar(rutaDatos: String, rutaConfig: String): ResumenSyncFfi =
+        com.jysusman.order.ffi.calendariosSincronizar(rutaDatos, rutaConfig)
 }

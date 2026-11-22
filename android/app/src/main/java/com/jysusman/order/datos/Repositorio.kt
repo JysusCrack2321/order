@@ -10,6 +10,7 @@ import com.jysusman.order.ffi.AjustesFormFfi
 import com.jysusman.order.ffi.AnioMesFfi
 import com.jysusman.order.ffi.AvisoFfi
 import com.jysusman.order.ffi.CalendarioMesFfi
+import com.jysusman.order.ffi.CalendarioVistaFfi
 import com.jysusman.order.ffi.ClaseFormFfi
 import com.jysusman.order.ffi.ConflictoFfi
 import com.jysusman.order.ffi.DiaFfi
@@ -91,6 +92,11 @@ data class EstadoOrder(
     val moodleOcupado: Boolean = false,
     val moodleAviso: String = "",
     val moodleError: String = "",
+    val calendarios: List<CalendarioVistaFfi> = emptyList(),
+    val calendariosOcupado: Boolean = false,
+    val calendariosAviso: String = "",
+    val calendariosError: String = "",
+    val icalOfertaPortapapeles: String? = null,
 )
 
 /**
@@ -106,11 +112,13 @@ class Repositorio(
     private val rutaRegistroAvisos: String = "",
     private val rutaConfigAgente: String = "",
     private val rutaConfigMoodle: String = "",
+    private val rutaConfigCalendarios: String = "",
     private val onDatosActualizados: () -> Unit = {},
     procesadorAdjuntos: ProcesadorPlataforma? = null,
 ) {
     private val mutex = Mutex()
     private val preparadorAdjuntos = procesadorAdjuntos?.let { PreparadorAdjuntos(puente, it) }
+    private val ofertasIcalDescartadas = mutableSetOf<String>()
 
     private val carpetaInicialLimpia = carpetaInicial?.trim()?.trimEnd('/').orEmpty()
 
@@ -214,6 +222,13 @@ class Repositorio(
                 } else {
                     _estado.value.moodleEstado
                 }
+                val listaCal = if (rutaConfigCalendarios.isNotBlank()) {
+                    withContext(dispatcherIo) {
+                        runCatching { puente.calendariosListar(rutaConfigCalendarios) }.getOrNull()
+                    }
+                } else {
+                    null
+                }
                 _estado.update {
                     it.copy(
                         cargando = false,
@@ -230,6 +245,7 @@ class Repositorio(
                         agenteTieneClave = tieneClave,
                         textosConexion = textos,
                         moodleEstado = moodleEst,
+                        calendarios = listaCal ?: it.calendarios,
                     )
                 }
                 withContext(dispatcherIo) { onDatosActualizados() }
@@ -1190,6 +1206,207 @@ class Repositorio(
             }
         }.onFailure { err ->
             _estado.update { it.copy(moodleError = mensajeDeError(err)) }
+        }
+    }
+
+    // --- Calendarios iCal --------------------------------------------------
+
+    suspend fun sincronizarTodoSilencioso() {
+        sincronizarMoodle(silencioso = true)
+        sincronizarCalendarios(silencioso = true, incluirMoodle = false)
+    }
+
+    suspend fun cargarCalendarios() {
+        if (rutaConfigCalendarios.isBlank()) return
+        val lista = withContext(dispatcherIo) {
+            runCatching { puente.calendariosListar(rutaConfigCalendarios) }.getOrNull()
+        }
+        if (lista != null) {
+            _estado.update {
+                it.copy(
+                    calendarios = lista,
+                    calendariosError = "",
+                    calendariosAviso = "",
+                )
+            }
+        }
+    }
+
+    suspend fun revisarPortapapelesIcal(textoPortapapeles: String?) {
+        val candidato = textoPortapapeles.orEmpty().trim()
+        if (candidato.isEmpty() || candidato in ofertasIcalDescartadas) return
+        val esIcal = withContext(dispatcherIo) {
+            runCatching { puente.pareceUrlIcal(candidato) }.getOrDefault(false)
+        }
+        if (esIcal) {
+            _estado.update { it.copy(icalOfertaPortapapeles = candidato) }
+        }
+    }
+
+    suspend fun aceptarOfertaIcal() {
+        val url = _estado.value.icalOfertaPortapapeles ?: return
+        _estado.update { it.copy(icalOfertaPortapapeles = null) }
+        ofertasIcalDescartadas.add(url)
+        agregarCalendario(url, "", "")
+    }
+
+    fun rechazarOfertaIcal() {
+        val url = _estado.value.icalOfertaPortapapeles ?: return
+        ofertasIcalDescartadas.add(url)
+        _estado.update { it.copy(icalOfertaPortapapeles = null) }
+    }
+
+    suspend fun agregarCalendario(url: String, nombre: String, materia: String): Boolean {
+        if (rutaConfigCalendarios.isBlank() || _estado.value.calendariosOcupado) return false
+        if (url.isBlank()) {
+            _estado.update { it.copy(calendariosError = "Pega la dirección iCal (.ics o webcal://).") }
+            return false
+        }
+        _estado.update {
+            it.copy(
+                calendariosOcupado = true,
+                calendariosError = "",
+                calendariosAviso = "Descargando y sincronizando…",
+            )
+        }
+        val resAdd = withContext(dispatcherIo) {
+            runCatching { puente.calendarioAgregar(rutaConfigCalendarios, url, nombre, materia) }
+        }
+        resAdd.onFailure { err ->
+            _estado.update {
+                it.copy(
+                    calendariosOcupado = false,
+                    calendariosAviso = "",
+                    calendariosError = mensajeDeError(err),
+                )
+            }
+            return false
+        }
+        sincronizarCalendarios(silencioso = false, yaMarcadoOcupado = true, incluirMoodle = false)
+        return true
+    }
+
+    suspend fun quitarCalendario(id: String) {
+        if (rutaConfigCalendarios.isBlank() || _estado.value.calendariosOcupado) return
+        val res = withContext(dispatcherIo) {
+            runCatching {
+                puente.calendarioQuitar(rutaConfigCalendarios, id)
+                puente.calendariosListar(rutaConfigCalendarios)
+            }
+        }
+        res.onSuccess { lista ->
+            _estado.update {
+                it.copy(
+                    calendarios = lista,
+                    calendariosError = "",
+                    calendariosAviso = "Calendario quitado (las tareas existentes se conservan).",
+                )
+            }
+        }.onFailure { err ->
+            _estado.update { it.copy(calendariosError = mensajeDeError(err)) }
+        }
+    }
+
+    suspend fun sincronizarCalendarios(
+        silencioso: Boolean = false,
+        yaMarcadoOcupado: Boolean = false,
+        incluirMoodle: Boolean = true,
+    ) {
+        if (incluirMoodle && rutaConfigMoodle.isNotBlank()) {
+            sincronizarMoodle(silencioso = silencioso)
+        }
+        if (rutaConfigCalendarios.isBlank()) {
+            if (yaMarcadoOcupado) {
+                _estado.update { it.copy(calendariosOcupado = false, calendariosAviso = "") }
+            }
+            return
+        }
+        val rutaDatos = _estado.value.rutaArchivo
+        if (rutaDatos.isBlank()) return
+
+        val lista = withContext(dispatcherIo) {
+            runCatching { puente.calendariosListar(rutaConfigCalendarios) }.getOrDefault(emptyList())
+        }
+        if (lista.isEmpty()) {
+            if (yaMarcadoOcupado) {
+                _estado.update { it.copy(calendarios = emptyList(), calendariosOcupado = false, calendariosAviso = "") }
+            }
+            return
+        }
+
+        if (!silencioso && !yaMarcadoOcupado) {
+            _estado.update {
+                it.copy(
+                    calendariosOcupado = true,
+                    calendariosError = "",
+                    calendariosAviso = "Sincronizando…",
+                )
+            }
+        }
+
+        val resSync = withContext(dispatcherIo) {
+            runCatching { puente.calendariosSincronizar(rutaDatos, rutaConfigCalendarios) }
+        }
+        val nuevaLista = withContext(dispatcherIo) {
+            runCatching { puente.calendariosListar(rutaConfigCalendarios) }.getOrNull()
+        }
+
+        resSync.onSuccess { r ->
+            val huboCambios = r.creadas > 0u || r.actualizadas > 0u
+            if (huboCambios) {
+                mutex.withLock {
+                    val actual = _estado.value
+                    val lectura = withContext(dispatcherIo) {
+                        runCatching {
+                            val res = puente.cargar(actual.rutaArchivo)
+                            leerVistas(
+                                actual.rutaArchivo,
+                                actual.diaIso,
+                                actual.lunesIso,
+                                actual.filtro,
+                                res,
+                            )
+                        }
+                    }
+                    lectura.onSuccess { lec ->
+                        _estado.update {
+                            it.copy(
+                                resumen = lec.resumen,
+                                error = null,
+                                advertencias = lec.resumen.advertencias,
+                                conflictos = lec.resumen.conflictos,
+                                inicio = lec.inicio,
+                                dia = lec.dia,
+                                semana = lec.semana,
+                                pendientes = lec.pendientes,
+                                materias = lec.materias,
+                            )
+                        }
+                        withContext(dispatcherIo) { onDatosActualizados() }
+                    }
+                }
+            }
+            _estado.update {
+                it.copy(
+                    calendarios = nuevaLista ?: it.calendarios,
+                    calendariosOcupado = false,
+                    calendariosError = "",
+                    calendariosAviso = if (silencioso) {
+                        it.calendariosAviso
+                    } else {
+                        "Listo: ${r.creadas} creadas, ${r.actualizadas} actualizadas."
+                    },
+                )
+            }
+        }.onFailure { err ->
+            _estado.update {
+                it.copy(
+                    calendarios = nuevaLista ?: it.calendarios,
+                    calendariosOcupado = false,
+                    calendariosAviso = if (silencioso) it.calendariosAviso else "",
+                    calendariosError = if (silencioso) it.calendariosError else mensajeDeError(err),
+                )
+            }
         }
     }
 

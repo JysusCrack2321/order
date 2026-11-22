@@ -530,18 +530,19 @@ fn registro() -> Registro {
 /// Intervalo de sincronización automática en segundo plano (3 horas).
 const INTERVALO_SYNC: Duration = Duration::from_secs(3 * 3600);
 
-/// Sincroniza al abrir la app y luego cada 3 horas en un hilo aparte.
+/// Sincroniza Moodle y calendarios iCal al abrir la app y cada 3 horas en un hilo aparte.
 /// Los fallos sin red se silencian; los cambios refrescan la ventana vía event loop.
 pub fn arrancar_sincronizacion(almacen: Almacen) {
     thread::spawn(move || loop {
+        let hoy = Local::now().date_naive();
+        let mut hubo_cambios = false;
+
         let ruta_moodle = order_core::moodle::config::ruta();
         if order_core::moodle::config::cargar_de(&ruta_moodle).conectado() {
-            let hoy = Local::now().date_naive();
             match order_core::moodle::sincronizar_ahora(&almacen.ruta, &ruta_moodle, hoy) {
                 Ok(resumen) => {
                     if resumen.creadas > 0 || resumen.actualizadas > 0 || resumen.hechas > 0 {
-                        let clon = almacen.clone();
-                        let _ = slint::invoke_from_event_loop(move || leer_y_mostrar(&clon));
+                        hubo_cambios = true;
                     }
                     let _ = slint::invoke_from_event_loop(puente::refrescar_moodle);
                 }
@@ -551,6 +552,25 @@ pub fn arrancar_sincronizacion(almacen: Almacen) {
                 Err(_) => {}
             }
         }
+
+        let ruta_cal = order_core::ical::config::ruta();
+        if !order_core::ical::config::cargar_de(&ruta_cal)
+            .calendarios
+            .is_empty()
+        {
+            if let Ok(resumen) = order_core::ical::sincronizar_calendarios(&almacen.ruta, &ruta_cal, hoy) {
+                if resumen.creadas > 0 || resumen.actualizadas > 0 {
+                    hubo_cambios = true;
+                }
+                let _ = slint::invoke_from_event_loop(puente::refrescar_calendarios);
+            }
+        }
+
+        if hubo_cambios {
+            let clon = almacen.clone();
+            let _ = slint::invoke_from_event_loop(move || leer_y_mostrar(&clon));
+        }
+
         thread::sleep(INTERVALO_SYNC);
     });
 }
