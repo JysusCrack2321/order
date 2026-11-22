@@ -14,6 +14,7 @@ import com.jysusman.order.ffi.DiaFfi
 import com.jysusman.order.ffi.DiaVistaFfi
 import com.jysusman.order.ffi.ErrorFfi
 import com.jysusman.order.ffi.EstadoConexionFfi
+import com.jysusman.order.ffi.EstadoMoodleFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
@@ -26,6 +27,7 @@ import com.jysusman.order.ffi.RespuestaAgenteFfi
 import com.jysusman.order.ffi.ResultadoAplicarTodasFfi
 import com.jysusman.order.ffi.ResultadoConexionFfi
 import com.jysusman.order.ffi.ResumenArchivoFfi
+import com.jysusman.order.ffi.ResumenSyncFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ffi.TareaFfi
 import com.jysusman.order.ffi.TareaFormFfi
@@ -331,6 +333,62 @@ class RepositorioTest {
         assertEquals("Taller agregado.", repo.estado.value.agenteRespuesta)
         assertEquals("", repo.estado.value.agenteTexto)
     }
+
+    @Test
+    fun moodleConectarSincronizarSilenciosoYDesconectar() = runTest {
+        val fake = FakePuenteOrder()
+        var reprogramaciones = 0
+        val repo = Repositorio(
+            puente = fake,
+            carpetaInicial = "/tmp/order-moodle",
+            dispatcherIo = UnconfinedTestDispatcher(testScheduler),
+            asegurarCarpeta = {},
+            rutaConfigMoodle = "/tmp/moodle.toml",
+            onDatosActualizados = { reprogramaciones++ },
+        )
+
+        repo.cargarInicial()
+        assertEquals(false, repo.estado.value.moodleEstado?.conectado)
+        val baseReprog = reprogramaciones
+
+        // Credenciales malas dejan error visible y no conectan.
+        fake.fallarMoodleConectar = ErrorFfi.Operacion("Usuario o contraseña incorrectos.")
+        val okFallo = repo.conectarMoodle("micampus.unal.edu.co", "ana", "mala")
+        assertEquals(false, okFallo)
+        assertEquals("Usuario o contraseña incorrectos.", repo.estado.value.moodleError)
+        assertEquals(false, repo.estado.value.moodleEstado?.conectado)
+
+        // Conexión exitosa sincroniza enseguida y reprograma avisos si hubo cambios.
+        fake.fallarMoodleConectar = null
+        fake.resumenMoodleSync = ResumenSyncFfi(3u, 0u, 0u)
+        val okBien = repo.conectarMoodle("micampus.unal.edu.co", "ana", "buena")
+        assertTrue(okBien)
+        assertEquals("", repo.estado.value.moodleError)
+        assertTrue(repo.estado.value.moodleEstado?.conectado == true)
+        assertEquals(baseReprog + 1, reprogramaciones)
+
+        // Sincronización silenciosa sin red no ensucia banners ni errores.
+        fake.fallarMoodleSync = ErrorFfi.Operacion("Sin conexión con Moodle")
+        repo.sincronizarMoodle(silencioso = true)
+        assertNull(repo.estado.value.error)
+        assertEquals("", repo.estado.value.moodleError)
+
+        // Token vencido activa requiereReingreso para mostrar banner suave.
+        fake.moodleEstadoFake = EstadoMoodleFfi(
+            conectado = true,
+            sitio = "micampus.unal.edu.co",
+            usuario = "Ana",
+            textoEstado = "Vuelve a iniciar sesión en Moodle.",
+            requiereReingreso = true,
+        )
+        repo.sincronizarMoodle(silencioso = true)
+        assertTrue(repo.estado.value.moodleEstado?.requiereReingreso == true)
+
+        // Desconectar limpia la conexión.
+        fake.fallarMoodleSync = null
+        repo.desconectarMoodle()
+        assertEquals(false, repo.estado.value.moodleEstado?.conectado)
+    }
 }
 
 class FakePuenteOrder : PuenteOrder {
@@ -357,6 +415,10 @@ class FakePuenteOrder : PuenteOrder {
     var conflictos: List<ConflictoFfi> = emptyList()
     var advertencias: List<String> = emptyList()
     var ultimaRutaCargada: String = ""
+    var fallarMoodleConectar: ErrorFfi? = null
+    var fallarMoodleSync: ErrorFfi? = null
+    var resumenMoodleSync: ResumenSyncFfi = ResumenSyncFfi(0u, 0u, 0u)
+    var moodleEstadoFake: EstadoMoodleFfi = EstadoMoodleFfi(false, "micampus.unal.edu.co", "", "", false)
 
     private val tareaEjemplo = TareaFfi(
         id = "t-1",
@@ -447,7 +509,7 @@ class FakePuenteOrder : PuenteOrder {
     override fun canonicaMateria(ruta: String, texto: String): String = texto.trim()
 
     override fun obtenerTareaForm(ruta: String, id: String?): TareaFormFfi =
-        TareaFormFfi("", "", "", "2026-11-29", "11:59 p. m.", false)
+        TareaFormFfi("", "", "", "2026-11-29", "11:59 p. m.", false, "")
 
     override fun obtenerClaseForm(ruta: String, id: String?): ClaseFormFfi =
         ClaseFormFfi("", "", listOf(DiaFfi.LUN), "7:00 a. m.", "9:00 a. m.", "")
@@ -652,5 +714,33 @@ class FakePuenteOrder : PuenteOrder {
     override fun transcribir(rutaConfig: String, wav: ByteArray): String {
         llamadasTranscribir++
         return transcripcionTexto
+    }
+
+    override fun moodleConectar(
+        rutaConfig: String,
+        sitio: String,
+        usuario: String,
+        contrasena: String,
+    ): EstadoMoodleFfi {
+        fallarMoodleConectar?.let { throw it }
+        moodleEstadoFake = EstadoMoodleFfi(
+            conectado = true,
+            sitio = sitio,
+            usuario = usuario,
+            textoEstado = "Conectado como $usuario · sin sincronizar aún",
+            requiereReingreso = false,
+        )
+        return moodleEstadoFake
+    }
+
+    override fun moodleEstado(rutaConfig: String): EstadoMoodleFfi = moodleEstadoFake
+
+    override fun moodleSincronizar(rutaDatos: String, rutaConfig: String): ResumenSyncFfi {
+        fallarMoodleSync?.let { throw it }
+        return resumenMoodleSync
+    }
+
+    override fun moodleDesconectar(rutaConfig: String) {
+        moodleEstadoFake = EstadoMoodleFfi(false, "micampus.unal.edu.co", "", "", false)
     }
 }

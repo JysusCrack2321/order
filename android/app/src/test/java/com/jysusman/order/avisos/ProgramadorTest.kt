@@ -12,6 +12,7 @@ import com.jysusman.order.ffi.ClaseFormFfi
 import com.jysusman.order.ffi.ConflictoFfi
 import com.jysusman.order.ffi.DiaFfi
 import com.jysusman.order.ffi.DiaVistaFfi
+import com.jysusman.order.ffi.EstadoMoodleFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
@@ -24,6 +25,7 @@ import com.jysusman.order.ffi.RespuestaAgenteFfi
 import com.jysusman.order.ffi.ResultadoAplicarTodasFfi
 import com.jysusman.order.ffi.ResultadoConexionFfi
 import com.jysusman.order.ffi.ResumenArchivoFfi
+import com.jysusman.order.ffi.ResumenSyncFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ffi.TareaFormFfi
 import com.jysusman.order.ffi.TextosConexionAgenteFfi
@@ -225,4 +227,8 @@ private class FakePuenteAvisos(
     override fun hayConversacionEn(rutaConfig: String): Boolean = false
     override fun wavDePcm16(muestras: List<Short>, frecuencia: UInt): ByteArray = ByteArray(0)
     override fun transcribir(rutaConfig: String, wav: ByteArray): String = ""
+    override fun moodleConectar(rutaConfig: String, sitio: String, usuario: String, contrasena: String): EstadoMoodleFfi = throw UnsupportedOperationException()
+    override fun moodleEstado(rutaConfig: String): EstadoMoodleFfi = EstadoMoodleFfi(false, "micampus.unal.edu.co", "", "", false)
+    override fun moodleSincronizar(rutaDatos: String, rutaConfig: String): ResumenSyncFfi = ResumenSyncFfi(0u, 0u, 0u)
+    override fun moodleDesconectar(rutaConfig: String) {}
 }

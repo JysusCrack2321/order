@@ -128,6 +128,7 @@ class MainActivity : ComponentActivity() {
             carpetaInicial = carpetaInicial,
             rutaRegistroAvisos = RutasPrivadas.registroAvisos(applicationContext),
             rutaConfigAgente = RutasPrivadas.archivoAgenteConfig(applicationContext),
+            rutaConfigMoodle = RutasPrivadas.archivoMoodleConfig(applicationContext),
             onDatosActualizados = { programador.reprogramar() },
             procesadorAdjuntos = ProcesadorAndroid(applicationContext),
         )
@@ -375,6 +376,7 @@ private fun OrderApp(
             }
             repositorio.cargarInicial()
             mostrarResumenSiToca()
+            repositorio.sincronizarMoodle(silencioso = true)
         }
     }
 
@@ -456,6 +458,8 @@ private fun OrderApp(
                     onAbrirAjustesNotificaciones = { abrirAjustesNotificaciones(context) },
                     faltaPermisoAlarmaExacta = avisosActivos && !permisoAlarmaExactaOk,
                     onAbrirAjustesAlarmaExacta = { abrirAjustesAlarmaExacta(context) },
+                    moodleRequiereReingreso = estado.moodleEstado?.requiereReingreso == true,
+                    onAbrirMoodle = { formularioActivo = FormularioActivo.Moodle },
                 )
             }
         },

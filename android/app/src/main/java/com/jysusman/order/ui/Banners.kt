@@ -36,6 +36,8 @@ fun BannersEstado(
     onAbrirAjustesNotificaciones: () -> Unit = {},
     faltaPermisoAlarmaExacta: Boolean = false,
     onAbrirAjustesAlarmaExacta: () -> Unit = {},
+    moodleRequiereReingreso: Boolean = false,
+    onAbrirMoodle: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -76,6 +78,13 @@ fun BannersEstado(
                 mensaje = "Sin permiso de alarmas exactas los avisos pueden llegar con retraso.",
                 textoBoton = "Permitir alarmas",
                 onClick = onAbrirAjustesAlarmaExacta,
+            )
+        }
+        if (moodleRequiereReingreso) {
+            BannerAccionAviso(
+                mensaje = "Vuelve a iniciar sesión en Moodle.",
+                textoBoton = "Moodle",
+                onClick = onAbrirMoodle,
             )
         }
     }

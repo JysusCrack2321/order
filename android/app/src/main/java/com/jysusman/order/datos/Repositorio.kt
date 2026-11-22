@@ -16,6 +16,7 @@ import com.jysusman.order.ffi.DiaFfi
 import com.jysusman.order.ffi.DiaVistaFfi
 import com.jysusman.order.ffi.ErrorFfi
 import com.jysusman.order.ffi.EstadoConexionFfi
+import com.jysusman.order.ffi.EstadoMoodleFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
@@ -86,6 +87,10 @@ data class EstadoOrder(
     val conexionEstadoError: Boolean = false,
     val conexionOfertaPortapapeles: String? = null,
     val textosConexion: TextosConexionAgenteFfi? = null,
+    val moodleEstado: EstadoMoodleFfi? = null,
+    val moodleOcupado: Boolean = false,
+    val moodleAviso: String = "",
+    val moodleError: String = "",
 )
 
 /**
@@ -100,6 +105,7 @@ class Repositorio(
     private val asegurarCarpeta: (File) -> Unit = { dir -> dir.mkdirs() },
     private val rutaRegistroAvisos: String = "",
     private val rutaConfigAgente: String = "",
+    private val rutaConfigMoodle: String = "",
     private val onDatosActualizados: () -> Unit = {},
     procesadorAdjuntos: ProcesadorPlataforma? = null,
 ) {
@@ -201,6 +207,13 @@ class Repositorio(
                 val textos = _estado.value.textosConexion ?: withContext(dispatcherIo) {
                     runCatching { puente.textosConexionAgente() }.getOrNull()
                 }
+                val moodleEst = if (rutaConfigMoodle.isNotBlank()) {
+                    withContext(dispatcherIo) {
+                        runCatching { puente.moodleEstado(rutaConfigMoodle) }.getOrNull()
+                    }
+                } else {
+                    _estado.value.moodleEstado
+                }
                 _estado.update {
                     it.copy(
                         cargando = false,
@@ -216,6 +229,7 @@ class Repositorio(
                         agenteHayConversacion = hayConvGuardada,
                         agenteTieneClave = tieneClave,
                         textosConexion = textos,
+                        moodleEstado = moodleEst,
                     )
                 }
                 withContext(dispatcherIo) { onDatosActualizados() }
@@ -1019,6 +1033,164 @@ class Repositorio(
                 else ErrorFfi.Validacion(0, mensajeDeError(err))
             },
         )
+    }
+
+    // --- Moodle ------------------------------------------------------------
+
+    suspend fun cargarEstadoMoodle() {
+        if (rutaConfigMoodle.isBlank()) return
+        val est = withContext(dispatcherIo) {
+            runCatching { puente.moodleEstado(rutaConfigMoodle) }.getOrNull()
+        }
+        if (est != null) {
+            _estado.update { it.copy(moodleEstado = est, moodleError = "", moodleAviso = "") }
+        }
+    }
+
+    suspend fun conectarMoodle(sitio: String, usuario: String, contrasena: String): Boolean {
+        if (rutaConfigMoodle.isBlank() || _estado.value.moodleOcupado) return false
+        if (sitio.isBlank() || usuario.isBlank() || contrasena.isEmpty()) {
+            _estado.update { it.copy(moodleError = "Escribe sitio, usuario y contraseña.") }
+            return false
+        }
+        _estado.update {
+            it.copy(
+                moodleOcupado = true,
+                moodleError = "",
+                moodleAviso = "Conectando y sincronizando…",
+            )
+        }
+        val resCon = withContext(dispatcherIo) {
+            runCatching { puente.moodleConectar(rutaConfigMoodle, sitio, usuario, contrasena) }
+        }
+        resCon.onFailure { err ->
+            _estado.update {
+                it.copy(
+                    moodleOcupado = false,
+                    moodleAviso = "",
+                    moodleError = mensajeDeError(err),
+                )
+            }
+            return false
+        }
+        sincronizarMoodle(silencioso = false, yaMarcadoOcupado = true)
+        return true
+    }
+
+    suspend fun sincronizarMoodle(
+        silencioso: Boolean = false,
+        yaMarcadoOcupado: Boolean = false,
+    ) {
+        if (rutaConfigMoodle.isBlank()) return
+        val rutaDatos = _estado.value.rutaArchivo
+        if (rutaDatos.isBlank()) return
+
+        val conectado = withContext(dispatcherIo) {
+            runCatching { puente.moodleEstado(rutaConfigMoodle).conectado }.getOrDefault(false)
+        }
+        if (!conectado) {
+            if (yaMarcadoOcupado) {
+                _estado.update { it.copy(moodleOcupado = false, moodleAviso = "") }
+            }
+            return
+        }
+
+        if (!silencioso && !yaMarcadoOcupado) {
+            _estado.update {
+                it.copy(
+                    moodleOcupado = true,
+                    moodleError = "",
+                    moodleAviso = "Sincronizando…",
+                )
+            }
+        }
+
+        val resSync = withContext(dispatcherIo) {
+            runCatching { puente.moodleSincronizar(rutaDatos, rutaConfigMoodle) }
+        }
+        val nuevoEstado = withContext(dispatcherIo) {
+            runCatching { puente.moodleEstado(rutaConfigMoodle) }.getOrNull()
+        }
+
+        resSync.onSuccess { resumenSync ->
+            val huboCambios =
+                resumenSync.creadas > 0u || resumenSync.actualizadas > 0u || resumenSync.hechas > 0u
+            if (huboCambios) {
+                mutex.withLock {
+                    val actual = _estado.value
+                    val lectura = withContext(dispatcherIo) {
+                        runCatching {
+                            val res = puente.cargar(actual.rutaArchivo)
+                            leerVistas(
+                                actual.rutaArchivo,
+                                actual.diaIso,
+                                actual.lunesIso,
+                                actual.filtro,
+                                res,
+                            )
+                        }
+                    }
+                    lectura.onSuccess { lec ->
+                        _estado.update {
+                            it.copy(
+                                resumen = lec.resumen,
+                                error = null,
+                                advertencias = lec.resumen.advertencias,
+                                conflictos = lec.resumen.conflictos,
+                                inicio = lec.inicio,
+                                dia = lec.dia,
+                                semana = lec.semana,
+                                pendientes = lec.pendientes,
+                                materias = lec.materias,
+                            )
+                        }
+                        withContext(dispatcherIo) { onDatosActualizados() }
+                    }
+                }
+            }
+            _estado.update {
+                it.copy(
+                    moodleEstado = nuevoEstado ?: it.moodleEstado,
+                    moodleOcupado = false,
+                    moodleError = "",
+                    moodleAviso = if (silencioso) {
+                        it.moodleAviso
+                    } else {
+                        "Listo: ${resumenSync.creadas} creadas, ${resumenSync.actualizadas} actualizadas, ${resumenSync.hechas} completadas."
+                    },
+                )
+            }
+        }.onFailure { err ->
+            _estado.update {
+                it.copy(
+                    moodleEstado = nuevoEstado ?: it.moodleEstado,
+                    moodleOcupado = false,
+                    moodleAviso = if (silencioso) it.moodleAviso else "",
+                    moodleError = if (silencioso) it.moodleError else mensajeDeError(err),
+                )
+            }
+        }
+    }
+
+    suspend fun desconectarMoodle() {
+        if (rutaConfigMoodle.isBlank() || _estado.value.moodleOcupado) return
+        val res = withContext(dispatcherIo) {
+            runCatching {
+                puente.moodleDesconectar(rutaConfigMoodle)
+                puente.moodleEstado(rutaConfigMoodle)
+            }
+        }
+        res.onSuccess { est ->
+            _estado.update {
+                it.copy(
+                    moodleEstado = est,
+                    moodleError = "",
+                    moodleAviso = "Desconectado de Moodle.",
+                )
+            }
+        }.onFailure { err ->
+            _estado.update { it.copy(moodleError = mensajeDeError(err)) }
+        }
     }
 
     // --- Ayudantes internos ------------------------------------------------

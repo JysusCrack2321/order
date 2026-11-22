@@ -6,6 +6,10 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.jysusman.order.datos.PreferenciasOrder
+import com.jysusman.order.datos.PuenteOrderNativo
+import com.jysusman.order.datos.Repositorio
+import com.jysusman.order.datos.RutasPrivadas
 import java.util.concurrent.TimeUnit
 
 class TrabajoRespaldo(
@@ -15,6 +19,17 @@ class TrabajoRespaldo(
 
     override suspend fun doWork(): Result {
         Canales.asegurarCanales(applicationContext)
+        val puente = PuenteOrderNativo()
+        val rutaMoodle = RutasPrivadas.archivoMoodleConfig(applicationContext)
+        val conectado = runCatching { puente.moodleEstado(rutaMoodle).conectado }.getOrDefault(false)
+        if (conectado) {
+            val carpeta = PreferenciasOrder.carpetaDatos(applicationContext)
+                ?: runCatching { puente.carpetaPorDefecto() }.getOrNull().orEmpty()
+            if (carpeta.isNotBlank()) {
+                val rutaDatos = Repositorio.rutaEnCarpeta(carpeta)
+                runCatching { puente.moodleSincronizar(rutaDatos, rutaMoodle) }
+            }
+        }
         Programador.crear(applicationContext).reprogramar()
         return Result.success()
     }

@@ -12,6 +12,7 @@ import com.jysusman.order.ffi.ClaseFormFfi
 import com.jysusman.order.ffi.ConflictoFfi
 import com.jysusman.order.ffi.DiaFfi
 import com.jysusman.order.ffi.DiaVistaFfi
+import com.jysusman.order.ffi.EstadoMoodleFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
@@ -24,6 +25,7 @@ import com.jysusman.order.ffi.RespuestaAgenteFfi
 import com.jysusman.order.ffi.ResultadoAplicarTodasFfi
 import com.jysusman.order.ffi.ResultadoConexionFfi
 import com.jysusman.order.ffi.ResumenArchivoFfi
+import com.jysusman.order.ffi.ResumenSyncFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ffi.TareaFormFfi
 import com.jysusman.order.ffi.TextosConexionAgenteFfi
@@ -161,6 +163,17 @@ interface PuenteOrder {
 
     fun wavDePcm16(muestras: List<Short>, frecuencia: UInt): ByteArray
     fun transcribir(rutaConfig: String, wav: ByteArray): String
+
+    fun moodleConectar(
+        rutaConfig: String,
+        sitio: String,
+        usuario: String,
+        contrasena: String,
+    ): EstadoMoodleFfi
+
+    fun moodleEstado(rutaConfig: String): EstadoMoodleFfi
+    fun moodleSincronizar(rutaDatos: String, rutaConfig: String): ResumenSyncFfi
+    fun moodleDesconectar(rutaConfig: String)
 }
 
 class PuenteOrderNativo : PuenteOrder {
@@ -396,4 +409,20 @@ class PuenteOrderNativo : PuenteOrder {
 
     override fun transcribir(rutaConfig: String, wav: ByteArray): String =
         com.jysusman.order.ffi.transcribir(rutaConfig, wav)
+
+    override fun moodleConectar(
+        rutaConfig: String,
+        sitio: String,
+        usuario: String,
+        contrasena: String,
+    ): EstadoMoodleFfi = com.jysusman.order.ffi.moodleConectar(rutaConfig, sitio, usuario, contrasena)
+
+    override fun moodleEstado(rutaConfig: String): EstadoMoodleFfi =
+        com.jysusman.order.ffi.moodleEstado(rutaConfig)
+
+    override fun moodleSincronizar(rutaDatos: String, rutaConfig: String): ResumenSyncFfi =
+        com.jysusman.order.ffi.moodleSincronizar(rutaDatos, rutaConfig)
+
+    override fun moodleDesconectar(rutaConfig: String) =
+        com.jysusman.order.ffi.moodleDesconectar(rutaConfig)
 }

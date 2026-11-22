@@ -1,5 +1,7 @@
 package com.jysusman.order.ui.formularios
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -44,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -67,6 +70,7 @@ sealed interface FormularioActivo {
     data class Recordatorio(val id: String?, val volverAjustes: Boolean = false) : FormularioActivo
     data object Ajustes : FormularioActivo
     data object Agente : FormularioActivo
+    data object Moodle : FormularioActivo
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -120,6 +124,7 @@ fun ContenedorFormularioSheet(
                 avisosActivos = avisosActivos,
                 alCambiarAvisosActivos = alCambiarAvisosActivos,
                 alAbrirAgente = { alAbrirFormulario(FormularioActivo.Agente) },
+                alAbrirMoodle = { alAbrirFormulario(FormularioActivo.Moodle) },
                 alNuevoRecordatorio = {
                     alAbrirFormulario(FormularioActivo.Recordatorio(id = null, volverAjustes = true))
                 },
@@ -130,6 +135,11 @@ fun ContenedorFormularioSheet(
             )
 
             FormularioActivo.Agente -> HojaAjustesAgente(
+                repositorio = repositorio,
+                alVolver = { alAbrirFormulario(FormularioActivo.Ajustes) },
+            )
+
+            FormularioActivo.Moodle -> HojaMoodle(
                 repositorio = repositorio,
                 alVolver = { alAbrirFormulario(FormularioActivo.Ajustes) },
             )
@@ -144,6 +154,7 @@ private fun HojaTarea(
     materias: List<MateriaConTonoFfi>,
     alCerrar: () -> Unit,
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val edita = !id.isNullOrBlank()
     var listo by remember(id) { mutableStateOf(false) }
@@ -153,6 +164,7 @@ private fun HojaTarea(
     var fechaIso by remember(id) { mutableStateOf("") }
     var hora by remember(id) { mutableStateOf("") }
     var hecha by remember(id) { mutableStateOf(false) }
+    var enlace by remember(id) { mutableStateOf("") }
 
     var errorMsg by remember(id) { mutableStateOf("") }
     var campoMal by remember(id) { mutableIntStateOf(0) }
@@ -169,6 +181,7 @@ private fun HojaTarea(
             fechaIso = f.fechaIso
             hora = f.horaTexto
             hecha = f.hecha
+            enlace = f.enlace
             listo = true
         }.onFailure { err ->
             errorMsg = err.message ?: "No se pudo abrir la tarea."
@@ -260,6 +273,24 @@ private fun HojaTarea(
                 fontSize = OrderTema.TamanoPequeno,
                 color = OrderTema.TextoSuave,
             )
+        }
+
+        if (edita && enlace.isNotBlank()) {
+            OutlinedButton(
+                onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(enlace))
+                    runCatching { context.startActivity(intent) }
+                },
+                shape = RoundedCornerShape(OrderTema.Radio),
+                border = BorderStroke(OrderTema.Linea, OrderTema.AcentoSuave),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = "Abrir en Moodle",
+                    fontSize = OrderTema.TamanoPequeno,
+                    color = OrderTema.Acento,
+                )
+            }
         }
     }
 
@@ -601,6 +632,7 @@ private fun HojaAjustes(
     avisosActivos: Boolean,
     alCambiarAvisosActivos: (Boolean) -> Unit,
     alAbrirAgente: () -> Unit,
+    alAbrirMoodle: () -> Unit,
     alNuevoRecordatorio: () -> Unit,
     alEditarRecordatorio: (String) -> Unit,
     alCerrar: () -> Unit,
@@ -849,6 +881,19 @@ private fun HojaAjustes(
         ) {
             Text(
                 text = "Agente y voz (API keys)…",
+                fontSize = OrderTema.TamanoPequeno,
+                color = OrderTema.Texto,
+            )
+        }
+
+        OutlinedButton(
+            onClick = alAbrirMoodle,
+            shape = RoundedCornerShape(OrderTema.Radio),
+            border = BorderStroke(OrderTema.Linea, OrderTema.Borde),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = "Moodle…",
                 fontSize = OrderTema.TamanoPequeno,
                 color = OrderTema.Texto,
             )

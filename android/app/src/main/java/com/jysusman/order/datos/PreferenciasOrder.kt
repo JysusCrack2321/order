@@ -46,6 +46,9 @@ object RutasPrivadas {
     fun archivoAgenteConfig(context: Context): String =
         File(context.filesDir, "agente.toml").absolutePath
 
+    fun archivoMoodleConfig(context: Context): String =
+        File(context.filesDir, "moodle.toml").absolutePath
+
     fun registroAvisos(context: Context): String =
         File(context.filesDir, "enviados.txt").absolutePath
 }
