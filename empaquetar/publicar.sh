@@ -15,6 +15,7 @@ cd "$RAIZ"
 VER_ESCRITORIO="$(awk -F'"' '/^version[[:space:]]*=/{print $2; exit}' crates/order-escritorio/Cargo.toml)"
 VER_FFI="$(awk -F'"' '/^version[[:space:]]*=/{print $2; exit}' crates/order-ffi/Cargo.toml)"
 VER_ANDROID="$(awk -F'"' '/versionName[[:space:]]*=/{print $2; exit}' android/app/build.gradle.kts)"
+VER_CODE_ANDROID="$(awk -F'=' '/versionCode[[:space:]]*=/{gsub(/[^0-9]/, "", $2); print $2; exit}' android/app/build.gradle.kts)"
 
 if [[ "$VERSION" != "$VER_ESCRITORIO" || "$VERSION" != "$VER_FFI" || "$VERSION" != "$VER_ANDROID" ]]; then
   echo "Error: la versión pedida ($VERSION) no coincide con los manifiestos:" >&2
@@ -23,6 +24,40 @@ if [[ "$VERSION" != "$VER_ESCRITORIO" || "$VERSION" != "$VER_FFI" || "$VERSION" 
   echo "  android:          $VER_ANDROID" >&2
   exit 1
 fi
+
+comprobar_version_code_publicado() {
+  local codigo_actual="$1"
+  local tag_ultimo=""
+  if command -v gh >/dev/null 2>&1; then
+    tag_ultimo="$(gh release view --repo JysusCrack2321/order --json tagName -q .tagName 2>/dev/null || true)"
+  fi
+  if [[ -z "$tag_ultimo" ]] && command -v curl >/dev/null 2>&1; then
+    tag_ultimo="$(curl -fsSL --max-time 5 -A "ORDER-publicar" \
+      "https://api.github.com/repos/JysusCrack2321/order/releases/latest" 2>/dev/null \
+      | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 || true)"
+  fi
+  if [[ -z "$tag_ultimo" ]]; then
+    tag_ultimo="$(git tag --sort=-v:refname | head -n 1 || true)"
+  fi
+  [[ -n "$tag_ultimo" ]] || return 0
+
+  local gradle_anterior=""
+  gradle_anterior="$(git show "${tag_ultimo}:android/app/build.gradle.kts" 2>/dev/null || true)"
+  if [[ -z "$gradle_anterior" ]] && command -v curl >/dev/null 2>&1; then
+    gradle_anterior="$(curl -fsSL --max-time 5 -A "ORDER-publicar" \
+      "https://raw.githubusercontent.com/JysusCrack2321/order/${tag_ultimo}/android/app/build.gradle.kts" 2>/dev/null || true)"
+  fi
+  [[ -n "$gradle_anterior" ]] || return 0
+
+  local codigo_anterior
+  codigo_anterior="$(printf '%s\n' "$gradle_anterior" | awk -F'=' '/versionCode[[:space:]]*=/{gsub(/[^0-9]/, "", $2); print $2; exit}')"
+  if [[ -n "$codigo_anterior" && -n "$codigo_actual" ]] && (( codigo_actual <= codigo_anterior )); then
+    echo "AVISO: versionCode ($codigo_actual) no subió respecto al último release publicado ($tag_ultimo: versionCode=$codigo_anterior)." >&2
+    echo "       Android exige un versionCode mayor para actualizar una app ya instalada." >&2
+  fi
+}
+
+comprobar_version_code_publicado "$VER_CODE_ANDROID"
 
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
 export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/30.0.16248370}"

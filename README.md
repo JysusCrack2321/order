@@ -112,7 +112,7 @@ Descarga `ORDER-x86_64.AppImage` (o `ORDER-<versión>-x86_64.AppImage`; no requi
 
 Descarga `ORDER-<versión>.apk` e instálalo en el teléfono (permitiendo instalar apps de ese origen).
 
-> **Importante si vienes de una compilación debug:** el APK `release` lleva otra firma que el `debug`, así que Android no permite actualizarlo encima. Para pasar de `debug` a `release` hay que **desinstalar** primero la versión anterior (se pierden los datos privados de la app: `agente.toml`, `conversacion.json`, `moodle.toml`, `calendarios.toml`, `sync.toml` y `sync-estado.json`; el archivo `order.toml` en `/storage/emulated/0/ORDER` **no** se pierde).
+> **Importante si vienes de una compilación debug de otro equipo:** si el APK `debug` se compiló sin la llave de publicación (`firma.properties`), lleva otra firma que el `release` y Android no permite actualizarlo encima. Para pasar a la versión oficial hay que **desinstalar** primero la versión anterior (se pierden los datos privados de la app: `agente.toml`, `conversacion.json`, `moodle.toml`, `calendarios.toml`, `sync.toml` y `sync-estado.json`; el archivo `order.toml` en `/storage/emulated/0/ORDER` **no** se pierde). Si compilas `debug` con la misma llave de firma configurada, se instala encima sin desinstalar.
 
 ### Verificar integridad (`SHA256SUMS`)
 
@@ -129,8 +129,13 @@ sha256sum -c --ignore-missing SHA256SUMS
 ```bash
 ./empaquetar/appimage.sh           # deja dist/ORDER-<versión>-x86_64.AppImage y dist/ORDER-x86_64.AppImage
 ./empaquetar/deb.sh                # deja dist/order_<versión>_amd64.deb
-./empaquetar/publicar.sh 0.1.0     # compila AppImage, .deb y APK release y genera dist/SHA256SUMS
+./empaquetar/publicar.sh 0.1.1     # compila AppImage, .deb y APK release y genera dist/SHA256SUMS
 ```
+
+Antes de publicar una nueva versión:
+1. Sube `versionName` y `versionCode` en `android/app/build.gradle.kts` (`versionCode` debe ser estrictamente mayor que el del último release publicado; Android exige `versionCode` mayor para actualizar encima, y `./empaquetar/publicar.sh` avisa si no subió).
+2. Sube `version` en los `Cargo.toml` del workspace (`crates/order-core/Cargo.toml`, `crates/order-p2p/Cargo.toml`, `crates/order-escritorio/Cargo.toml` y `crates/order-ffi/Cargo.toml`) si aplica, y actualiza `Cargo.lock` con `cargo test --workspace`.
+3. Ejecuta `./empaquetar/publicar.sh <versión>`, haz `git push` y luego ejecuta el comando `gh release create ...` impreso al final.
 
 ### Binario local en Linux
 
