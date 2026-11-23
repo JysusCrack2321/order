@@ -2,6 +2,9 @@
 name = "order-escritorio"
 version = "0.1.0"
 edition = "2024"
+authors = ["JysusCrack2321 <jaragonb@unal.edu.co>"]
+description = "Horario, tareas y recordatorios para organizarte en un solo binario"
+license = "MIT"
 
 [[bin]]
 name = "order"
@@ -29,3 +32,20 @@ whisper-rs = "0.16"
 
 [dev-dependencies]
 tempfile = "3"
+
+[package.metadata.deb]
+name = "order"
+maintainer = "JysusCrack2321 <jaragonb@unal.edu.co>"
+section = "utils"
+priority = "optional"
+depends = "$auto"
+extended-description = """\
+Aplicación de escritorio personal para Linux que muestra el horario \
+de la semana, las tareas pendientes y los recordatorios, y avisa por \
+notificaciones de escritorio en un solo binario."""
+assets = [
+    ["target/release/order", "usr/bin/", "755"],
+    ["../../empaquetar/order.desktop", "usr/share/applications/order.desktop", "644"],
+    ["arte/order.svg", "usr/share/icons/hicolor/scalable/apps/order.svg", "644"],
+    ["arte/order-256.png", "usr/share/icons/hicolor/256x256/apps/order.png", "644"],
+]

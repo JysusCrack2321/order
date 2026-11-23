@@ -26,6 +26,7 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable \
+    && cargo install cargo-deb --locked \
     && chmod -R a+rX /usr/local/rustup /usr/local/cargo
 
 WORKDIR /repo

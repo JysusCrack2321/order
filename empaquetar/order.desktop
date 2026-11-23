@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ORDER
+Comment=Horario, tareas y recordatorios para organizarte
+Exec=order
+Icon=order
+Terminal=false
+Categories=Office;Calendar;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+NoDisplay=false
