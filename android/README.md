@@ -24,13 +24,21 @@ Aplicación Android nativa (Kotlin + Jetpack Compose) respaldada por el núcleo 
    ```
    Esto genera `android/app/src/main/jniLibs/{arm64-v8a,x86_64}/liborder_ffi.so` y `android/app/src/main/java/com/jysusman/order/ffi/order_ffi.kt`.
 
-2. **Compilar el APK de depuración**:
-   ```bash
-   cd android
-   ./gradlew assembleDebug
-   ```
-   El APK queda en:
-   `android/app/build/outputs/apk/debug/app-debug.apk`
+2. **Compilar el APK**:
+   - **Depuración** (incluye `arm64-v8a` y `x86_64` para emuladores):
+     ```bash
+     cd android
+     ./gradlew assembleDebug
+     ```
+     El APK queda en `android/app/build/outputs/apk/debug/app-debug.apk`.
+   - **Release firmado** (solo `arm64-v8a`; requiere `~/.config/order-firma/firma.properties` o la variable `ORDER_FIRMA`):
+     ```bash
+     ./android/compilar-rust.sh --release-only-arm64
+     ./android/gradlew -p android assembleRelease
+     ```
+     El APK queda en `android/app/build/outputs/apk/release/app-release.apk`.
+
+   > **Importante:** el APK `release` lleva una firma distinta a la del APK `debug`. Si ya tienes instalado un APK `debug` en el teléfono, para pasar a `release` primero debes **desinstalar** la app anterior (esto borra los datos privados como `agente.toml`, la conversación y los emparejamientos; el `order.toml` de `/storage/emulated/0/ORDER` **no** se pierde).
 
 3. **Ejecutar pruebas**:
    ```bash

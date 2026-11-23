@@ -102,6 +102,12 @@ Para generarlo desde el código fuente (requiere `podman`):
 ./empaquetar/appimage.sh   # deja dist/ORDER-<versión>-x86_64.AppImage y dist/ORDER-x86_64.AppImage
 ```
 
+### Android (APK release)
+
+Descarga `ORDER-0.1.0.apk` (o compílalo con `./android/compilar-rust.sh --release-only-arm64 && ./android/gradlew -p android assembleRelease`).
+
+> **Importante si vienes de una compilación debug:** el APK `release` lleva otra firma que el `debug`, así que Android no permite actualizarlo encima. Para pasar de `debug` a `release` hay que **desinstalar** primero la versión anterior (se pierden los datos privados de la app: `agente.toml`, `conversacion.json`, `moodle.toml`, `calendarios.toml`, `sync.toml` y `sync-estado.json`; el archivo `order.toml` en `/storage/emulated/0/ORDER` **no** se pierde).
+
 ### Desde código fuente
 
 ```bash

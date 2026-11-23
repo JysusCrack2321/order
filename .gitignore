@@ -6,3 +6,6 @@ android/.gradle/
 android/app/build/
 android/build/
 dist/
+*.jks
+*.keystore
+firma.properties
