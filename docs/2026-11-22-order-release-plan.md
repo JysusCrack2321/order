@@ -23,4 +23,4 @@
 - [x] Prueba: instalar con `apt install ./order_0.1.0_amd64.deb` en contenedores `ubuntu:22.04` y `ubuntu:24.04` y ejecutar `order --version`. Salida en `dist/order_0.1.0_amd64.deb`. Commit `build: paquete .deb para Ubuntu`.
 
 ## Tarea 3: Script de publicación
-- [ ] `empaquetar/publicar.sh <versión>`: compila AppImage, .deb y APK release, genera `dist/SHA256SUMS`, y deja listos los archivos para `gh release create v<versión>` (NO ejecutar gh ni hacer push; solo imprimir el comando). README: sección "Descargar" (.deb para Ubuntu/Debian/Mint, AppImage para cualquier Linux, APK para Android, cómo verificar SHA256). Commit `build: script de publicación`.
+- [x] `empaquetar/publicar.sh <versión>`: compila AppImage, .deb y APK release, genera `dist/SHA256SUMS`, y deja listos los archivos para `gh release create v<versión>` (NO ejecutar gh ni hacer push; solo imprimir el comando). README: sección "Descargar" (.deb para Ubuntu/Debian/Mint, AppImage para cualquier Linux, APK para Android, cómo verificar SHA256). Commit `build: script de publicación`.

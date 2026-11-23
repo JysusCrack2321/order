@@ -85,30 +85,54 @@ gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor   # si existe
 Los `.desktop` (el del repo, `~/.local/share/applications/` y
 `~/.config/autostart/`) llevan `Icon=order`, que apunta a esos archivos.
 
-## Instalar y reinstalar
+## Descargar
 
-### AppImage portable (Linux x86_64)
+En la página de lanzamientos (Releases) encontrarás los instaladores listos para usar sin compilar:
 
-Si no quieres compilar, descarga `ORDER-x86_64.AppImage` (no requiere instalar `libfuse2`):
+### Ubuntu, Debian y Linux Mint (`.deb`, x86_64)
+
+Descarga `order_<versión>_amd64.deb` e instálalo con `apt` (compatible con Ubuntu 22.04+ y 24.04+):
+
+```bash
+sudo apt install ./order_0.1.0_amd64.deb
+```
+
+Instala el binario en `/usr/bin/order`, el lanzador en el menú de aplicaciones y los iconos.
+
+### Cualquier distribución Linux (`AppImage`, x86_64)
+
+Descarga `ORDER-x86_64.AppImage` (o `ORDER-<versión>-x86_64.AppImage`; no requiere instalar `libfuse2`):
 
 1. Dale permiso de ejecución:
    - En terminal: `chmod +x ORDER-x86_64.AppImage`
    - En gestor de archivos (Ubuntu/GNOME, Mint, etc.): clic derecho → **Propiedades** → **Permisos** → **Permitir ejecutar el archivo como un programa**.
 2. Ábrelo con doble clic o ejecutando `./ORDER-x86_64.AppImage` (arranca en la bandeja; en **Ajustes** puedes activar **Abrir ORDER al iniciar sesión**).
 
-Para generarlo desde el código fuente (requiere `podman`):
+### Android (`.apk`, arm64-v8a)
 
-```bash
-./empaquetar/appimage.sh   # deja dist/ORDER-<versión>-x86_64.AppImage y dist/ORDER-x86_64.AppImage
-```
-
-### Android (APK release)
-
-Descarga `ORDER-0.1.0.apk` (o compílalo con `./android/compilar-rust.sh --release-only-arm64 && ./android/gradlew -p android assembleRelease`).
+Descarga `ORDER-<versión>.apk` e instálalo en el teléfono (permitiendo instalar apps de ese origen).
 
 > **Importante si vienes de una compilación debug:** el APK `release` lleva otra firma que el `debug`, así que Android no permite actualizarlo encima. Para pasar de `debug` a `release` hay que **desinstalar** primero la versión anterior (se pierden los datos privados de la app: `agente.toml`, `conversacion.json`, `moodle.toml`, `calendarios.toml`, `sync.toml` y `sync-estado.json`; el archivo `order.toml` en `/storage/emulated/0/ORDER` **no** se pierde).
 
-### Desde código fuente
+### Verificar integridad (`SHA256SUMS`)
+
+Descarga `SHA256SUMS` en la misma carpeta que el instalador y comprueba su firma hash:
+
+```bash
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+## Instalar y compilar desde código fuente
+
+### Paquetes de escritorio y publicación (requiere `podman`)
+
+```bash
+./empaquetar/appimage.sh           # deja dist/ORDER-<versión>-x86_64.AppImage y dist/ORDER-x86_64.AppImage
+./empaquetar/deb.sh                # deja dist/order_<versión>_amd64.deb
+./empaquetar/publicar.sh 0.1.0     # compila AppImage, .deb y APK release y genera dist/SHA256SUMS
+```
+
+### Binario local en Linux
 
 ```bash
 cd ~/apps/order
