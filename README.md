@@ -129,7 +129,7 @@ sha256sum -c --ignore-missing SHA256SUMS
 ```bash
 ./empaquetar/appimage.sh           # deja dist/ORDER-<versión>-x86_64.AppImage y dist/ORDER-x86_64.AppImage
 ./empaquetar/deb.sh                # deja dist/order_<versión>_amd64.deb
-./empaquetar/publicar.sh 0.1.1     # compila AppImage, .deb y APK release y genera dist/SHA256SUMS
+./empaquetar/publicar.sh 0.1.2     # compila AppImage, .deb y APK release y genera dist/SHA256SUMS
 ```
 
 Antes de publicar una nueva versión:
