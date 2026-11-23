@@ -23,6 +23,7 @@ use order_core::agente::contexto;
 use order_core::agente::conversacion::Conversacion;
 use order_core::agente::voz;
 use order_core::almacen::Almacen;
+use order_core::atajos::{self, AccionAtajo, AtajosConfig, Combinacion, Modificadores, Tecla};
 use order_core::conflictos::{self, Conflicto};
 use order_core::filtros::{Filtro, TipoFecha};
 use order_core::ical::{self, config::CalendarioVista};
@@ -79,6 +80,66 @@ enum Edicion {
     Moodle,
     Calendarios,
     Dispositivos,
+    Atajos,
+}
+
+/// Copia inicial de los campos del formulario abierto para detectar cambios
+/// sin guardar al intentar cerrar.
+#[derive(Clone, PartialEq)]
+enum FormSnapshot {
+    Tarea {
+        titulo: String,
+        materia: String,
+        fecha: String,
+        hora: String,
+        hecha: bool,
+    },
+    Clase {
+        materia: String,
+        dias: [bool; 7],
+        inicio: String,
+        fin: String,
+        lugar: String,
+    },
+    Ajustes {
+        sin_semestre: bool,
+        autostart: bool,
+        inicio: String,
+        fin: String,
+        hora: String,
+        horas: String,
+    },
+    Recordatorio {
+        texto: String,
+        hora: String,
+        dias: [bool; 7],
+    },
+    Agente {
+        proveedor: i32,
+        url: String,
+        modelo: String,
+        key: String,
+        ve_imagenes: bool,
+        limite_contexto: String,
+        voz_proveedor: i32,
+        v_url: String,
+        v_modelo: String,
+        v_key: String,
+    },
+    Moodle {
+        sitio: String,
+        usuario: String,
+        contrasena: String,
+    },
+    Calendarios {
+        url: String,
+        nombre: String,
+        materia: String,
+    },
+    Dispositivos {
+        nombre: String,
+        codigo_entrada: String,
+    },
 }
 
 /// Qué selector está abierto y qué campo del formulario llena.
@@ -171,6 +232,15 @@ struct Estado {
     p2p_enlace: String,
     p2p_espera_timer: Option<slint::Timer>,
     p2p_conteo_previo: usize,
+    // --- Atajos, ayuda y cambios sin guardar ----------------------------
+    form_inicial: Option<FormSnapshot>,
+    descartar_abierto: bool,
+    pendiente_cerrar_ventana: bool,
+    ayuda_abierta: bool,
+    atajos: AtajosConfig,
+    atajo_capturando: Option<AccionAtajo>,
+    atajo_choque_pendiente: Option<(AccionAtajo, Combinacion, AccionAtajo)>,
+    sync_global_ocupado: bool,
 }
 
 fn ruta_conversacion() -> std::path::PathBuf {
@@ -228,6 +298,14 @@ impl Estado {
             p2p_enlace: String::new(),
             p2p_espera_timer: None,
             p2p_conteo_previo: 0,
+            form_inicial: None,
+            descartar_abierto: false,
+            pendiente_cerrar_ventana: false,
+            ayuda_abierta: false,
+            atajos: atajos::cargar(),
+            atajo_capturando: None,
+            atajo_choque_pendiente: None,
+            sync_global_ocupado: false,
         }
     }
 }
@@ -311,6 +389,12 @@ struct Vista {
     p2p_qr_imagen: slint::Image,
     p2p_palabras: SharedString,
     p2p_enlace: SharedString,
+    atajos_lista: Vec<AtajoUI>,
+    atajo_capturando_id: SharedString,
+    atajo_choque_abierto: bool,
+    atajo_choque_mensaje: SharedString,
+    descartar_abierto: bool,
+    ayuda_abierta: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -338,6 +422,8 @@ pub fn mostrar_ventana() {
             actualizar(ui);
             if let Err(error) = ui.show() {
                 eprintln!("ORDER: no se pudo mostrar la ventana: {error}");
+            } else {
+                ui.invoke_enfocar_ventana();
             }
         }
     });
@@ -466,21 +552,21 @@ fn conectar(ui: &AppWindow) {
     ui.set_conexion_texto_conectando(textos.conectando.into());
     ui.set_conexion_texto_otro_proveedor(textos.enlace_otro_proveedor.into());
 
-    // Cerrar con la X oculta la ventana: ORDER sigue en la bandeja. Si se
-    // estaba grabando, el micrófono se suelta.
+    // Cerrar con la X oculta la ventana: ORDER sigue en la bandeja. Si hay
+    // cambios sin guardar en el formulario, pregunta antes. Si se estaba
+    // grabando, el micrófono se suelta.
     let debil = ui.as_weak();
     ui.window().on_close_requested(move || {
         if let Some(ui) = debil.upgrade() {
-            if let Some(grabacion) = con_estado(|estado| estado.grabacion.take()) {
-                drop(grabacion);
+            if formulario_tiene_cambios(&ui) {
                 con_estado(|estado| {
-                    if let Some(temporizador) = estado.temporizador.take() {
-                        temporizador.stop();
-                    }
+                    estado.descartar_abierto = true;
+                    estado.pendiente_cerrar_ventana = true;
                 });
-                ui.set_agente_grabando(false);
-                ui.set_agente_tiempo("".into());
+                actualizar(&ui);
+                return slint::CloseRequestResponse::KeepWindowShown;
             }
+            soltar_grabacion(&ui);
         }
         slint::CloseRequestResponse::HideWindow
     });
@@ -612,7 +698,7 @@ fn conectar(ui: &AppWindow) {
     let debil = ui.as_weak();
     ui.on_cancelar_formulario(move || {
         let Some(ui) = debil.upgrade() else { return };
-        cancelar(&ui);
+        intentar_cancelar_formulario(&ui);
     });
 
     let debil = ui.as_weak();
@@ -1042,6 +1128,67 @@ fn conectar(ui: &AppWindow) {
         let Some(ui) = debil.upgrade() else { return };
         resolver_conflicto(&ui, true);
     });
+
+    // --- Atajos, ayuda y confirmación de cambios sin guardar -------------
+    let debil = ui.as_weak();
+    ui.on_capturar_tecla(
+        move |tecla: SharedString, ctrl: bool, shift: bool, alt: bool, meta: bool, escribiendo: bool| {
+            let Some(ui) = debil.upgrade() else {
+                return false;
+            };
+            manejar_tecla(&ui, &tecla, ctrl, shift, alt, meta, escribiendo)
+        },
+    );
+
+    let debil = ui.as_weak();
+    ui.on_descartar_seguir(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        descartar_seguir(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_descartar_confirmar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        descartar_confirmar(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_abrir_atajos(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        abrir_atajos(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_atajo_empezar_captura(move |id: SharedString| {
+        let Some(ui) = debil.upgrade() else { return };
+        atajo_empezar_captura(&ui, &id);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_atajo_choque_confirmar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        atajo_choque_confirmar(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_atajo_choque_cancelar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        atajo_choque_cancelar(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_atajos_restaurar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        atajos_restaurar(&ui);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_ayuda_cerrar(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        con_estado(|estado| estado.ayuda_abierta = false);
+        actualizar(&ui);
+        ui.invoke_enfocar_ventana();
+    });
 }
 
 fn resolver_conflicto(ui: &AppWindow, usar_otra: bool) {
@@ -1250,11 +1397,20 @@ fn abrir_recordatorio(ui: &AppWindow, recordatorio: Option<&Recordatorio>) {
 
 /// Deja el panel listo para escribir: sin error ni confirmación pendientes.
 fn abrir_panel(ui: &AppWindow, cual: i32) {
+    let snap = con_estado(|estado| capturar_snapshot(ui, &estado.edicion, estado));
+    con_estado(|estado| {
+        estado.form_inicial = snap;
+        estado.descartar_abierto = false;
+        estado.pendiente_cerrar_ventana = false;
+        estado.atajo_capturando = None;
+        estado.atajo_choque_pendiente = None;
+    });
     ui.set_form_error("".into());
     ui.set_campo_mal(0);
     ui.set_form_confirma(false);
     ui.set_formulario(cual);
     actualizar(ui);
+    ui.invoke_enfocar_ventana();
 }
 
 fn cancelar(ui: &AppWindow) {
@@ -1263,6 +1419,11 @@ fn cancelar(ui: &AppWindow) {
             timer.stop();
         }
         estado.p2p_mostrando_qr = false;
+        estado.atajo_capturando = None;
+        estado.atajo_choque_pendiente = None;
+        estado.descartar_abierto = false;
+        estado.pendiente_cerrar_ventana = false;
+        estado.form_inicial = None;
         estado.volver_ajustes
             && matches!(
                 estado.edicion,
@@ -1271,6 +1432,7 @@ fn cancelar(ui: &AppWindow) {
                     | Edicion::Moodle
                     | Edicion::Calendarios
                     | Edicion::Dispositivos
+                    | Edicion::Atajos
             )
     });
     ui.set_form_confirma(false);
@@ -1283,6 +1445,7 @@ fn cancelar(ui: &AppWindow) {
         con_estado(|estado| estado.edicion = Edicion::Ninguna);
         ui.set_formulario(0);
         actualizar(ui);
+        ui.invoke_enfocar_ventana();
     }
 }
 
@@ -1298,7 +1461,11 @@ fn guardar(ui: &AppWindow) {
         Edicion::Recordatorio(_) => guardar_recordatorio(ui),
         Edicion::Ajustes => guardar_ajustes(ui),
         Edicion::Agente => guardar_agente(ui),
-        Edicion::Moodle | Edicion::Calendarios | Edicion::Dispositivos | Edicion::Ninguna => {}
+        Edicion::Moodle
+        | Edicion::Calendarios
+        | Edicion::Dispositivos
+        | Edicion::Atajos
+        | Edicion::Ninguna => {}
     }
 }
 
@@ -1433,6 +1600,9 @@ fn terminar(ui: &AppWindow, resultado: Result<Datos, ErrorDatos>, volver_ajustes
                 estado.datos = Some(datos);
                 estado.error = None;
                 estado.edicion = Edicion::Ninguna;
+                estado.form_inicial = None;
+                estado.descartar_abierto = false;
+                estado.pendiente_cerrar_ventana = false;
             });
             ui.set_form_confirma(false);
             ui.set_form_error("".into());
@@ -1441,6 +1611,8 @@ fn terminar(ui: &AppWindow, resultado: Result<Datos, ErrorDatos>, volver_ajustes
             actualizar(ui);
             if volver_ajustes {
                 abrir_ajustes(ui);
+            } else {
+                ui.invoke_enfocar_ventana();
             }
         }
         Err(error) => {
@@ -1489,11 +1661,16 @@ fn borrar(ui: &AppWindow) {
                 estado.datos = Some(datos);
                 estado.error = None;
                 estado.edicion = Edicion::Ninguna;
+                estado.form_inicial = None;
+                estado.descartar_abierto = false;
+                estado.pendiente_cerrar_ventana = false;
             });
             ui.set_formulario(0);
             actualizar(ui);
             if volver_ajustes {
                 abrir_ajustes(ui);
+            } else {
+                ui.invoke_enfocar_ventana();
             }
         }
         Err(error) => {
@@ -1697,6 +1874,9 @@ fn conectar_moodle(ui: &AppWindow) {
                             ),
                             Err(e) => format!("Conectado, pero no se pudo sincronizar: {e}"),
                         };
+                        if matches!(estado.edicion, Edicion::Moodle) {
+                            estado.form_inicial = capturar_snapshot(&ui, &estado.edicion, estado);
+                        }
                     });
                 }
                 Err(msg) => {
@@ -1904,6 +2084,9 @@ fn agregar_ical(ui: &AppWindow) {
                             ),
                             Err(e) => format!("Agregado, pero no se pudo sincronizar: {e}"),
                         };
+                        if matches!(estado.edicion, Edicion::Calendarios) {
+                            estado.form_inicial = capturar_snapshot(&ui, &estado.edicion, estado);
+                        }
                     });
                 }
                 Err(msg) => {
@@ -2051,7 +2234,12 @@ fn guardar_nombre_p2p(ui: &AppWindow) {
     match srv.cambiar_nombre(&nombre) {
         Ok(()) => {
             ui.set_form_error("".into());
-            con_estado(|estado| estado.p2p_aviso = "Nombre actualizado.".to_string());
+            con_estado(|estado| {
+                estado.p2p_aviso = "Nombre actualizado.".to_string();
+                if matches!(estado.edicion, Edicion::Dispositivos) {
+                    estado.form_inicial = capturar_snapshot(ui, &estado.edicion, estado);
+                }
+            });
             actualizar(ui);
         }
         Err(err) => ui.set_form_error(err.into()),
@@ -2184,6 +2372,9 @@ fn emparejar_p2p(ui: &AppWindow) {
                         ui.set_p2p_codigo_entrada("".into());
                         ui.set_form_error("".into());
                         estado.p2p_aviso = format!("Emparejado con {}.", disp.nombre);
+                        if matches!(estado.edicion, Edicion::Dispositivos) {
+                            estado.form_inicial = capturar_snapshot(&ui, &estado.edicion, estado);
+                        }
                     }
                     Err(err) => {
                         estado.p2p_aviso.clear();
@@ -3161,6 +3352,12 @@ fn actualizar(ui: &AppWindow) {
     ui.set_p2p_qr_imagen(vista.p2p_qr_imagen);
     ui.set_p2p_palabras(vista.p2p_palabras);
     ui.set_p2p_enlace(vista.p2p_enlace);
+    ui.set_atajos_lista(ModelRc::new(VecModel::from(vista.atajos_lista)));
+    ui.set_atajo_capturando_id(vista.atajo_capturando_id);
+    ui.set_atajo_choque_abierto(vista.atajo_choque_abierto);
+    ui.set_atajo_choque_mensaje(vista.atajo_choque_mensaje);
+    ui.set_descartar_abierto(vista.descartar_abierto);
+    ui.set_ayuda_abierta(vista.ayuda_abierta);
 }
 
 fn construir_vista() -> Vista {
@@ -3359,7 +3556,7 @@ fn construir_vista() -> Vista {
             ical_ocupado: estado.ical_ocupado,
             ical_aviso: estado.ical_aviso.clone().into(),
             ical_oferta: estado.ical_oferta.clone().into(),
-            p2p_sincronizando: estado.p2p_sincronizando,
+            p2p_sincronizando: estado.p2p_sincronizando || estado.sync_global_ocupado,
             p2p_ocupado: estado.p2p_ocupado,
             p2p_aviso: estado.p2p_aviso.clone().into(),
             p2p_dispositivos: estado
@@ -3376,6 +3573,20 @@ fn construir_vista() -> Vista {
             p2p_qr_imagen: estado.p2p_qr_imagen.clone(),
             p2p_palabras: estado.p2p_palabras.clone().into(),
             p2p_enlace: estado.p2p_enlace.clone().into(),
+            atajos_lista: atajos_ui(&estado.atajos),
+            atajo_capturando_id: estado
+                .atajo_capturando
+                .map(|a| a.id())
+                .unwrap_or_default()
+                .into(),
+            atajo_choque_abierto: estado.atajo_choque_pendiente.is_some(),
+            atajo_choque_mensaje: estado
+                .atajo_choque_pendiente
+                .map(|(_, _, otra)| format!("Ya la usa «{}». ¿Cambiarla?", otra.nombre()))
+                .unwrap_or_default()
+                .into(),
+            descartar_abierto: estado.descartar_abierto,
+            ayuda_abierta: estado.ayuda_abierta,
         }
     })
 }
@@ -3539,6 +3750,7 @@ fn cerrar_selector(ui: &AppWindow) {
     ui.set_selector_tipo(0);
     ui.set_materia_nueva("".into());
     ui.set_materia_escribiendo(false);
+    ui.invoke_enfocar_ventana();
 }
 
 fn cambiar_mes(ui: &AppWindow, delta: i32) {
@@ -3886,6 +4098,571 @@ fn datos_vacios() -> Datos {
     }
 }
 
+/// Suelta el micrófono si estaba grabando.
+fn soltar_grabacion(ui: &AppWindow) {
+    if let Some(grabacion) = con_estado(|estado| estado.grabacion.take()) {
+        drop(grabacion);
+        con_estado(|estado| {
+            if let Some(temporizador) = estado.temporizador.take() {
+                temporizador.stop();
+            }
+        });
+        ui.set_agente_grabando(false);
+        ui.set_agente_tiempo("".into());
+    }
+}
+
+fn capturar_snapshot(ui: &AppWindow, edicion: &Edicion, estado: &Estado) -> Option<FormSnapshot> {
+    match edicion {
+        Edicion::Tarea(_) => Some(FormSnapshot::Tarea {
+            titulo: ui.get_f_titulo().to_string(),
+            materia: ui.get_f_materia().to_string(),
+            fecha: ui.get_f_fecha().to_string(),
+            hora: ui.get_f_hora().to_string(),
+            hecha: ui.get_f_hecha(),
+        }),
+        Edicion::Clase(_) => Some(FormSnapshot::Clase {
+            materia: ui.get_f_materia().to_string(),
+            dias: [
+                ui.get_f_lun(),
+                ui.get_f_mar(),
+                ui.get_f_mie(),
+                ui.get_f_jue(),
+                ui.get_f_vie(),
+                ui.get_f_sab(),
+                ui.get_f_dom(),
+            ],
+            inicio: ui.get_f_hora().to_string(),
+            fin: ui.get_f_fin().to_string(),
+            lugar: ui.get_f_lugar().to_string(),
+        }),
+        Edicion::Ajustes => Some(FormSnapshot::Ajustes {
+            sin_semestre: ui.get_a_sin_semestre(),
+            autostart: ui.get_a_autostart(),
+            inicio: ui.get_a_inicio().to_string(),
+            fin: ui.get_a_fin().to_string(),
+            hora: ui.get_a_hora().to_string(),
+            horas: ui.get_a_horas().to_string(),
+        }),
+        Edicion::Recordatorio(_) => Some(FormSnapshot::Recordatorio {
+            texto: ui.get_r_texto().to_string(),
+            hora: ui.get_r_hora().to_string(),
+            dias: [
+                ui.get_r_lun(),
+                ui.get_r_mar(),
+                ui.get_r_mie(),
+                ui.get_r_jue(),
+                ui.get_r_vie(),
+                ui.get_r_sab(),
+                ui.get_r_dom(),
+            ],
+        }),
+        Edicion::Agente => Some(FormSnapshot::Agente {
+            proveedor: ui.get_a_proveedor(),
+            url: ui.get_a_url().to_string(),
+            modelo: ui.get_a_modelo().to_string(),
+            key: ui.get_a_key().to_string(),
+            ve_imagenes: ui.get_a_ve_imagenes(),
+            limite_contexto: ui.get_a_limite_contexto().to_string(),
+            voz_proveedor: ui.get_a_voz_proveedor(),
+            v_url: ui.get_v_url().to_string(),
+            v_modelo: ui.get_v_modelo().to_string(),
+            v_key: ui.get_v_key().to_string(),
+        }),
+        Edicion::Moodle => {
+            if estado.moodle.conectado && !estado.moodle.requiere_reingreso {
+                None
+            } else {
+                Some(FormSnapshot::Moodle {
+                    sitio: ui.get_m_sitio().to_string(),
+                    usuario: ui.get_m_usuario().to_string(),
+                    contrasena: ui.get_m_contrasena().to_string(),
+                })
+            }
+        }
+        Edicion::Calendarios => Some(FormSnapshot::Calendarios {
+            url: ui.get_c_url().to_string(),
+            nombre: ui.get_c_nombre().to_string(),
+            materia: ui.get_c_materia().to_string(),
+        }),
+        Edicion::Dispositivos => Some(FormSnapshot::Dispositivos {
+            nombre: ui.get_p2p_nombre().to_string(),
+            codigo_entrada: ui.get_p2p_codigo_entrada().to_string(),
+        }),
+        Edicion::Atajos | Edicion::Ninguna => None,
+    }
+}
+
+fn formulario_tiene_cambios(ui: &AppWindow) -> bool {
+    con_estado(|estado| {
+        let Some(ref inicial) = estado.form_inicial else {
+            return false;
+        };
+        let actual = capturar_snapshot(ui, &estado.edicion, estado);
+        actual.as_ref().is_some_and(|a| a != inicial)
+    })
+}
+
+fn intentar_cancelar_formulario(ui: &AppWindow) {
+    if formulario_tiene_cambios(ui) {
+        con_estado(|estado| {
+            estado.descartar_abierto = true;
+            estado.pendiente_cerrar_ventana = false;
+        });
+        actualizar(ui);
+    } else {
+        cancelar(ui);
+    }
+}
+
+fn descartar_seguir(ui: &AppWindow) {
+    con_estado(|estado| {
+        estado.descartar_abierto = false;
+        estado.pendiente_cerrar_ventana = false;
+    });
+    actualizar(ui);
+    ui.invoke_enfocar_ventana();
+}
+
+fn descartar_confirmar(ui: &AppWindow) {
+    let cerrar_ventana = con_estado(|estado| {
+        estado.descartar_abierto = false;
+        std::mem::take(&mut estado.pendiente_cerrar_ventana)
+    });
+    if cerrar_ventana {
+        con_estado(|estado| {
+            if let Some(timer) = estado.p2p_espera_timer.take() {
+                timer.stop();
+            }
+            estado.p2p_mostrando_qr = false;
+            estado.atajo_capturando = None;
+            estado.atajo_choque_pendiente = None;
+            estado.form_inicial = None;
+            estado.edicion = Edicion::Ninguna;
+        });
+        ui.set_form_confirma(false);
+        ui.set_form_error("".into());
+        ui.set_campo_mal(0);
+        ui.set_formulario(0);
+        soltar_grabacion(ui);
+        actualizar(ui);
+        let _ = ui.hide();
+    } else {
+        cancelar(ui);
+    }
+}
+
+fn atajos_ui(cfg: &AtajosConfig) -> Vec<AtajoUI> {
+    cfg.entradas()
+        .into_iter()
+        .map(|(accion, comb)| AtajoUI {
+            id: accion.id().into(),
+            nombre: accion.nombre().into(),
+            tecla: comb.formatear().into(),
+            es_defecto: comb == accion.por_defecto(),
+        })
+        .collect()
+}
+
+fn abrir_atajos(ui: &AppWindow) {
+    con_estado(|estado| {
+        estado.edicion = Edicion::Atajos;
+        estado.volver_ajustes = true;
+        estado.atajo_capturando = None;
+        estado.atajo_choque_pendiente = None;
+    });
+    ui.set_form_encabezado("Atajos de teclado".into());
+    ui.set_form_edita(false);
+    abrir_panel(ui, 9);
+}
+
+fn atajo_empezar_captura(ui: &AppWindow, id: &str) {
+    let Some(accion) = AccionAtajo::desde_id(id) else {
+        return;
+    };
+    con_estado(|estado| {
+        estado.atajo_capturando = Some(accion);
+        estado.atajo_choque_pendiente = None;
+    });
+    ui.set_form_error("".into());
+    actualizar(ui);
+    ui.invoke_enfocar_ventana();
+}
+
+fn aplicar_y_guardar_atajo(ui: &AppWindow, accion: AccionAtajo, combinacion: Combinacion) {
+    let resultado = con_estado(|estado| {
+        estado.atajos.asignar(accion, combinacion);
+        atajos::guardar(&estado.atajos)
+    });
+    if let Err(err) = resultado {
+        ui.set_form_error(format!("No se pudo guardar atajos.toml: {err}").into());
+    } else {
+        ui.set_form_error("".into());
+    }
+    actualizar(ui);
+}
+
+fn atajo_choque_confirmar(ui: &AppWindow) {
+    let pendiente = con_estado(|estado| estado.atajo_choque_pendiente.take());
+    if let Some((accion, combinacion, _)) = pendiente {
+        aplicar_y_guardar_atajo(ui, accion, combinacion);
+    } else {
+        actualizar(ui);
+    }
+    ui.invoke_enfocar_ventana();
+}
+
+fn atajo_choque_cancelar(ui: &AppWindow) {
+    con_estado(|estado| estado.atajo_choque_pendiente = None);
+    actualizar(ui);
+    ui.invoke_enfocar_ventana();
+}
+
+fn atajos_restaurar(ui: &AppWindow) {
+    let resultado = con_estado(|estado| {
+        estado.atajo_capturando = None;
+        estado.atajo_choque_pendiente = None;
+        estado.atajos.restaurar_por_defecto();
+        atajos::guardar(&estado.atajos)
+    });
+    if let Err(err) = resultado {
+        ui.set_form_error(format!("No se pudo guardar atajos.toml: {err}").into());
+    } else {
+        ui.set_form_error("".into());
+    }
+    actualizar(ui);
+    ui.invoke_enfocar_ventana();
+}
+
+/// Capa superior que debe cerrarse con `Esc`, respetando el orden de la pila.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CapaEsc {
+    ChoqueAtajo,
+    DescartarCambios,
+    DescargaVoz,
+    Selector,
+    ConfirmarBorrado,
+    AyudaAtajos,
+    Formulario,
+    ConexionAgente,
+    PanelAgente,
+    QuitarFocoTexto,
+    Nada,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capa_superior_esc(
+    choque_atajo: bool,
+    descartar_abierto: bool,
+    descarga_voz_abierta: bool,
+    selector_abierto: bool,
+    confirma_borrado: bool,
+    ayuda_abierta: bool,
+    formulario_abierto: bool,
+    conexion_abierta: bool,
+    agente_panel_abierto: bool,
+    escribiendo: bool,
+) -> CapaEsc {
+    if choque_atajo {
+        CapaEsc::ChoqueAtajo
+    } else if descartar_abierto {
+        CapaEsc::DescartarCambios
+    } else if descarga_voz_abierta {
+        CapaEsc::DescargaVoz
+    } else if selector_abierto {
+        CapaEsc::Selector
+    } else if confirma_borrado {
+        CapaEsc::ConfirmarBorrado
+    } else if ayuda_abierta {
+        CapaEsc::AyudaAtajos
+    } else if formulario_abierto {
+        CapaEsc::Formulario
+    } else if conexion_abierta {
+        CapaEsc::ConexionAgente
+    } else if agente_panel_abierto {
+        CapaEsc::PanelAgente
+    } else if escribiendo {
+        CapaEsc::QuitarFocoTexto
+    } else {
+        CapaEsc::Nada
+    }
+}
+
+fn manejar_tecla(
+    ui: &AppWindow,
+    tecla: &str,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    meta: bool,
+    escribiendo: bool,
+) -> bool {
+    let mods = Modificadores::new(ctrl, shift, alt, meta);
+
+    // Modo captura de nueva combinación en Ajustes → Atajos.
+    let capturando = con_estado(|estado| {
+        if estado.atajo_choque_pendiente.is_some() {
+            None
+        } else {
+            estado.atajo_capturando
+        }
+    });
+    if let Some(objetivo) = capturando {
+        let Some(combinacion) = Combinacion::desde_evento(tecla, mods) else {
+            // Ignoramos pulsaciones de modificadores solos mientras se espera la tecla.
+            return true;
+        };
+        if combinacion == Combinacion::simple(Tecla::Esc) {
+            con_estado(|estado| estado.atajo_capturando = None);
+            actualizar(ui);
+            ui.invoke_enfocar_ventana();
+            return true;
+        }
+        let choque = con_estado(|estado| {
+            estado.atajo_capturando = None;
+            estado.atajos.choque(objetivo, combinacion)
+        });
+        if let Some(otra) = choque {
+            con_estado(|estado| {
+                estado.atajo_choque_pendiente = Some((objetivo, combinacion, otra));
+            });
+            actualizar(ui);
+        } else {
+            aplicar_y_guardar_atajo(ui, objetivo, combinacion);
+        }
+        return true;
+    }
+
+    let accion = con_estado(|estado| estado.atajos.accion_para(tecla, mods, escribiendo));
+    let Some(accion) = accion else {
+        return false;
+    };
+    ejecutar_accion(ui, accion, escribiendo)
+}
+
+fn ejecutar_accion(ui: &AppWindow, accion: AccionAtajo, escribiendo: bool) -> bool {
+    let (
+        choque_atajo,
+        descartar_abierto,
+        ayuda_abierta,
+        formulario_abierto,
+        conexion_abierta,
+        panel_abierto,
+    ) = con_estado(|estado| {
+        (
+            estado.atajo_choque_pendiente.is_some(),
+            estado.descartar_abierto,
+            estado.ayuda_abierta,
+            !matches!(estado.edicion, Edicion::Ninguna),
+            estado.conexion_abierta,
+            estado.panel,
+        )
+    });
+    let descarga_voz_abierta = ui.get_descarga_voz_abierta();
+    let selector_abierto = ui.get_selector_tipo() != 0;
+    let confirma_borrado = ui.get_form_confirma();
+
+    if accion == AccionAtajo::Cerrar {
+        let capa = capa_superior_esc(
+            choque_atajo,
+            descartar_abierto,
+            descarga_voz_abierta,
+            selector_abierto,
+            confirma_borrado,
+            ayuda_abierta,
+            formulario_abierto,
+            conexion_abierta,
+            panel_abierto,
+            escribiendo,
+        );
+        match capa {
+            CapaEsc::ChoqueAtajo => atajo_choque_cancelar(ui),
+            CapaEsc::DescartarCambios => descartar_seguir(ui),
+            CapaEsc::DescargaVoz => cancelar_descarga_voz(ui),
+            CapaEsc::Selector => cerrar_selector(ui),
+            CapaEsc::ConfirmarBorrado => ui.set_form_confirma(false),
+            CapaEsc::AyudaAtajos => {
+                con_estado(|estado| estado.ayuda_abierta = false);
+                actualizar(ui);
+                ui.invoke_enfocar_ventana();
+            }
+            CapaEsc::Formulario => intentar_cancelar_formulario(ui),
+            CapaEsc::ConexionAgente => {
+                con_estado(|estado| {
+                    estado.conexion_abierta = false;
+                    estado.conexion_estado_texto.clear();
+                    estado.conexion_estado_error = false;
+                });
+                actualizar(ui);
+                ui.invoke_enfocar_ventana();
+            }
+            CapaEsc::PanelAgente => {
+                con_estado(|estado| {
+                    estado.panel = false;
+                    estado.respuesta.clear();
+                    estado.acciones.clear();
+                    estado.nota.clear();
+                });
+                actualizar(ui);
+                ui.invoke_enfocar_ventana();
+            }
+            CapaEsc::QuitarFocoTexto => {
+                ui.invoke_enfocar_ventana();
+            }
+            CapaEsc::Nada => return false,
+        }
+        return true;
+    }
+
+    let bloqueo_modal = choque_atajo || descartar_abierto || descarga_voz_abierta || selector_abierto;
+    if bloqueo_modal {
+        return false;
+    }
+
+    if accion == AccionAtajo::Guardar {
+        if !ayuda_abierta
+            && con_estado(|estado| {
+                matches!(
+                    estado.edicion,
+                    Edicion::Tarea(_)
+                        | Edicion::Clase(_)
+                        | Edicion::Recordatorio(_)
+                        | Edicion::Ajustes
+                        | Edicion::Agente
+                )
+            })
+        {
+            guardar(ui);
+            return true;
+        }
+        return false;
+    }
+
+    if accion == AccionAtajo::AyudaAtajos {
+        if formulario_abierto {
+            return false;
+        }
+        con_estado(|estado| estado.ayuda_abierta = !estado.ayuda_abierta);
+        actualizar(ui);
+        ui.invoke_enfocar_ventana();
+        return true;
+    }
+
+    if ayuda_abierta || formulario_abierto {
+        return false;
+    }
+
+    match accion {
+        AccionAtajo::NuevaTarea => abrir_tarea(ui, None),
+        AccionAtajo::IrInicio => {
+            ui.set_pestana(0);
+            ui.invoke_enfocar_ventana();
+        }
+        AccionAtajo::IrDia => {
+            ui.set_pestana(1);
+            ui.invoke_enfocar_ventana();
+        }
+        AccionAtajo::IrSemana => {
+            ui.set_pestana(2);
+            ui.invoke_enfocar_ventana();
+        }
+        AccionAtajo::IrPendientes => {
+            ui.set_pestana(3);
+            ui.invoke_enfocar_ventana();
+        }
+        AccionAtajo::Anterior => match ui.get_pestana() {
+            1 => mover_dia(&ui.as_weak(), -1),
+            2 => mover(&ui.as_weak(), -7),
+            _ => return false,
+        },
+        AccionAtajo::Siguiente => match ui.get_pestana() {
+            1 => mover_dia(&ui.as_weak(), 1),
+            2 => mover(&ui.as_weak(), 7),
+            _ => return false,
+        },
+        AccionAtajo::Hoy => match ui.get_pestana() {
+            1 => {
+                con_estado(|estado| estado.dia = Local::now().date_naive());
+                actualizar(ui);
+            }
+            2 => {
+                let hoy = Local::now().date_naive();
+                con_estado(|estado| estado.lunes = semana::lunes_de(hoy));
+                actualizar(ui);
+            }
+            _ => return false,
+        },
+        AccionAtajo::Agente => ui.invoke_enfocar_agente(),
+        AccionAtajo::Voz => grabar_voz(ui),
+        AccionAtajo::Sincronizar => sincronizar_todo_global(ui),
+        AccionAtajo::Ajustes => abrir_ajustes(ui),
+        AccionAtajo::Cerrar | AccionAtajo::Guardar | AccionAtajo::AyudaAtajos => {}
+    }
+    true
+}
+
+fn sincronizar_todo_global(ui: &AppWindow) {
+    let ocupado = con_estado(|estado| {
+        estado.sync_global_ocupado || estado.moodle_ocupado || estado.ical_ocupado || estado.p2p_ocupado
+    });
+    if ocupado {
+        return;
+    }
+    let ruta_datos = almacen().ruta;
+    let ruta_moodle = moodle::config::ruta();
+    let ruta_cal = ical::config::ruta();
+    let moodle_activo = moodle::config::cargar_de(&ruta_moodle).conectado();
+    let cal_activo = !ical::config::cargar_de(&ruta_cal).calendarios.is_empty();
+    let srv = crate::sistema::p2p_servicio();
+    let p2p_activo = srv.as_ref().is_some_and(|s| !s.dispositivos().is_empty());
+
+    if !moodle_activo && !cal_activo && !p2p_activo {
+        return;
+    }
+
+    con_estado(|estado| estado.sync_global_ocupado = true);
+    actualizar(ui);
+
+    let debil = ui.as_weak();
+    std::thread::spawn(move || {
+        let hoy = Local::now().date_naive();
+        if moodle_activo {
+            let _ = moodle::sincronizar_ahora(&ruta_datos, &ruta_moodle, hoy);
+        }
+        if cal_activo {
+            let _ = ical::sincronizar_calendarios(&ruta_datos, &ruta_cal, hoy);
+        }
+        if let Some(ref s) = srv {
+            if p2p_activo {
+                let _ = s.sincronizar_ahora();
+            }
+        }
+        let datos = Almacen { ruta: ruta_datos }.cargar().ok();
+        let est_moodle = moodle::config::estado_de(&ruta_moodle);
+        let cals = ical::config::listar_de(&ruta_cal);
+        let disps = srv.map(|s| s.dispositivos());
+
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = debil.upgrade() else { return };
+            if let Some(ref d) = datos {
+                crate::sistema::publicar(d);
+            }
+            con_estado(|estado| {
+                estado.sync_global_ocupado = false;
+                estado.moodle = est_moodle;
+                estado.calendarios = cals;
+                if let Some(lista) = disps {
+                    estado.p2p_dispositivos = lista;
+                }
+                if let Some(d) = datos {
+                    estado.datos = Some(d);
+                }
+            });
+            actualizar(&ui);
+        });
+    });
+}
+
 #[cfg(test)]
 mod pruebas {
     use super::*;
@@ -3991,5 +4768,70 @@ mod pruebas {
         let img = qr_a_imagen_slint(tam, &modulos);
         assert_eq!(img.size().width, (tam + 4) * 5);
         assert_eq!(img.size().height, (tam + 4) * 5);
+    }
+
+    #[test]
+    fn pila_esc_cierra_solo_la_capa_superior() {
+        assert_eq!(
+            capa_superior_esc(true, true, true, true, true, true, true, true, true, true),
+            CapaEsc::ChoqueAtajo
+        );
+        assert_eq!(
+            capa_superior_esc(false, true, true, true, true, true, true, true, true, true),
+            CapaEsc::DescartarCambios
+        );
+        assert_eq!(
+            capa_superior_esc(false, false, true, true, true, true, true, true, true, true),
+            CapaEsc::DescargaVoz
+        );
+        assert_eq!(
+            capa_superior_esc(false, false, false, true, true, true, true, true, true, true),
+            CapaEsc::Selector
+        );
+        assert_eq!(
+            capa_superior_esc(false, false, false, false, true, true, true, true, true, true),
+            CapaEsc::ConfirmarBorrado
+        );
+        assert_eq!(
+            capa_superior_esc(false, false, false, false, false, true, true, true, true, true),
+            CapaEsc::AyudaAtajos
+        );
+        assert_eq!(
+            capa_superior_esc(false, false, false, false, false, false, true, true, true, true),
+            CapaEsc::Formulario
+        );
+        assert_eq!(
+            capa_superior_esc(false, false, false, false, false, false, false, true, true, true),
+            CapaEsc::ConexionAgente
+        );
+        assert_eq!(
+            capa_superior_esc(false, false, false, false, false, false, false, false, true, true),
+            CapaEsc::PanelAgente
+        );
+        assert_eq!(
+            capa_superior_esc(false, false, false, false, false, false, false, false, false, true),
+            CapaEsc::QuitarFocoTexto
+        );
+        assert_eq!(
+            capa_superior_esc(false, false, false, false, false, false, false, false, false, false),
+            CapaEsc::Nada
+        );
+    }
+
+    #[test]
+    fn lista_atajos_ui_refleja_personalizaciones() {
+        let mut cfg = AtajosConfig::default();
+        let ui_def = atajos_ui(&cfg);
+        assert_eq!(ui_def.len(), AccionAtajo::TODAS.len());
+        assert!(ui_def.iter().all(|item| item.es_defecto));
+
+        cfg.asignar(
+            AccionAtajo::NuevaTarea,
+            Combinacion::parsear("Ctrl+Shift+N").unwrap(),
+        );
+        let ui_mod = atajos_ui(&cfg);
+        let nueva = ui_mod.iter().find(|i| i.id == "nueva_tarea").unwrap();
+        assert_eq!(nueva.tecla, "Ctrl+Shift+N");
+        assert!(!nueva.es_defecto);
     }
 }

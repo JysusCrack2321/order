@@ -443,6 +443,7 @@ export component Selector inherits Rectangle {
                         etiqueta: "Materia nueva";
                         texto <=> root.materia-nueva;
                         pista: "Cálculo";
+                        accepted => { root.aceptar(); }
                     }
 
                     Text {

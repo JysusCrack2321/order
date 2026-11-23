@@ -31,6 +31,14 @@ export struct DispositivoUI {
     en-linea: bool,
 }
 
+/// Un atajo de teclado para Ajustes → Atajos y la ventana de ayuda.
+export struct AtajoUI {
+    id: string,
+    nombre: string,
+    tecla: string,
+    es-defecto: bool,
+}
+
 /// Título de una tarea. Si está hecha se dibuja una línea encima, del ancho
 /// justo del texto: Slint no trae tachado, así que se pinta.
 export component TituloTachado inherits Rectangle {
@@ -148,6 +156,8 @@ export component Campo inherits VerticalLayout {
     in property <bool> mal: false;
     in property <bool> apagado: false;
 
+    callback accepted();
+
     spacing: Tema.espacio-xs;
 
     Etiqueta {
@@ -171,7 +181,9 @@ export component Campo inherits VerticalLayout {
             text <=> root.texto;
             color: Tema.texto;
             font-size: Tema.tamano-pequeno;
+            single-line: true;
             enabled: !root.apagado;
+            accepted => { root.accepted(); }
         }
 
         // Pista mientras el campo está vacío (TextInput no la trae en Slint 1.19).
@@ -254,6 +266,7 @@ export component CampoClave inherits VerticalLayout {
     in property <bool> mal: false;
 
     callback alternar();
+    callback accepted();
 
     spacing: Tema.espacio-xs;
 
@@ -283,6 +296,7 @@ export component CampoClave inherits VerticalLayout {
                 font-size: Tema.tamano-pequeno;
                 single-line: true;
                 input-type: root.ver ? InputType.text : InputType.password;
+                accepted => { root.accepted(); }
             }
 
             if root.texto == "" : Text {

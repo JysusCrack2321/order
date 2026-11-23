@@ -7,7 +7,7 @@ import { PendientesVista, TareaUI } from "pendientes.slint";
 import { InicioVista } from "inicio.slint";
 import { DiaVista } from "dia.slint";
 import { ClaseInicioUI, ConteoMateriaUI, RecordatorioInicioUI } from "listas.slint";
-import { Marco, Campo, CampoBoton, CampoClave, Chip, Casilla, Boton, Etiqueta, RecordatorioUI, CalendarioUI, DispositivoUI } from "formularios.slint";
+import { Marco, Campo, CampoBoton, CampoClave, Chip, Casilla, Boton, Etiqueta, RecordatorioUI, CalendarioUI, DispositivoUI, AtajoUI } from "formularios.slint";
 import { Selector, CeldaDia, MateriaUI } from "selectores.slint";
 import { AccionUI, AdjuntoUI, BarraAgente, PanelAgente, TarjetaConexionAgente } from "agente.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -188,6 +188,7 @@ export component AppWindow inherits Window {
     // Icono de la ventana: el mismo reloj de arena de la bandeja y del .desktop.
     icon: @image-url("../arte/order.svg");
     no-frame: true;
+    forward-focus: foco-global;
     // Sin tamaño fijo: la ventana se adapta al tamaño que le dé el
     // compositor y el contenido la llena entera. Solo se pone un mínimo.
     min-width: Tema.ancho-minimo-ventana;
@@ -406,6 +407,32 @@ export component AppWindow inherits Window {
     in-out property <string> materia-nueva: "";
     in-out property <bool> materia-escribiendo: false;
 
+    // --- Atajos, ayuda y confirmación de cambios sin guardar --------------
+    in property <bool> descartar-abierto: false;
+    in property <bool> ayuda-abierta: false;
+    in property <[AtajoUI]> atajos-lista: [];
+    in property <string> atajo-capturando-id: "";
+    in property <bool> atajo-choque-abierto: false;
+    in property <string> atajo-choque-mensaje: "";
+
+    callback capturar-tecla(string, bool, bool, bool, bool, bool) -> bool;
+    callback descartar-seguir();
+    callback descartar-confirmar();
+    callback abrir-atajos();
+    callback atajo-empezar-captura(string);
+    callback atajo-choque-confirmar();
+    callback atajo-choque-cancelar();
+    callback atajos-restaurar();
+    callback ayuda-cerrar();
+
+    public function enfocar-ventana() {
+        foco-global.focus();
+    }
+
+    public function enfocar-agente() {
+        barra-agente.enfocar();
+    }
+
     callback semana-anterior();
     callback semana-siguiente();
     callback ir-hoy();
@@ -489,6 +516,20 @@ export component AppWindow inherits Window {
     callback conflicto-quedar-actual();
     callback conflicto-usar-otra();
 
+    foco-global := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        capture-key-pressed(evento) => {
+            root.capturar-tecla(
+                evento.text,
+                evento.modifiers.control,
+                evento.modifiers.shift,
+                evento.modifiers.alt,
+                evento.modifiers.meta,
+                !self.has-focus,
+            ) ? EventResult.accept : EventResult.reject
+        }
+
     Rectangle {
         width: parent.width;
         height: parent.height;
@@ -541,25 +582,25 @@ export component AppWindow inherits Window {
                         Pestana {
                             texto: "Inicio";
                             activa: root.pestana == 0;
-                            clicked => { root.pestana = 0; }
+                            clicked => { root.pestana = 0; root.enfocar-ventana(); }
                         }
 
                         Pestana {
                             texto: "Día";
                             activa: root.pestana == 1;
-                            clicked => { root.pestana = 1; }
+                            clicked => { root.pestana = 1; root.enfocar-ventana(); }
                         }
 
                         Pestana {
                             texto: "Semana";
                             activa: root.pestana == 2;
-                            clicked => { root.pestana = 2; }
+                            clicked => { root.pestana = 2; root.enfocar-ventana(); }
                         }
 
                         Pestana {
                             texto: "Pendientes";
                             activa: root.pestana == 3;
-                            clicked => { root.pestana = 3; }
+                            clicked => { root.pestana = 3; root.enfocar-ventana(); }
                         }
                     }
 
@@ -755,7 +796,7 @@ export component AppWindow inherits Window {
                 cerrar => { root.agente-cerrar(); }
             }
 
-            BarraAgente {
+            barra-agente := BarraAgente {
                 texto <=> root.agente-texto;
                 pensando: root.agente-pensando;
                 pensando-texto: root.agente-pensando-texto;
@@ -836,6 +877,7 @@ export component AppWindow inherits Window {
                         texto <=> root.f-titulo;
                         pista: "Taller 2";
                         mal: root.campo-mal == 1;
+                        accepted => { root.guardar-formulario(); }
                     }
 
                     CampoBoton {
@@ -972,6 +1014,7 @@ export component AppWindow inherits Window {
                         etiqueta: "Lugar (opcional)";
                         texto <=> root.f-lugar;
                         pista: "453-201";
+                        accepted => { root.guardar-formulario(); }
                     }
                 }
             }
@@ -1076,6 +1119,7 @@ export component AppWindow inherits Window {
                             texto <=> root.a-horas;
                             pista: "3";
                             mal: root.campo-mal == 4;
+                            accepted => { root.guardar-formulario(); }
                         }
                     }
 
@@ -1152,7 +1196,7 @@ export component AppWindow inherits Window {
                     }
 
                     HorizontalLayout {
-                        spacing: Tema.espacio-sm;
+                        spacing: Tema.espacio-xs;
 
                         Boton {
                             texto: "Agente…";
@@ -1176,6 +1220,12 @@ export component AppWindow inherits Window {
                             texto: "Dispositivos…";
                             width: Tema.ancho-boton-dispositivos;
                             clicked => { root.abrir-dispositivos(); }
+                        }
+
+                        Boton {
+                            texto: "Atajos…";
+                            width: Tema.ancho-boton-atajos;
+                            clicked => { root.abrir-atajos(); }
                         }
                     }
                 }
@@ -1205,6 +1255,7 @@ export component AppWindow inherits Window {
                         texto <=> root.r-texto;
                         pista: "Revisar Moodle";
                         mal: root.campo-mal == 1;
+                        accepted => { root.guardar-formulario(); }
                     }
 
                     VerticalLayout {
@@ -1317,6 +1368,7 @@ export component AppWindow inherits Window {
                             ver: root.a-ver-key;
                             mal: root.campo-mal == 5;
                             alternar => { root.alternar-clave(); }
+                            accepted => { root.guardar-formulario(); }
                         }
 
                         Text {
@@ -1408,6 +1460,7 @@ export component AppWindow inherits Window {
                             pista: root.a-voz-proveedor == 1 ? "gsk_…" : "sk-…";
                             ver: root.v-ver-key;
                             alternar => { root.alternar-clave-voz(); }
+                            accepted => { root.guardar-formulario(); }
                         }
 
                         if root.a-voz-proveedor != 2 : Text {
@@ -1444,6 +1497,7 @@ export component AppWindow inherits Window {
                                 texto <=> root.a-url;
                                 pista: "https://…";
                                 mal: root.campo-mal == 1;
+                                accepted => { root.guardar-formulario(); }
                             }
 
                             Campo {
@@ -1451,6 +1505,7 @@ export component AppWindow inherits Window {
                                 texto <=> root.a-modelo;
                                 pista: "modelo";
                                 mal: root.campo-mal == 2;
+                                accepted => { root.guardar-formulario(); }
                             }
 
                             if root.a-voz-proveedor != 2 : Campo {
@@ -1458,6 +1513,7 @@ export component AppWindow inherits Window {
                                 texto <=> root.v-url;
                                 pista: "https://…";
                                 mal: root.campo-mal == 3;
+                                accepted => { root.guardar-formulario(); }
                             }
 
                             if root.a-voz-proveedor != 2 : Campo {
@@ -1465,6 +1521,7 @@ export component AppWindow inherits Window {
                                 texto <=> root.v-modelo;
                                 pista: "modelo";
                                 mal: root.campo-mal == 4;
+                                accepted => { root.guardar-formulario(); }
                             }
 
                             Campo {
@@ -1472,6 +1529,7 @@ export component AppWindow inherits Window {
                                 texto <=> root.a-limite-contexto;
                                 pista: "60000";
                                 mal: root.campo-mal == 6;
+                                accepted => { root.guardar-formulario(); }
                             }
 
                             if root.a-proveedor == 3 : HorizontalLayout {
@@ -1545,6 +1603,11 @@ export component AppWindow inherits Window {
                             texto <=> root.m-sitio;
                             pista: "micampus.unal.edu.co";
                             apagado: root.moodle-ocupado;
+                            accepted => {
+                                if (!root.moodle-ocupado) {
+                                    root.moodle-conectar();
+                                }
+                            }
                         }
 
                         Campo {
@@ -1552,6 +1615,11 @@ export component AppWindow inherits Window {
                             texto <=> root.m-usuario;
                             pista: "usuario";
                             apagado: root.moodle-ocupado;
+                            accepted => {
+                                if (!root.moodle-ocupado) {
+                                    root.moodle-conectar();
+                                }
+                            }
                         }
 
                         CampoClave {
@@ -1560,6 +1628,11 @@ export component AppWindow inherits Window {
                             pista: "••••••••";
                             ver: root.m-ver-pass;
                             alternar => { root.m-ver-pass = !root.m-ver-pass; }
+                            accepted => {
+                                if (!root.moodle-ocupado) {
+                                    root.moodle-conectar();
+                                }
+                            }
                         }
                     }
 
@@ -1672,6 +1745,11 @@ export component AppWindow inherits Window {
                         texto <=> root.c-url;
                         pista: "https://calendar.google.com/calendar/ical/…/basic.ics";
                         apagado: root.ical-ocupado;
+                        accepted => {
+                            if (!root.ical-ocupado) {
+                                root.ical-agregar();
+                            }
+                        }
                     }
 
                     HorizontalLayout {
@@ -1683,6 +1761,11 @@ export component AppWindow inherits Window {
                             texto <=> root.c-nombre;
                             pista: "Universidad";
                             apagado: root.ical-ocupado;
+                            accepted => {
+                                if (!root.ical-ocupado) {
+                                    root.ical-agregar();
+                                }
+                            }
                         }
 
                         CampoBoton {
@@ -1757,6 +1840,7 @@ export component AppWindow inherits Window {
                                 etiqueta: "Este dispositivo";
                                 texto <=> root.p2p-nombre;
                                 pista: "Computador";
+                                accepted => { root.p2p-guardar-nombre(); }
                             }
 
                             Boton {
@@ -1852,6 +1936,11 @@ export component AppWindow inherits Window {
                                     texto <=> root.p2p-codigo-entrada;
                                     pista: "order://emparejar?… o 8 palabras";
                                     apagado: root.p2p-ocupado;
+                                    accepted => {
+                                        if (!root.p2p-ocupado) {
+                                            root.p2p-emparejar();
+                                        }
+                                    }
                                 }
 
                                 Boton {
@@ -1924,6 +2013,111 @@ export component AppWindow inherits Window {
                             wrap: word-wrap;
                             font-size: Tema.tamano-pequeno;
                             color: Tema.texto-suave;
+                        }
+                    }
+                }
+            }
+
+            // --- Atajos de teclado (Ajustes → Atajos) ---------------------
+            if root.formulario == 9 : Marco {
+                encabezado: "Atajos de teclado";
+                sub: "Haz clic en una tecla para cambiarla. Se guardan en atajos.toml (solo en este equipo).";
+                alto-panel: Tema.alto-panel-atajos;
+                ancho-panel: Tema.ancho-formulario-ancho;
+                error: root.form-error;
+                confirma: false;
+                puede-borrar: false;
+                estirar-contenido: true;
+                texto-cancelar: "Volver";
+                mostrar-guardar: false;
+
+                guardar => { }
+                cancelar => { root.cancelar-formulario(); }
+                pedir-borrar => { }
+                confirmar-borrado => { }
+                no-borrar => { }
+
+                VerticalLayout {
+                    vertical-stretch: 1;
+                    spacing: Tema.espacio-md;
+
+                    ScrollView {
+                        vertical-stretch: 1;
+                        min-height: 0px;
+
+                        VerticalLayout {
+                            spacing: 0;
+
+                            for item in root.atajos-lista : Rectangle {
+                                height: Tema.alto-fila-compacta;
+
+                                HorizontalLayout {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    padding-left: Tema.espacio-xs;
+                                    padding-right: Tema.espacio-xs;
+                                    spacing: Tema.espacio-md;
+                                    cross-axis-alignment: center;
+
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        text: item.nombre;
+                                        font-size: Tema.tamano-pequeno;
+                                        color: Tema.texto;
+                                        overflow: elide;
+                                    }
+
+                                    Rectangle {
+                                        property <bool> capturando: root.atajo-capturando-id == item.id;
+                                        width: self.capturando ? Tema.ancho-captura-atajo : Tema.ancho-tecla-atajo;
+                                        height: Tema.alto-tecla-badge;
+                                        border-radius: Tema.radio-pequeno;
+                                        border-width: Tema.linea;
+                                        border-color: self.capturando
+                                            ? Tema.acento
+                                            : (tecla-ta.has-hover ? Tema.acento-suave : Tema.borde-fuerte);
+                                        background: self.capturando
+                                            ? Tema.acento-tenue
+                                            : (tecla-ta.has-hover ? Tema.fondo-hover : Tema.fondo-campo);
+
+                                        Text {
+                                            x: Tema.espacio-xs;
+                                            width: parent.width - 2 * Tema.espacio-xs;
+                                            height: parent.height;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                            text: parent.capturando ? "Pulsa la nueva combinación…" : item.tecla;
+                                            font-size: Tema.tamano-hora;
+                                            color: parent.capturando
+                                                ? Tema.acento
+                                                : (item.es-defecto ? Tema.texto-suave : Tema.acento);
+                                            overflow: elide;
+                                        }
+
+                                        tecla-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.atajo-empezar-captura(item.id); }
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    y: parent.height - Tema.linea;
+                                    width: parent.width;
+                                    height: Tema.linea;
+                                    background: Tema.borde-suave;
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Tema.espacio-sm;
+
+                        Boton {
+                            texto: "Restaurar valores por defecto";
+                            width: Tema.ancho-boton-restaurar;
+                            clicked => { root.atajos-restaurar(); }
                         }
                     }
                 }
@@ -2078,5 +2272,269 @@ export component AppWindow inherits Window {
                 }
             }
         }
+
+        // -----------------------------------------------------------------
+        // Ayuda de atajos de teclado (?).
+        // -----------------------------------------------------------------
+        if root.ayuda-abierta : Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            background: Tema.fondo-velo;
+
+            TouchArea {
+                clicked => { }
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: Tema.ancho-ayuda;
+                height: Tema.alto-ayuda;
+                background: Tema.fondo-panel;
+                border-radius: Tema.radio;
+                border-width: Tema.linea;
+                border-color: Tema.borde-fuerte;
+
+                VerticalLayout {
+                    x: Tema.espacio-lg;
+                    y: Tema.espacio-lg;
+                    width: parent.width - 2 * Tema.espacio-lg;
+                    height: parent.height - 2 * Tema.espacio-lg;
+                    spacing: Tema.espacio-md;
+
+                    VerticalLayout {
+                        spacing: Tema.espacio-xs;
+
+                        Text {
+                            text: "Atajos de teclado";
+                            font-family: Tema.fuente-titulos;
+                            font-size: Tema.tamano-semana;
+                            font-weight: 700;
+                            letter-spacing: Tema.letra-normal;
+                            color: Tema.texto;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: "Se pueden personalizar en Ajustes → Atajos. Enter guarda en campos de una línea.";
+                            font-size: Tema.tamano-hora;
+                            color: Tema.texto-tenue;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    ScrollView {
+                        vertical-stretch: 1;
+                        min-height: 0px;
+
+                        VerticalLayout {
+                            spacing: 0;
+
+                            for item in root.atajos-lista : Rectangle {
+                                height: Tema.alto-fila-ayuda;
+
+                                HorizontalLayout {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    padding-left: Tema.espacio-xs;
+                                    padding-right: Tema.espacio-xs;
+                                    spacing: Tema.espacio-md;
+                                    cross-axis-alignment: center;
+
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        text: item.nombre;
+                                        font-size: Tema.tamano-pequeno;
+                                        color: Tema.texto;
+                                        overflow: elide;
+                                    }
+
+                                    Rectangle {
+                                        width: Tema.ancho-tecla-atajo;
+                                        height: Tema.alto-tecla-badge;
+                                        border-radius: Tema.radio-pequeno;
+                                        border-width: Tema.linea;
+                                        border-color: Tema.acento-suave;
+                                        background: Tema.acento-tenue;
+
+                                        Text {
+                                            x: Tema.espacio-xs;
+                                            width: parent.width - 2 * Tema.espacio-xs;
+                                            height: parent.height;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                            text: item.tecla;
+                                            font-size: Tema.tamano-hora;
+                                            color: Tema.acento;
+                                            overflow: elide;
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    y: parent.height - Tema.linea;
+                                    width: parent.width;
+                                    height: Tema.linea;
+                                    background: Tema.borde-suave;
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: Tema.espacio-sm;
+
+                        Boton {
+                            texto: "Cerrar";
+                            principal: true;
+                            clicked => { root.ayuda-cerrar(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Confirmación de cambios sin guardar.
+        // -----------------------------------------------------------------
+        if root.descartar-abierto : Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            background: Tema.fondo-velo;
+
+            TouchArea {
+                clicked => { }
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: Tema.ancho-dialogo-confirmar;
+                height: Tema.alto-dialogo-confirmar;
+                background: Tema.fondo-panel;
+                border-radius: Tema.radio;
+                border-width: Tema.linea;
+                border-color: Tema.borde-fuerte;
+
+                VerticalLayout {
+                    x: Tema.espacio-lg;
+                    y: Tema.espacio-lg;
+                    width: parent.width - 2 * Tema.espacio-lg;
+                    height: parent.height - 2 * Tema.espacio-lg;
+                    spacing: Tema.espacio-md;
+
+                    Text {
+                        text: "¿Descartar los cambios?";
+                        font-family: Tema.fuente-titulos;
+                        font-size: Tema.tamano-semana;
+                        font-weight: 700;
+                        letter-spacing: Tema.letra-normal;
+                        color: Tema.texto;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: "Tienes cambios sin guardar en este formulario.";
+                        font-size: Tema.tamano-pequeno;
+                        color: Tema.texto-suave;
+                        wrap: word-wrap;
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: Tema.espacio-sm;
+
+                        Boton {
+                            texto: "Seguir editando";
+                            width: Tema.ancho-boton-largo;
+                            clicked => { root.descartar-seguir(); }
+                        }
+
+                        Boton {
+                            texto: "Descartar";
+                            peligro: true;
+                            clicked => { root.descartar-confirmar(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Confirmación de choque al reasignar un atajo.
+        // -----------------------------------------------------------------
+        if root.atajo-choque-abierto : Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            background: Tema.fondo-velo;
+
+            TouchArea {
+                clicked => { }
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: Tema.ancho-dialogo-confirmar;
+                height: Tema.alto-dialogo-confirmar;
+                background: Tema.fondo-panel;
+                border-radius: Tema.radio;
+                border-width: Tema.linea;
+                border-color: Tema.borde-fuerte;
+
+                VerticalLayout {
+                    x: Tema.espacio-lg;
+                    y: Tema.espacio-lg;
+                    width: parent.width - 2 * Tema.espacio-lg;
+                    height: parent.height - 2 * Tema.espacio-lg;
+                    spacing: Tema.espacio-md;
+
+                    Text {
+                        text: "Atajo en uso";
+                        font-family: Tema.fuente-titulos;
+                        font-size: Tema.tamano-semana;
+                        font-weight: 700;
+                        letter-spacing: Tema.letra-normal;
+                        color: Tema.texto;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: root.atajo-choque-mensaje;
+                        font-size: Tema.tamano-pequeno;
+                        color: Tema.texto-suave;
+                        wrap: word-wrap;
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: Tema.espacio-sm;
+
+                        Boton {
+                            texto: "Cancelar";
+                            clicked => { root.atajo-choque-cancelar(); }
+                        }
+
+                        Boton {
+                            texto: "Cambiar";
+                            principal: true;
+                            clicked => { root.atajo-choque-confirmar(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
     }
 }

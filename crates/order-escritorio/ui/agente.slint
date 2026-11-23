@@ -41,6 +41,10 @@ export component BarraAgente inherits Rectangle {
     callback quitar-adjunto(int);
     callback nueva-conversacion();
 
+    public function enfocar() {
+        entrada.focus();
+    }
+
     height: Tema.alto-barra-agente + (root.adjuntos.length > 0 || root.leyendo ? Tema.alto-fila-adjuntos : 0px);
     background: Tema.fondo-panel;
 
@@ -478,6 +482,11 @@ export component TarjetaConexionAgente inherits Rectangle {
                 ver: root.ver-clave;
                 mal: root.estado-error;
                 alternar => { root.alternar-clave(); }
+                accepted => {
+                    if (!root.conectando) {
+                        root.conectar();
+                    }
+                }
             }
 
             Boton {
