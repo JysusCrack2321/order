@@ -246,7 +246,7 @@ Desde **Ajustes → Moodle** puedes conectar tu cuenta (por ejemplo `micampus.un
 - **Qué se guarda**:
   - **`moodle.toml`** (junto a `agente.toml`: `~/.config/order/` en escritorio o `filesDir` en Android, con permisos `600`): `sitio`, `token`, nombre visible, `userid` y fecha de última sincronización. **La contraseña nunca se guarda** en disco ni en logs.
   - **`calendarios.toml`** (misma ubicación privada con permisos `600`): nombre, dirección iCal, materia opcional y última actualización. Ninguno de los dos archivos se guarda dentro de `order.toml`.
-- **Cada cuánto se sincroniza**: al abrir la aplicación, cada **3 horas** mientras la app de escritorio está abierta, de forma periódica en `TrabajoRespaldo` en Android, y en cualquier momento con **Sincronizar ahora**.
+- **Cada cuánto se sincroniza**: al abrir la aplicación, cada **3 horas** mientras la app de escritorio está abierta, cada **1 hora** en segundo plano (`TrabajoRespaldo`) en Android, y en cualquier momento con **Sincronizar ahora**.
 
 ## Hermes
 
@@ -264,7 +264,7 @@ ORDER sincroniza `order.toml` directamente entre tu PC y tu celular sin cuentas 
   3. Solo se aceptan conexiones de nodos previamente emparejados.
 - **Qué viaja**: exclusivamente los campos de tu agenda (`ajustes`, `semestre`, `clase`, `tarea`, `recordatorio`) con sus marcas lógicas, sobre QUIC (`iroh`, ALPN `order/sync/1`) con **cifrado de extremo a extremo**. En la misma red Wi-Fi se descubren localmente por mDNS; cuando están en redes distintas, los relays públicos de n0 actúan solo como paso de tráfico cifrado (nunca ven tu agenda ni tus claves).
 - **Dónde vive el estado**: en **`sync.toml`** (clave privada del nodo, nombre del dispositivo y lista de emparejados) y **`sync-estado.json`** (marcas HLC, lápidas y última foto sincronizada), siempre con permisos **`600`** en el almacenamiento privado junto a `agente.toml` (`~/.config/order/` en escritorio o `filesDir` en Android, nunca dentro de `order.toml` ni de la carpeta compartida).
-- **Cuándo sincroniza**: como no hay servidor intermedio, **ambos dispositivos deben estar encendidos a la vez** para intercambiar cambios (en escritorio basta con que ORDER esté vivo en la bandeja). El escritorio escucha siempre y sincroniza al arrancar, cada 5 minutos y 2 segundos después de cada cambio local; Android sincroniza al abrir o volver a primer plano, tras cada cambio y periódicamente en `TrabajoRespaldo`, y escucha mientras la app está abierta.
+- **Cuándo sincroniza**: como no hay servidor intermedio, **ambos dispositivos deben estar encendidos a la vez** para intercambiar cambios (en escritorio basta con que ORDER esté vivo en la bandeja). El escritorio escucha siempre y sincroniza al arrancar, cada 5 minutos y 2 segundos después de cada cambio local; Android sincroniza al abrir o volver a primer plano, tras cada cambio y cada **1 hora** en segundo plano (`TrabajoRespaldo`), y escucha mientras la app está abierta.
 
 ## Licencia
 

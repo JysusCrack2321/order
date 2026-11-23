@@ -82,10 +82,10 @@ class TrabajoRespaldo(
         private const val NOMBRE_TRABAJO = "order_reprogramar_avisos"
 
         fun programar(context: Context) {
-            val request = PeriodicWorkRequestBuilder<TrabajoRespaldo>(6, TimeUnit.HOURS).build()
+            val request = PeriodicWorkRequestBuilder<TrabajoRespaldo>(1, TimeUnit.HOURS).build()
             WorkManager.getInstance(context.applicationContext).enqueueUniquePeriodicWork(
                 NOMBRE_TRABAJO,
-                ExistingPeriodicWorkPolicy.KEEP,
+                ExistingPeriodicWorkPolicy.UPDATE,
                 request,
             )
         }
