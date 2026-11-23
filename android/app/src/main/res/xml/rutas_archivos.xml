@@ -3,4 +3,7 @@
     <cache-path
         name="camara"
         path="fotos/" />
+    <cache-path
+        name="actualizaciones"
+        path="actualizaciones/" />
 </paths>

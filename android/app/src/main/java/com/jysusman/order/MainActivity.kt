@@ -59,6 +59,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.jysusman.order.actualizacion.ActualizadorAndroid
+import com.jysusman.order.actualizacion.ActualizadorLogica
+import com.jysusman.order.actualizacion.DialogoActualizacion
+import com.jysusman.order.actualizacion.EstadoActualizacion
 import com.jysusman.order.agente.ProcesadorAndroid
 import com.jysusman.order.avisos.Canales
 import com.jysusman.order.avisos.Programador
@@ -92,11 +96,14 @@ import com.jysusman.order.ui.tienePermisoAlarmaExacta
 import com.jysusman.order.ui.tienePermisoArchivos
 import com.jysusman.order.voz.Grabadora
 import com.jysusman.order.voz.VozAndroid
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.time.LocalDate
 
 enum class Pestana(val titulo: String, val icono: ImageVector) {
     Inicio("Inicio", Icons.Outlined.Home),
@@ -169,6 +176,110 @@ private fun OrderApp(
     var pestana by rememberSaveable { mutableIntStateOf(0) }
     var formularioActivo by remember { mutableStateOf<FormularioActivo?>(null) }
     var selectorFiltro by remember { mutableStateOf(SelectorFiltro.Ninguno) }
+
+    val versionInstalada = remember(context) { ActualizadorAndroid.versionInstalada(context) }
+    var estadoActualizacion by remember { mutableStateOf<EstadoActualizacion>(EstadoActualizacion.Oculto) }
+    var buscandoActualizacion by remember { mutableStateOf(false) }
+    var mensajeActualizacion by remember { mutableStateOf("") }
+    var mensajeActualizacionError by remember { mutableStateOf(false) }
+    var actualizacionComprobadaAlAbrir by rememberSaveable { mutableStateOf(false) }
+    var esperandoPermisoInstalacion by remember { mutableStateOf(false) }
+    var trabajoDescarga by remember { mutableStateOf<Job?>(null) }
+
+    fun iniciarDescargaEInstalacion() {
+        val actual = estadoActualizacion as? EstadoActualizacion.Disponible ?: return
+        if (actual.descargando) return
+        trabajoDescarga?.cancel()
+        trabajoDescarga = scope.launch {
+            estadoActualizacion = actual.copy(
+                descargando = true,
+                progreso = 0f,
+                avisoPermiso = null,
+                error = null,
+            )
+            val descarga = ActualizadorAndroid.descargarApk(context, actual.release) { p ->
+                val vigente = estadoActualizacion as? EstadoActualizacion.Disponible
+                if (vigente != null && vigente.release == actual.release) {
+                    estadoActualizacion = vigente.copy(progreso = p)
+                }
+            }
+            descarga.onSuccess { archivoApk ->
+                val vigente = estadoActualizacion as? EstadoActualizacion.Disponible
+                if (vigente != null) {
+                    estadoActualizacion = vigente.copy(descargando = false, progreso = 1f)
+                }
+                ActualizadorAndroid.instalarApk(context, archivoApk)
+                    .onSuccess {
+                        estadoActualizacion = EstadoActualizacion.Oculto
+                    }
+                    .onFailure { err ->
+                        val cur = estadoActualizacion as? EstadoActualizacion.Disponible
+                        if (cur != null) {
+                            estadoActualizacion = cur.copy(
+                                descargando = false,
+                                error = err.message ?: "No se pudo abrir el instalador.",
+                            )
+                        }
+                    }
+            }.onFailure { err ->
+                if (err is CancellationException) throw err
+                val cur = estadoActualizacion as? EstadoActualizacion.Disponible
+                if (cur != null) {
+                    estadoActualizacion = cur.copy(
+                        descargando = false,
+                        progreso = null,
+                        error = err.message ?: "No se pudo descargar la actualización.",
+                    )
+                }
+            }
+        }
+    }
+
+    val lanzadorPermisoInstalacion = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (!esperandoPermisoInstalacion) return@rememberLauncherForActivityResult
+        esperandoPermisoInstalacion = false
+        if (ActualizadorAndroid.puedeInstalarPaquetes(context)) {
+            iniciarDescargaEInstalacion()
+        } else {
+            val actual = estadoActualizacion as? EstadoActualizacion.Disponible
+            if (actual != null) {
+                estadoActualizacion = actual.copy(
+                    avisoPermiso = "Activa «Instalar aplicaciones desconocidas» para ORDER y vuelve a intentarlo.",
+                )
+            }
+        }
+    }
+
+    fun buscarActualizacionManual() {
+        if (buscandoActualizacion) return
+        buscandoActualizacion = true
+        mensajeActualizacion = ""
+        mensajeActualizacionError = false
+        scope.launch {
+            PreferenciasOrder.guardarUltimaComprobacionActualizacionMs(
+                context,
+                System.currentTimeMillis(),
+            )
+            ActualizadorAndroid.buscarUltimaVersion()
+                .onSuccess { release ->
+                    if (ActualizadorLogica.esVersionMasNueva(release.versionLimpia, versionInstalada)) {
+                        mensajeActualizacion = ""
+                        mensajeActualizacionError = false
+                        estadoActualizacion = EstadoActualizacion.Disponible(release)
+                    } else {
+                        mensajeActualizacion = "Ya tienes la última versión ($versionInstalada)."
+                        mensajeActualizacionError = false
+                    }
+                }
+                .onFailure { err ->
+                    mensajeActualizacion = err.message ?: "No se pudo comprobar actualizaciones."
+                    mensajeActualizacionError = true
+                }
+            buscandoActualizacion = false
+        }
+    }
 
     val grabadora = remember { Grabadora() }
     val vozAndroid = remember(context) { VozAndroid(context) }
@@ -395,7 +506,37 @@ private fun OrderApp(
     }
 
     DisposableEffect(Unit) {
-        onDispose { repositorio.detenerSincronizacionP2p() }
+        onDispose {
+            trabajoDescarga?.cancel()
+            repositorio.detenerSincronizacionP2p()
+        }
+    }
+
+    // Comprobación automática de actualizaciones al abrir la app (como mucho cada 6 h).
+    LaunchedEffect(permisoOk) {
+        if (!permisoOk || actualizacionComprobadaAlAbrir) return@LaunchedEffect
+        actualizacionComprobadaAlAbrir = true
+        val ahoraMs = System.currentTimeMillis()
+        val ultimaMs = PreferenciasOrder.ultimaComprobacionActualizacionMs(context)
+        if (!ActualizadorLogica.debeComprobarAutomaticamente(ultimaMs, ahoraMs)) {
+            return@LaunchedEffect
+        }
+        PreferenciasOrder.guardarUltimaComprobacionActualizacionMs(context, ahoraMs)
+        ActualizadorAndroid.buscarUltimaVersion().onSuccess { release ->
+            val esNueva = ActualizadorLogica.esVersionMasNueva(
+                release.versionLimpia,
+                versionInstalada,
+            )
+            val omitida = ActualizadorLogica.estaOmitidaParaHoy(
+                versionOmitida = PreferenciasOrder.versionOmitidaActualizacion(context),
+                fechaOmitidaIso = PreferenciasOrder.fechaOmitidaActualizacion(context),
+                versionCandidata = release.versionLimpia,
+                fechaHoyIso = LocalDate.now().toString(),
+            )
+            if (esNueva && !omitida && estadoActualizacion is EstadoActualizacion.Oculto) {
+                estadoActualizacion = EstadoActualizacion.Disponible(release)
+            }
+        }
     }
 
     // Observa la carpeta de datos cuando hay permiso.
@@ -738,8 +879,52 @@ private fun OrderApp(
                     withContext(Dispatchers.IO) { programador.reprogramar() }
                 }
             },
+            versionInstalada = versionInstalada,
+            buscandoActualizacion = buscandoActualizacion,
+            mensajeActualizacion = mensajeActualizacion,
+            mensajeActualizacionError = mensajeActualizacionError,
+            alBuscarActualizacion = { buscarActualizacionManual() },
             alAbrirFormulario = { formularioActivo = it },
             alCerrar = { formularioActivo = null },
+        )
+    }
+
+    (estadoActualizacion as? EstadoActualizacion.Disponible)?.let { actual ->
+        DialogoActualizacion(
+            estado = actual,
+            alActualizar = {
+                if (!ActualizadorAndroid.puedeInstalarPaquetes(context)) {
+                    esperandoPermisoInstalacion = true
+                    estadoActualizacion = actual.copy(
+                        avisoPermiso = "Activa «Instalar aplicaciones desconocidas» para ORDER y al volver seguirá.",
+                        error = null,
+                    )
+                    runCatching {
+                        lanzadorPermisoInstalacion.launch(
+                            ActualizadorAndroid.intentPermisoInstalacion(context)
+                        )
+                    }.onFailure {
+                        esperandoPermisoInstalacion = false
+                        estadoActualizacion = actual.copy(
+                            avisoPermiso = null,
+                            error = "No se pudieron abrir los ajustes de instalación.",
+                        )
+                    }
+                } else {
+                    iniciarDescargaEInstalacion()
+                }
+            },
+            alAhoraNo = {
+                trabajoDescarga?.cancel()
+                trabajoDescarga = null
+                esperandoPermisoInstalacion = false
+                PreferenciasOrder.guardarVersionOmitidaActualizacion(
+                    context = context,
+                    version = actual.release.versionLimpia,
+                    fechaIso = LocalDate.now().toString(),
+                )
+                estadoActualizacion = EstadoActualizacion.Oculto
+            },
         )
     }
 

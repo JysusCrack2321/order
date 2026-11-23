@@ -85,6 +85,11 @@ fun ContenedorFormularioSheet(
     alCambiarCarpeta: (String) -> Unit,
     avisosActivos: Boolean = true,
     alCambiarAvisosActivos: (Boolean) -> Unit = {},
+    versionInstalada: String = "",
+    buscandoActualizacion: Boolean = false,
+    mensajeActualizacion: String = "",
+    mensajeActualizacionError: Boolean = false,
+    alBuscarActualizacion: () -> Unit = {},
     alAbrirFormulario: (FormularioActivo) -> Unit,
     alCerrar: () -> Unit,
 ) {
@@ -125,6 +130,11 @@ fun ContenedorFormularioSheet(
                 alCambiarCarpeta = alCambiarCarpeta,
                 avisosActivos = avisosActivos,
                 alCambiarAvisosActivos = alCambiarAvisosActivos,
+                versionInstalada = versionInstalada,
+                buscandoActualizacion = buscandoActualizacion,
+                mensajeActualizacion = mensajeActualizacion,
+                mensajeActualizacionError = mensajeActualizacionError,
+                alBuscarActualizacion = alBuscarActualizacion,
                 alAbrirAgente = { alAbrirFormulario(FormularioActivo.Agente) },
                 alAbrirMoodle = { alAbrirFormulario(FormularioActivo.Moodle) },
                 alAbrirCalendarios = { alAbrirFormulario(FormularioActivo.Calendarios) },
@@ -646,6 +656,11 @@ private fun HojaAjustes(
     alCambiarCarpeta: (String) -> Unit,
     avisosActivos: Boolean,
     alCambiarAvisosActivos: (Boolean) -> Unit,
+    versionInstalada: String,
+    buscandoActualizacion: Boolean,
+    mensajeActualizacion: String,
+    mensajeActualizacionError: Boolean,
+    alBuscarActualizacion: () -> Unit,
     alAbrirAgente: () -> Unit,
     alAbrirMoodle: () -> Unit,
     alAbrirCalendarios: () -> Unit,
@@ -939,6 +954,51 @@ private fun HojaAjustes(
                 text = "Dispositivos…",
                 fontSize = OrderTema.TamanoPequeno,
                 color = OrderTema.Texto,
+            )
+        }
+
+        HorizontalDivider(color = OrderTema.BordeSuave, thickness = OrderTema.Linea)
+
+        EtiquetaCampo(texto = "ACERCA DE / VERSIÓN")
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = "ORDER",
+                fontFamily = OrderTema.FuenteTitulos,
+                fontWeight = FontWeight.Bold,
+                fontSize = OrderTema.TamanoPequeno,
+                color = OrderTema.Texto,
+            )
+            Text(
+                text = "Versión ${versionInstalada.ifBlank { "—" }}",
+                fontSize = OrderTema.TamanoPequeno,
+                color = OrderTema.TextoSuave,
+            )
+        }
+
+        OutlinedButton(
+            onClick = alBuscarActualizacion,
+            enabled = !buscandoActualizacion,
+            shape = RoundedCornerShape(OrderTema.Radio),
+            border = BorderStroke(OrderTema.Linea, OrderTema.Borde),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = if (buscandoActualizacion) "Buscando actualizaciones…" else "Buscar actualizaciones",
+                fontSize = OrderTema.TamanoPequeno,
+                color = if (buscandoActualizacion) OrderTema.TextoTenue else OrderTema.Texto,
+            )
+        }
+
+        if (mensajeActualizacion.isNotBlank()) {
+            Text(
+                text = mensajeActualizacion,
+                fontSize = OrderTema.TamanoHora,
+                color = if (mensajeActualizacionError) OrderTema.TextoError else OrderTema.TextoSuave,
             )
         }
     }

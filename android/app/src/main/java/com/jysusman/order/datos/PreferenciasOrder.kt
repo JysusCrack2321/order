@@ -8,6 +8,9 @@ private const val CLAVE_CARPETA = "carpeta_datos"
 private const val CLAVE_AVISOS_ACTIVOS = "avisos_activos"
 private const val CLAVE_AVISOS_PROGRAMADOS = "avisos_programados"
 private const val CLAVE_VOZ_ANDROID = "voz_android"
+private const val CLAVE_ACTUALIZACION_ULTIMA_MS = "actualizacion_ultima_ms"
+private const val CLAVE_ACTUALIZACION_OMITIDA_VER = "actualizacion_omitida_ver"
+private const val CLAVE_ACTUALIZACION_OMITIDA_FECHA = "actualizacion_omitida_fecha"
 
 object PreferenciasOrder {
     fun carpetaDatos(context: Context): String? =
@@ -36,6 +39,26 @@ object PreferenciasOrder {
 
     fun guardarUsarVozAndroid(context: Context, usar: Boolean) {
         prefs(context).edit().putBoolean(CLAVE_VOZ_ANDROID, usar).apply()
+    }
+
+    fun ultimaComprobacionActualizacionMs(context: Context): Long =
+        prefs(context).getLong(CLAVE_ACTUALIZACION_ULTIMA_MS, 0L)
+
+    fun guardarUltimaComprobacionActualizacionMs(context: Context, instanteMs: Long) {
+        prefs(context).edit().putLong(CLAVE_ACTUALIZACION_ULTIMA_MS, instanteMs).apply()
+    }
+
+    fun versionOmitidaActualizacion(context: Context): String? =
+        prefs(context).getString(CLAVE_ACTUALIZACION_OMITIDA_VER, null)
+
+    fun fechaOmitidaActualizacion(context: Context): String? =
+        prefs(context).getString(CLAVE_ACTUALIZACION_OMITIDA_FECHA, null)
+
+    fun guardarVersionOmitidaActualizacion(context: Context, version: String, fechaIso: String) {
+        prefs(context).edit()
+            .putString(CLAVE_ACTUALIZACION_OMITIDA_VER, version)
+            .putString(CLAVE_ACTUALIZACION_OMITIDA_FECHA, fechaIso)
+            .apply()
     }
 
     private fun prefs(context: Context) =
