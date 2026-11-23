@@ -19,6 +19,7 @@ Todo vive en un único archivo TOML, legible y editable a mano o con Hermes:
 | `~/.config/order/historial.toml` | tareas hechas con más de 30 días (las mueve la app) |
 | `~/.config/order/moodle.toml` | conexión con Moodle (solo token, permisos `600`, nunca se sincroniza) |
 | `~/.config/order/calendarios.toml` | suscripciones iCal (permisos `600`, nunca se sincroniza) |
+| `~/.config/order/atajos.toml` | atajos de teclado personalizados en escritorio (permisos `600`, nunca se sincroniza) |
 | `~/.config/order/sync.toml` | clave privada del nodo P2P y dispositivos emparejados (permisos `600`, nunca se sincroniza) |
 | `~/.config/order/sync-estado.json` | marcas HLC por campo, lápidas y foto de sincronización (permisos `600`, nunca se sincroniza) |
 | `~/.local/state/order/enviados.txt` | claves de los avisos ya enviados (no repetir) |
@@ -138,6 +139,23 @@ ya abierta), la segunda instancia no crea otro proceso: habla por el socket
 El icono de la bandeja es un StatusNotifierItem; en GNOME hace falta la
 extensión **AppIndicator and KStatusNotifierItem Support** para verlo y para
 tener el menú Abrir/Salir. En niri con DMS funciona sin nada extra.
+
+## Atajos de teclado (escritorio)
+
+Todos los atajos se pueden personalizar desde **Ajustes → Atajos** (se guardan solo los cambios en `atajos.toml`) y consultar en cualquier momento pulsando `?`. Las teclas sin modificador (`←`, `→`, `T`, `?`) no actúan mientras escribes en un campo de texto; `Esc` quita primero el foco del campo o cierra la capa superior abierta (preguntando si hay cambios sin guardar).
+
+| Acción | Atajo por defecto |
+|---|---|
+| Cerrar diálogo, sub-panel, ayuda o quitar foco | `Esc` |
+| Guardar el formulario abierto | `Ctrl+S` (`Enter` en campos de una línea) |
+| Nueva tarea | `Ctrl+N` |
+| Ir a Inicio / Día / Semana / Pendientes | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` / `Ctrl+4` |
+| Día o semana anterior / siguiente / hoy | `←` / `→` / `T` |
+| Enfocar el cuadro del agente | `Ctrl+K` |
+| Empezar o detener grabación de voz | `Ctrl+M` |
+| Sincronizar (Moodle, calendarios iCal y P2P) | `Ctrl+R` |
+| Abrir Ajustes | `Ctrl+,` |
+| Mostrar la lista de atajos | `?` |
 
 ## Avisos
 
