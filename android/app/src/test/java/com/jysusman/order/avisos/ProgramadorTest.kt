@@ -118,6 +118,71 @@ class ProgramadorTest {
         assertTrue(despachador.exactasProgramadas.isEmpty())
         assertTrue(despachador.inexactasProgramadas.isEmpty())
     }
+
+    @Test
+    fun relojConNanosegundosFormateaDesdeYHastaSinFraccionDeSegundo() {
+        val puente = FakePuenteAvisos(
+            avisos = listOf(
+                AvisoProgramableFfi(
+                    clave = "r:r-1:2026-11-22",
+                    momentoIso = "2026-11-22T19:30:00",
+                    titulo = "Planear semana",
+                    cuerpo = "Recordatorio de las 7:30 p. m.",
+                    esRecordatorio = true,
+                ),
+            )
+        )
+        val despachador = FakeDespachadorAlarmas(exactas = true)
+        val almacen = FakeAlmacenClaves()
+        val ahoraConNanos = LocalDateTime.of(2026, 11, 22, 19, 0, 12, 987_654_321)
+
+        val programador = Programador(
+            puente = puente,
+            despachador = despachador,
+            almacenClaves = almacen,
+            rutaDatos = { "/tmp/order.toml" },
+            rutaRegistro = { "/tmp/enviados.txt" },
+            avisosActivos = { true },
+            relojAhora = { ahoraConNanos },
+            zona = { ZoneId.of("UTC") },
+        )
+
+        val total = programador.reprogramar()
+        assertEquals(1, total)
+        assertEquals("2026-11-22T19:00:12", puente.ultimoDesde)
+        assertEquals("2026-11-24T19:00:12", puente.ultimoHasta)
+        assertEquals(listOf("r:r-1:2026-11-22"), despachador.exactasProgramadas.map { it.first })
+    }
+
+    @Test
+    fun errorEnProximosAvisosSeRegistraEnLogYNoSilencia() {
+        val puente = FakePuenteAvisos(
+            avisos = emptyList(),
+            falloProximos = IllegalStateException("fecha inicial no válida"),
+        )
+        val despachador = FakeDespachadorAlarmas(exactas = true)
+        val almacen = FakeAlmacenClaves(mutableSetOf("clave-previa"))
+        val logs = mutableListOf<String>()
+
+        val programador = Programador(
+            puente = puente,
+            despachador = despachador,
+            almacenClaves = almacen,
+            rutaDatos = { "/tmp/order.toml" },
+            rutaRegistro = { "/tmp/enviados.txt" },
+            avisosActivos = { true },
+            relojAhora = { LocalDateTime.of(2026, 11, 22, 19, 0, 0, 123_000_000) },
+            zona = { ZoneId.of("UTC") },
+            registrarAviso = { logs.add(it) },
+        )
+
+        val total = programador.reprogramar()
+        assertEquals(0, total)
+        assertEquals(listOf("clave-previa"), despachador.canceladas)
+        assertTrue(almacen.leer().isEmpty())
+        assertEquals(1, logs.size)
+        assertTrue(logs.first().contains("fecha inicial no válida"))
+    }
 }
 
 private class FakeDespachadorAlarmas(var exactas: Boolean) : DespachadorAlarmas {
@@ -157,6 +222,7 @@ private class FakeAlmacenClaves(
 
 private class FakePuenteAvisos(
     private val avisos: List<AvisoProgramableFfi>,
+    private val falloProximos: Throwable? = null,
 ) : PuenteOrder {
     var ultimoDesde: String = ""
     var ultimoHasta: String = ""
@@ -169,6 +235,7 @@ private class FakePuenteAvisos(
     ): List<AvisoProgramableFfi> {
         ultimoDesde = desdeIso
         ultimoHasta = hastaIso
+        falloProximos?.let { throw it }
         return avisos
     }
 

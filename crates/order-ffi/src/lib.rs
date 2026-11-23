@@ -2126,8 +2126,10 @@ fn interpretar_fecha_hora(texto: &str) -> Option<NaiveDateTime> {
     let limpio = texto.trim();
     for fmt in [
         "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S%.f",
         "%Y-%m-%dT%H:%M",
         "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S%.f",
         "%Y-%m-%d %H:%M",
     ] {
         if let Ok(dt) = NaiveDateTime::parse_from_str(limpio, fmt) {
@@ -2990,6 +2992,73 @@ hora = "18:00"
         let res2 = resumen_del_dia(ruta, "2026-11-28T14:00:00".into(), registro)
             .expect("resumen 2");
         assert!(res2.is_none(), "no se repite el resumen el mismo día");
+    }
+
+    #[test]
+    fn proximos_avisos_con_recordatorios_tareas_origen_enlace_sin_enviados_y_nanosegundos() {
+        let dir = TempDir::new().expect("tempdir");
+        let ruta = ruta_temp(&dir);
+        let registro = dir
+            .path()
+            .join("privado")
+            .join("enviados.txt")
+            .to_string_lossy()
+            .into_owned();
+        assert!(!Path::new(&registro).exists());
+
+        fs::write(
+            &ruta,
+            r#"[ajustes]
+aviso_dia_antes = "20:00"
+aviso_horas_antes = 3
+
+[[tarea]]
+id = "t-moodle"
+titulo = "Entregar taller"
+materia = "Control"
+vence = "2026-11-23T23:59"
+hecha = false
+origen = "moodle"
+enlace = "https://micampus.unal.edu.co/mod/assign/view.php?id=42"
+
+[[recordatorio]]
+id = "r-dom"
+texto = "Planear semana"
+dias = ["dom"]
+hora = "19:30"
+
+[[recordatorio]]
+id = "r-moodle"
+texto = "Revisar Moodle"
+dias = ["lun"]
+hora = "18:00"
+"#,
+        )
+        .expect("escribir");
+
+        // Simula DateTimeFormatter.ISO_LOCAL_DATE_TIME de Android con nanosegundos.
+        let lista = proximos_avisos(
+            ruta,
+            "2026-11-22T19:00:00.123456789".into(),
+            "2026-11-24T19:00:00.987654321".into(),
+            registro.clone(),
+        )
+        .expect("proximos avisos con nanosegundos y sin enviados.txt");
+
+        assert!(!Path::new(&registro).exists());
+        assert_eq!(lista.len(), 4);
+        assert_eq!(lista[0].clave, "r:r-dom:2026-11-22");
+        assert_eq!(lista[0].momento_iso, "2026-11-22T19:30:00");
+        assert!(lista[0].es_recordatorio);
+        assert_eq!(lista[1].clave, "t:t-moodle:dia:2026-11-23");
+        assert_eq!(lista[1].momento_iso, "2026-11-22T20:00:00");
+        assert!(!lista[1].es_recordatorio);
+        assert_eq!(lista[2].clave, "r:r-moodle:2026-11-23");
+        assert_eq!(lista[2].momento_iso, "2026-11-23T18:00:00");
+        assert!(lista[2].es_recordatorio);
+        assert_eq!(lista[3].clave, "t:t-moodle:horas:2026-11-23");
+        assert_eq!(lista[3].momento_iso, "2026-11-23T20:59:00");
+        assert!(!lista[3].es_recordatorio);
     }
 
     static PRUEBA_AGENTE_LOCK: Mutex<()> = Mutex::new(());

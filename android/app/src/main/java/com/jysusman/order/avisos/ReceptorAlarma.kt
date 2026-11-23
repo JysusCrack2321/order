@@ -3,6 +3,7 @@ package com.jysusman.order.avisos
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import com.jysusman.order.datos.PreferenciasOrder
 import com.jysusman.order.datos.PuenteOrderNativo
 import com.jysusman.order.datos.RutasPrivadas
@@ -22,7 +23,11 @@ class ReceptorAlarma : BroadcastReceiver() {
         val pendingResult = goAsync()
         Thread {
             try {
-                PuenteOrderNativo().anotarAviso(RutasPrivadas.registroAvisos(context), clave)
+                runCatching {
+                    PuenteOrderNativo().anotarAviso(RutasPrivadas.registroAvisos(context), clave)
+                }.onFailure { err ->
+                    Log.w("ORDER", "No se pudo anotar aviso enviado: ${err.javaClass.simpleName}: ${err.message ?: "sin detalle"}")
+                }
             } finally {
                 pendingResult.finish()
             }

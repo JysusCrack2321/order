@@ -4,6 +4,7 @@ import android.app.AlarmManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 
 class ReceptorArranque : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -20,8 +21,14 @@ class ReceptorArranque : BroadcastReceiver() {
         Thread {
             try {
                 Canales.asegurarCanales(appCtx)
-                Programador.crear(appCtx).reprogramar()
-                TrabajoRespaldo.programar(appCtx)
+                runCatching { Programador.crear(appCtx).reprogramar() }
+                    .onFailure { err ->
+                        Log.w("ORDER", "Error al reprogramar avisos en arranque: ${err.javaClass.simpleName}: ${err.message ?: "sin detalle"}")
+                    }
+                runCatching { TrabajoRespaldo.programar(appCtx) }
+                    .onFailure { err ->
+                        Log.w("ORDER", "Error al programar respaldo en arranque: ${err.javaClass.simpleName}: ${err.message ?: "sin detalle"}")
+                    }
             } finally {
                 pendingResult.finish()
             }

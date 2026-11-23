@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import com.jysusman.order.datos.PreferenciasOrder
 import com.jysusman.order.datos.PuenteOrder
 import com.jysusman.order.datos.PuenteOrderNativo
@@ -15,6 +16,9 @@ import com.jysusman.order.ffi.AvisoProgramableFfi
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
+
+private const val TAG = "ORDER"
 
 interface DespachadorAlarmas {
     fun puedeExactas(): Boolean
@@ -43,7 +47,12 @@ class DespachadorAlarmasAndroid(
 
     override fun programarExacta(clave: String, triggerAtMillis: Long, aviso: AvisoProgramableFfi) {
         val pi = crearPendingIntent(clave, aviso, PendingIntent.FLAG_UPDATE_CURRENT) ?: return
-        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pi)
+        try {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pi)
+        } catch (err: SecurityException) {
+            Log.w(TAG, "Sin permiso de alarma exacta; se programa inexacta (${err.javaClass.simpleName})")
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pi)
+        }
     }
 
     override fun programarInexacta(clave: String, triggerAtMillis: Long, aviso: AvisoProgramableFfi) {
@@ -106,6 +115,7 @@ class Programador(
     private val avisosActivos: () -> Boolean,
     private val relojAhora: () -> LocalDateTime = { LocalDateTime.now() },
     private val zona: () -> ZoneId = { ZoneId.systemDefault() },
+    private val registrarAviso: (String) -> Unit = { msg -> runCatching { Log.w(TAG, msg) } },
 ) {
     /**
      * Recalcula los próximos avisos (ventana de 48 h), cancela las alarmas
@@ -115,7 +125,10 @@ class Programador(
     fun reprogramar(): Int {
         val anteriores = almacenClaves.leer()
         for (clave in anteriores) {
-            despachador.cancelar(clave)
+            runCatching { despachador.cancelar(clave) }
+                .onFailure { err ->
+                    registrarAviso("No se pudo cancelar alarma previa: ${err.javaClass.simpleName}: ${err.message ?: "sin detalle"}")
+                }
         }
 
         if (!avisosActivos()) {
@@ -124,12 +137,13 @@ class Programador(
         }
 
         val ahora = relojAhora()
-        val desdeIso = ahora.format(FORMATO_ISO)
-        val hastaIso = ahora.plusHours(VENTANA_HORAS).format(FORMATO_ISO)
+        val desdeIso = ahora.format(FORMATO_ISO_SEGUNDOS)
+        val hastaIso = ahora.plusHours(VENTANA_HORAS).format(FORMATO_ISO_SEGUNDOS)
 
         val avisos = runCatching {
             puente.proximosAvisos(rutaDatos(), desdeIso, hastaIso, rutaRegistro())
-        }.getOrElse {
+        }.getOrElse { err ->
+            registrarAviso("No se pudieron consultar próximos avisos (${err.javaClass.simpleName}): ${err.message ?: "sin detalle"}")
             almacenClaves.guardar(emptySet())
             return 0
         }
@@ -140,17 +154,27 @@ class Programador(
         val usarExactas = despachador.puedeExactas()
 
         for (aviso in avisos) {
-            val momento = runCatching { LocalDateTime.parse(aviso.momentoIso, FORMATO_ISO) }.getOrNull()
+            val momento = runCatching { LocalDateTime.parse(aviso.momentoIso, FORMATO_ISO_LECTURA) }
+                .onFailure { err ->
+                    registrarAviso("Momento de aviso inválido (${aviso.momentoIso}): ${err.javaClass.simpleName}")
+                }
+                .getOrNull()
                 ?: continue
             val triggerAtMillis = momento.atZone(zoneId).toInstant().toEpochMilli()
             if (triggerAtMillis <= ahoraMillis) continue
 
-            if (usarExactas) {
-                despachador.programarExacta(aviso.clave, triggerAtMillis, aviso)
-            } else {
-                despachador.programarInexacta(aviso.clave, triggerAtMillis, aviso)
+            val programado = runCatching {
+                if (usarExactas) {
+                    despachador.programarExacta(aviso.clave, triggerAtMillis, aviso)
+                } else {
+                    despachador.programarInexacta(aviso.clave, triggerAtMillis, aviso)
+                }
+            }.onFailure { err ->
+                registrarAviso("No se pudo programar alarma (${err.javaClass.simpleName}): ${err.message ?: "sin detalle"}")
+            }.isSuccess
+            if (programado) {
+                nuevas.add(aviso.clave)
             }
-            nuevas.add(aviso.clave)
         }
 
         almacenClaves.guardar(nuevas)
@@ -159,7 +183,9 @@ class Programador(
 
     companion object {
         private const val VENTANA_HORAS = 48L
-        private val FORMATO_ISO: DateTimeFormatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
+        private val FORMATO_ISO_SEGUNDOS: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss", Locale.ROOT)
+        private val FORMATO_ISO_LECTURA: DateTimeFormatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
 
         fun crear(context: Context): Programador {
             val appCtx = context.applicationContext
@@ -176,6 +202,7 @@ class Programador(
                 },
                 rutaRegistro = { RutasPrivadas.registroAvisos(appCtx) },
                 avisosActivos = { PreferenciasOrder.avisosActivos(appCtx) },
+                registrarAviso = { msg -> Log.w(TAG, msg) },
             )
         }
     }

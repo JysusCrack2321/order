@@ -1379,7 +1379,7 @@ class Repositorio(
         }
 
         resSync.onSuccess { r ->
-            val huboCambios = r.creadas > 0u || r.actualizadas > 0u
+            val huboCambios = r.creadas > 0u || r.actualizadas > 0u || r.hechas > 0u
             if (huboCambios) {
                 mutex.withLock {
                     val actual = _estado.value
@@ -1682,8 +1682,9 @@ class Repositorio(
                 }
             }
             res.onSuccess { (resumen, lista, est) ->
+                val huboCambioRemoto = est.secuenciaCambio > ultimaSecuenciaP2p
                 ultimaSecuenciaP2p = est.secuenciaCambio
-                if (resumen.cambiosLocales) {
+                if (resumen.cambiosLocales || huboCambioRemoto) {
                     recargar()
                 }
                 _estado.update {
