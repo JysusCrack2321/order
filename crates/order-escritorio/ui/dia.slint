@@ -5,9 +5,11 @@
 // aquí solo se dibuja. Colores, tamaños y tipografía salen siempre de Tema.
 
 import { Tema } from "tema.slint";
+import { TituloTachado } from "formularios.slint";
 import { TareaUI } from "pendientes.slint";
 import {
     ClaseInicioUI,
+    ElementoDiaUI,
     FilaRecordatorio,
     FilaTarea,
     RecordatorioInicioUI,
@@ -45,13 +47,14 @@ component BotonPaso inherits Rectangle {
     }
 }
 
-/// Una clase en la línea de tiempo: hora, eje con su punto y el bloque. El
-/// punto y el bloque van en el color de la materia.
+/// Una clase o evento en la línea de tiempo: hora, eje con su punto y el bloque.
 component FilaTiempo inherits Rectangle {
     in property <string> hora;
     in property <string> materia;
     in property <string> lugar;
     in property <int> tono: 0;
+    in property <bool> es-evento: false;
+    in property <bool> hecha: false;
 
     callback clicked();
 
@@ -72,7 +75,7 @@ component FilaTiempo inherits Rectangle {
         vertical-alignment: center;
         text: root.hora;
         font-size: Tema.tamano-pequeno;
-        color: ta.has-hover ? Tema.acento : Tema.texto-suave;
+        color: ta.has-hover ? Tema.acento : (root.hecha ? Tema.texto-tenue : Tema.texto-suave);
     }
 
     // Eje vertical de la línea de tiempo.
@@ -84,36 +87,58 @@ component FilaTiempo inherits Rectangle {
         background: Tema.borde;
     }
 
-    // Punto de la clase, centrado en el eje.
+    // Punto de la clase (sólido) o evento (aro hueco), centrado en el eje.
     Rectangle {
         x: Tema.ancho-hora-dia - (Tema.alto-punto - Tema.linea) / 2;
         y: (parent.height - Tema.alto-punto) / 2;
         width: Tema.alto-punto;
         height: Tema.alto-punto;
         border-radius: Tema.alto-punto / 2;
-        background: Tema.materias[root.tono];
+        background: root.es-evento ? Tema.fondo : Tema.materias[root.tono];
+        border-width: root.es-evento ? Tema.trazo : 0px;
+        border-color: root.hecha ? Tema.texto-tenue : Tema.materias[root.tono];
     }
 
-    // Bloque de la clase.
+    // Bloque de la clase o del evento.
     Rectangle {
         x: Tema.ancho-hora-dia + Tema.ancho-linea-tiempo;
         y: Tema.espacio-xs;
         width: parent.width - self.x - Tema.espacio-md;
         height: parent.height - 2 * Tema.espacio-xs;
         border-radius: Tema.radio-pequeno;
-        background: ta.has-hover ? Tema.fondo-hover : Tema.materias-fondo[root.tono];
+        background: ta.has-hover
+            ? Tema.fondo-hover
+            : (root.es-evento ? Tema.fondo-panel-alto : Tema.materias-fondo[root.tono]);
         border-width: Tema.linea;
-        border-color: ta.has-hover ? Tema.materias[root.tono] : Tema.borde-clase;
+        border-color: ta.has-hover
+            ? Tema.materias[root.tono]
+            : (root.es-evento
+                ? (root.hecha ? Tema.borde-suave : Tema.materias[root.tono])
+                : Tema.borde-clase);
 
         HorizontalLayout {
             width: parent.width;
             height: parent.height;
             padding-left: Tema.espacio-md;
             padding-right: Tema.espacio-md;
-            spacing: Tema.espacio-md;
+            spacing: Tema.espacio-sm;
             cross-axis-alignment: center;
 
-            Text {
+            if root.es-evento : Text {
+                text: "◷";
+                font-size: Tema.tamano-texto;
+                color: root.hecha ? Tema.texto-tenue : Tema.materias[root.tono];
+                vertical-alignment: center;
+            }
+
+            if root.es-evento : TituloTachado {
+                horizontal-stretch: 1;
+                texto: root.materia;
+                tachada: root.hecha;
+                tinta: root.hecha ? Tema.texto-tenue : Tema.materias[root.tono];
+            }
+
+            if !root.es-evento : Text {
                 horizontal-stretch: 1;
                 text: root.materia;
                 font-size: Tema.tamano-texto;
@@ -139,6 +164,7 @@ export component DiaVista inherits Rectangle {
     in property <bool> es-hoy: false;
 
     in property <[ClaseInicioUI]> clases;
+    in property <[ElementoDiaUI]> elementos;
     in property <[TareaUI]> tareas;
     in property <[RecordatorioInicioUI]> recordatorios;
 
@@ -146,9 +172,11 @@ export component DiaVista inherits Rectangle {
     callback siguiente();
     callback ir-hoy();
     callback editar-clase(string);
+    callback editar-evento(string);
     callback editar-tarea(string);
     callback editar-recordatorio(string);
     callback nueva-clase();
+    callback nuevo-evento();
     callback nueva-tarea();
 
     background: transparent;
@@ -204,6 +232,19 @@ export component DiaVista inherits Rectangle {
             }
 
             Rectangle { horizontal-stretch: 1; }
+
+            Text {
+                text: "+  Evento";
+                font-size: Tema.tamano-pequeno;
+                color: nuevo-evento-ta.has-hover ? Tema.acento : Tema.texto-suave;
+                vertical-alignment: center;
+                height: Tema.alto-boton;
+
+                nuevo-evento-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.nuevo-evento(); }
+                }
+            }
 
             Text {
                 text: "+  Clase";
@@ -268,22 +309,30 @@ export component DiaVista inherits Rectangle {
                 spacing: Tema.espacio-sm;
 
                 Seccion {
-                    texto: "CLASES";
-                    detalle: root.clases.length == 0
+                    texto: "CLASES Y EVENTOS";
+                    detalle: root.elementos.length == 0
                         ? ""
-                        : (root.clases.length == 1 ? "1 clase" : "\{root.clases.length} clases");
+                        : (root.elementos.length == 1 ? "1 bloque" : "\{root.elementos.length} bloques");
                 }
 
-                if root.clases.length == 0 : Vacio {
-                    texto: "sin clases este día";
+                if root.elementos.length == 0 : Vacio {
+                    texto: "sin clases ni eventos este día";
                 }
 
-                for clase in root.clases : FilaTiempo {
-                    hora: clase.hora;
-                    materia: clase.materia;
-                    lugar: clase.lugar;
-                    tono: clase.tono;
-                    clicked => { root.editar-clase(clase.id); }
+                for elem in root.elementos : FilaTiempo {
+                    hora: elem.hora;
+                    materia: elem.titulo;
+                    lugar: elem.detalle;
+                    tono: elem.tono;
+                    es-evento: elem.es-evento;
+                    hecha: elem.hecha;
+                    clicked => {
+                        if elem.es-evento {
+                            root.editar-evento(elem.id);
+                        } else {
+                            root.editar-clase(elem.id);
+                        }
+                    }
                 }
 
                 Rectangle { height: Tema.espacio-md; }

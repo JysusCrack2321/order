@@ -2,6 +2,8 @@
 // Los colores, tamaños y la tipografía salen siempre de Tema.
 
 import { Tema } from "tema.slint";
+import { EventoUI } from "pendientes.slint";
+import { TituloTachado } from "formularios.slint";
 import { ScrollView } from "std-widgets.slint";
 
 /// Una clase ya colocada en un día. `inicio` y `fin` son minutos desde la
@@ -29,6 +31,7 @@ export struct DiaUI {
     fecha: string,
     es-hoy: bool,
     bloques: [BloqueUI],
+    eventos: [EventoUI],
     tareas: [TareaDiaUI],
     extra: string,
 }
@@ -118,6 +121,35 @@ component BotonNuevaClase inherits Rectangle {
     }
 }
 
+/// Botón para crear un evento de un solo día desde la vista Semana.
+component BotonNuevoEvento inherits Rectangle {
+    callback clicked();
+
+    width: Tema.ancho-boton-evento;
+    height: Tema.ancho-boton-nav;
+    border-radius: Tema.radio-pequeno;
+    background: ta.has-hover ? Tema.acento-tenue : transparent;
+    border-width: Tema.linea;
+    border-color: ta.has-hover ? Tema.acento : Tema.acento-suave;
+
+    Text {
+        text: "+  Evento";
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-family: Tema.fuente-titulos;
+        font-size: Tema.tamano-pequeno;
+        letter-spacing: Tema.letra-normal;
+        color: ta.has-hover ? Tema.acento : Tema.texto-suave;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
 export component SemanaVista inherits Rectangle {
     in property <[DiaUI]> dias;
     in property <string> etiqueta;
@@ -135,6 +167,8 @@ export component SemanaVista inherits Rectangle {
     callback ir-hoy();
     callback nueva-clase();
     callback editar-clase(string);
+    callback nuevo-evento();
+    callback editar-evento(string);
 
     background: transparent;
 
@@ -189,6 +223,10 @@ export component SemanaVista inherits Rectangle {
             }
 
             Rectangle { horizontal-stretch: 1; }
+
+            BotonNuevoEvento {
+                clicked => { root.nuevo-evento(); }
+            }
 
             BotonNuevaClase {
                 clicked => { root.nueva-clase(); }
@@ -347,6 +385,60 @@ export component SemanaVista inherits Rectangle {
                                         text: bloque.lugar;
                                         font-size: Tema.tamano-hora;
                                         color: Tema.texto-tenue;
+                                        overflow: elide;
+                                    }
+                                }
+                            }
+
+                            for evento in dia.eventos : Rectangle {
+                                x: Tema.espacio-xs + Tema.linea;
+                                y: (evento.inicio - root.base * 60) * Tema.alto-minuto + Tema.linea;
+                                width: parent.width - 2 * Tema.espacio-xs - Tema.trazo;
+                                height: max(24px, (evento.fin - evento.inicio) * Tema.alto-minuto - Tema.trazo);
+                                border-radius: Tema.radio-pequeno;
+                                background: evento-ta.has-hover
+                                    ? Tema.fondo-hover
+                                    : Tema.fondo-panel-alto;
+                                border-width: Tema.trazo;
+                                border-color: evento-ta.has-hover
+                                    ? Tema.materias[evento.tono]
+                                    : (evento.tarea-hecha ? Tema.borde-suave : Tema.materias[evento.tono]);
+                                clip: true;
+
+                                evento-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.editar-evento(evento.id); }
+                                }
+
+                                VerticalLayout {
+                                    x: Tema.espacio-sm;
+                                    y: Tema.desplazamiento-bloque;
+                                    width: parent.width - 2 * Tema.espacio-sm;
+                                    spacing: Tema.separacion-linea;
+
+                                    HorizontalLayout {
+                                        spacing: Tema.espacio-xs;
+                                        cross-axis-alignment: center;
+
+                                        Text {
+                                            text: "◷";
+                                            font-size: Tema.tamano-bloque;
+                                            color: evento.tarea-hecha ? Tema.texto-tenue : Tema.materias[evento.tono];
+                                            vertical-alignment: center;
+                                        }
+
+                                        TituloTachado {
+                                            horizontal-stretch: 1;
+                                            texto: evento.titulo;
+                                            tachada: evento.tarea-hecha;
+                                            tinta: evento.tarea-hecha ? Tema.texto-tenue : Tema.materias[evento.tono];
+                                        }
+                                    }
+
+                                    Text {
+                                        text: evento.hora;
+                                        font-size: Tema.tamano-hora;
+                                        color: evento.tarea-hecha ? Tema.texto-tenue : Tema.texto-suave;
                                         overflow: elide;
                                     }
                                 }

@@ -10,11 +10,12 @@
 
 import { Tema } from "tema.slint";
 import { PildoraMateria } from "materias.slint";
-import { TareaUI } from "pendientes.slint";
+import { EventoUI, FilaReagendar, TareaUI } from "pendientes.slint";
 import {
     ClaseInicioUI,
     ConteoMateriaUI,
     FilaClase,
+    FilaEvento,
     FilaRecordatorio,
     FilaTarea,
     RecordatorioInicioUI,
@@ -27,6 +28,8 @@ export component InicioVista inherits Rectangle {
     in property <string> fecha-larga: "";
 
     in property <[ClaseInicioUI]> clases;
+    in property <[EventoUI]> eventos;
+    in property <[EventoUI]> por-reagendar;
     in property <bool> hay-siguiente: false;
     in property <ClaseInicioUI> siguiente;
 
@@ -38,7 +41,10 @@ export component InicioVista inherits Rectangle {
 
     callback editar-tarea(string);
     callback editar-clase(string);
+    callback editar-evento(string);
     callback editar-recordatorio(string);
+    callback marcar-tarea(string, bool);
+    callback reagendar-evento(string);
 
     background: transparent;
 
@@ -99,15 +105,27 @@ export component InicioVista inherits Rectangle {
                     horizontal-stretch: 3;
                     spacing: Tema.espacio-md;
 
+                    if root.por-reagendar.length > 0 : Tarjeta {
+                        titulo: "¿TERMINASTE?";
+                        detalle: "\{root.por-reagendar.length}";
+                        tono: Tema.acento;
+
+                        for ev in root.por-reagendar : FilaReagendar {
+                            evento: ev;
+                            marcar-hecha => { root.marcar-tarea(ev.tarea-id, true); }
+                            reagendar => { root.reagendar-evento(ev.id); }
+                        }
+                    }
+
                     Tarjeta {
                         titulo: "HOY";
-                        detalle: root.clases.length == 0
+                        detalle: (root.clases.length + root.eventos.length) == 0
                             ? ""
-                            : (root.clases.length == 1 ? "1 clase" : "\{root.clases.length} clases");
+                            : "\{root.clases.length + root.eventos.length}";
                         tono: Tema.acento-hoy;
 
-                        if root.clases.length == 0 : Vacio {
-                            texto: "sin clases hoy";
+                        if root.clases.length == 0 && root.eventos.length == 0 : Vacio {
+                            texto: "sin clases ni eventos hoy";
                         }
 
                         for clase in root.clases : FilaClase {
@@ -116,6 +134,11 @@ export component InicioVista inherits Rectangle {
                             lugar: clase.lugar;
                             tono: clase.tono;
                             clicked => { root.editar-clase(clase.id); }
+                        }
+
+                        for ev in root.eventos : FilaEvento {
+                            evento: ev;
+                            clicked => { root.editar-evento(ev.id); }
                         }
 
                         // La siguiente clase, enmarcada para que se vea de lejos.

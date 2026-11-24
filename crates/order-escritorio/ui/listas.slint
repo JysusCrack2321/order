@@ -5,7 +5,7 @@
 import { Tema } from "tema.slint";
 import { PildoraMateria } from "materias.slint";
 import { TituloTachado } from "formularios.slint";
-import { TareaUI } from "pendientes.slint";
+import { EventoUI, TareaUI } from "pendientes.slint";
 
 /// Una clase colocada en un día, con su hora ya escrita ("07:00–09:00" o
 /// "jue 26 nov · 09:00–11:00" cuando es de otro día). `tono` es el índice del
@@ -23,6 +23,17 @@ export struct RecordatorioInicioUI {
     id: string,
     texto: string,
     cuando: string,
+}
+
+/// Elemento unificado para la línea de tiempo cronológica de Día.
+export struct ElementoDiaUI {
+    es-evento: bool,
+    id: string,
+    titulo: string,
+    detalle: string,
+    hora: string,
+    tono: int,
+    hecha: bool,
 }
 
 /// Cuántas tareas quedan de una materia.
@@ -308,6 +319,64 @@ export component FilaRecordatorio inherits Rectangle {
             color: Tema.texto-suave;
             vertical-alignment: center;
             overflow: elide;
+        }
+    }
+}
+
+/// Un evento de un solo día en las listas de resumen (Inicio).
+export component FilaEvento inherits Rectangle {
+    in property <EventoUI> evento;
+
+    callback clicked();
+
+    height: Tema.alto-fila-tarea;
+    border-radius: Tema.radio-pequeno;
+    border-width: Tema.linea;
+    border-color: ta.has-hover
+        ? (root.evento.tarea-hecha ? Tema.borde-fuerte : Tema.materias[root.evento.tono])
+        : Tema.borde-suave;
+    background: ta.has-hover ? Tema.fondo-hover : Tema.fondo-panel-alto;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding-left: Tema.espacio-sm;
+        padding-right: Tema.espacio-sm;
+        spacing: Tema.espacio-md;
+        cross-axis-alignment: center;
+
+        Text {
+            text: "◷";
+            font-size: Tema.tamano-texto;
+            color: root.evento.tarea-hecha ? Tema.texto-tenue : Tema.materias[root.evento.tono];
+            vertical-alignment: center;
+        }
+
+        Text {
+            width: Tema.ancho-hora-fila;
+            text: root.evento.hora;
+            font-size: Tema.tamano-pequeno;
+            color: root.evento.tarea-hecha ? Tema.texto-tenue : Tema.texto-suave;
+            vertical-alignment: center;
+        }
+
+        TituloTachado {
+            horizontal-stretch: 1;
+            texto: root.evento.titulo;
+            tachada: root.evento.tarea-hecha;
+            tinta: root.evento.tarea-hecha
+                ? Tema.texto-tenue
+                : (root.evento.tiene-tarea ? Tema.materias[root.evento.tono] : Tema.texto);
+        }
+
+        if root.evento.materia != "" : PildoraMateria {
+            texto: root.evento.materia;
+            tono: root.evento.tono;
         }
     }
 }

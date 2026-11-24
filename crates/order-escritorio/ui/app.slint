@@ -3,10 +3,10 @@
 
 import { Tema } from "tema.slint";
 import { SemanaVista, DiaUI } from "semana.slint";
-import { PendientesVista, TareaUI } from "pendientes.slint";
+import { PendientesVista, EventoUI, TareaUI } from "pendientes.slint";
 import { InicioVista } from "inicio.slint";
 import { DiaVista } from "dia.slint";
-import { ClaseInicioUI, ConteoMateriaUI, RecordatorioInicioUI } from "listas.slint";
+import { ClaseInicioUI, ConteoMateriaUI, ElementoDiaUI, RecordatorioInicioUI } from "listas.slint";
 import { Marco, Campo, CampoBoton, CampoClave, Chip, Casilla, Boton, Etiqueta, RecordatorioUI, CalendarioUI, DispositivoUI, AtajoUI } from "formularios.slint";
 import { Selector, CeldaDia, MateriaUI } from "selectores.slint";
 import { AccionUI, AdjuntoUI, BarraAgente, PanelAgente, TarjetaConexionAgente } from "agente.slint";
@@ -223,6 +223,8 @@ export component AppWindow inherits Window {
     // --- Inicio (el tablero del día) --------------------------------------
     in property <string> inicio-fecha: "";
     in property <[ClaseInicioUI]> inicio-clases;
+    in property <[EventoUI]> inicio-eventos;
+    in property <[EventoUI]> inicio-por-reagendar;
     in property <bool> inicio-hay-siguiente: false;
     in property <ClaseInicioUI> inicio-siguiente;
     in property <[TareaUI]> inicio-vencidas;
@@ -235,6 +237,7 @@ export component AppWindow inherits Window {
     in property <string> dia-etiqueta: "";
     in property <bool> dia-es-hoy: false;
     in property <[ClaseInicioUI]> dia-clases;
+    in property <[ElementoDiaUI]> dia-elementos;
     in property <[TareaUI]> dia-tareas;
     in property <[RecordatorioInicioUI]> dia-recordatorios;
 
@@ -251,7 +254,7 @@ export component AppWindow inherits Window {
     in property <bool> pm-filtro-activo: false;
 
     // --- Estado del formulario abierto -----------------------------------
-    // 0 = ninguno · 1 = tarea · 2 = clase · 3 = ajustes · 4 = recordatorio · 5 = agente · 6 = moodle
+    // 0 = ninguno · 1 = tarea · 2 = clase · 3 = ajustes · 4 = recordatorio · 5 = agente · 6 = moodle · 10 = evento
     in-out property <int> formulario: 0;
     in property <string> form-encabezado: "";
     in property <string> form-sub: "";
@@ -259,12 +262,12 @@ export component AppWindow inherits Window {
     in property <string> form-error: "";
     // Campo marcado por la validación. El significado depende del formulario:
     // tarea (1 título, 2 fecha, 3 hora), clase (1 materia, 2 inicio, 3 fin),
-    // recordatorio (1 texto, 2 hora, 4 días), ajustes (1/2 semestre, 3 hora
-    // del aviso, 4 horas antes).
+    // evento (1 título, 2 fecha, 3 inicio, 4 fin), recordatorio (1 texto, 2 hora, 4 días),
+    // ajustes (1/2 semestre, 3 hora del aviso, 4 horas antes).
     in property <int> campo-mal: 0;
     in-out property <bool> form-confirma: false;
 
-    // Campos de tarea y de clase (solo hay un formulario abierto a la vez).
+    // Campos de tarea, clase y evento (solo hay un formulario abierto a la vez).
     in-out property <string> f-titulo: "";
     in-out property <string> f-materia: "";
     in-out property <string> f-fecha: "";
@@ -273,6 +276,9 @@ export component AppWindow inherits Window {
     in-out property <string> f-lugar: "";
     in-out property <bool> f-hecha: false;
     in property <string> f-enlace: "";
+    in property <string> f-evento-tarea: "";
+    in-out property <string> f-nota: "";
+    in property <[EventoUI]> f-tarea-eventos: [];
 
     // Días de la clase: se eligen varios (al menos uno).
     in-out property <bool> f-lun: false;
@@ -450,6 +456,10 @@ export component AppWindow inherits Window {
     callback filtro-limpiar();
     callback nueva-clase();
     callback editar-clase(string);
+    callback nuevo-evento();
+    callback editar-evento(string);
+    callback reagendar-evento(string);
+    callback agendar-tarea();
     callback nuevo-recordatorio();
     callback editar-recordatorio(string);
     callback guardar-formulario();
@@ -682,6 +692,8 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
                     fecha-larga: root.inicio-fecha;
                     clases: root.inicio-clases;
+                    eventos: root.inicio-eventos;
+                    por-reagendar: root.inicio-por-reagendar;
                     hay-siguiente: root.inicio-hay-siguiente;
                     siguiente: root.inicio-siguiente;
                     vencidas: root.inicio-vencidas;
@@ -692,7 +704,10 @@ export component AppWindow inherits Window {
 
                     editar-tarea(id) => { root.editar-tarea(id); }
                     editar-clase(id) => { root.editar-clase(id); }
+                    editar-evento(id) => { root.editar-evento(id); }
                     editar-recordatorio(id) => { root.editar-recordatorio(id); }
+                    marcar-tarea(id, hecha) => { root.marcar-hecha(id, hecha); }
+                    reagendar-evento(id) => { root.reagendar-evento(id); }
                 }
 
                 if root.pestana == 1 : DiaVista {
@@ -700,6 +715,7 @@ export component AppWindow inherits Window {
                     etiqueta: root.dia-etiqueta;
                     es-hoy: root.dia-es-hoy;
                     clases: root.dia-clases;
+                    elementos: root.dia-elementos;
                     tareas: root.dia-tareas;
                     recordatorios: root.dia-recordatorios;
 
@@ -708,8 +724,10 @@ export component AppWindow inherits Window {
                     ir-hoy => { root.dia-hoy(); }
                     editar-tarea(id) => { root.editar-tarea(id); }
                     editar-clase(id) => { root.editar-clase(id); }
+                    editar-evento(id) => { root.editar-evento(id); }
                     editar-recordatorio(id) => { root.editar-recordatorio(id); }
                     nueva-clase => { root.nueva-clase(); }
+                    nuevo-evento => { root.nuevo-evento(); }
                     nueva-tarea => { root.nueva-tarea(); }
                 }
 
@@ -730,11 +748,14 @@ export component AppWindow inherits Window {
                     ir-hoy => { root.ir-hoy(); }
                     nueva-clase => { root.nueva-clase(); }
                     editar-clase(id) => { root.editar-clase(id); }
+                    nuevo-evento => { root.nuevo-evento(); }
+                    editar-evento(id) => { root.editar-evento(id); }
                 }
 
                 if root.pestana == 3 : PendientesVista {
                     vertical-stretch: 1;
                     tareas: root.tareas;
+                    por-reagendar: root.inicio-por-reagendar;
                     resumen: root.resumen-pendientes;
                     pm-materia: root.pm-materia;
                     pm-fecha: root.pm-fecha;
@@ -747,6 +768,7 @@ export component AppWindow inherits Window {
 
                     editar(id) => { root.editar-tarea(id); }
                     marcar(id, hecha) => { root.marcar-hecha(id, hecha); }
+                    reagendar-evento(id) => { root.reagendar-evento(id); }
                     filtro-materia => { root.abrir-materia(21); }
                     filtro-fecha(opcion) => { root.filtro-fecha(opcion); }
                     filtro-hechas(mostrar) => { root.filtro-hechas(mostrar); }
@@ -857,7 +879,9 @@ export component AppWindow inherits Window {
             if root.formulario == 1 : Marco {
                 encabezado: root.form-encabezado;
                 sub: root.form-edita ? "Los cambios se guardan en order.toml." : "Se agrega al final de order.toml.";
-                alto-panel: root.form-edita && root.f-enlace != "" ? Tema.alto-panel-tarea-enlace : Tema.alto-panel-tarea;
+                alto-panel: root.form-edita
+                    ? (root.f-tarea-eventos.length > 0 || root.f-enlace != "" ? Tema.alto-panel-tarea-agendar : Tema.alto-panel-tarea-enlace)
+                    : Tema.alto-panel-tarea;
                 error: root.form-error;
                 confirma: root.form-confirma;
                 pregunta-confirma: "¿Borrar esta tarea del archivo?";
@@ -929,10 +953,64 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    if root.form-edita && root.f-enlace != "" : Boton {
-                        texto: "Abrir en Moodle";
-                        width: Tema.ancho-boton-largo;
-                        clicked => { root.abrir-enlace-tarea(); }
+                    if root.form-edita : HorizontalLayout {
+                        spacing: Tema.espacio-sm;
+
+                        Boton {
+                            texto: "Agendar";
+                            width: Tema.ancho-boton-form;
+                            clicked => { root.agendar-tarea(); }
+                        }
+
+                        if root.f-enlace != "" : Boton {
+                            texto: "Abrir en Moodle";
+                            width: Tema.ancho-boton-largo;
+                            clicked => { root.abrir-enlace-tarea(); }
+                        }
+                    }
+
+                    if root.form-edita && root.f-tarea-eventos.length > 0 : VerticalLayout {
+                        spacing: Tema.espacio-xs;
+
+                        Etiqueta {
+                            text: "Eventos próximos";
+                        }
+
+                        for ev in root.f-tarea-eventos : Rectangle {
+                            height: Tema.alto-fila-compacta;
+                            border-radius: Tema.radio-pequeno;
+                            background: ev-ta.has-hover ? Tema.fondo-hover : Tema.fondo-campo;
+                            border-width: Tema.linea;
+                            border-color: Tema.borde-suave;
+
+                            ev-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.editar-evento(ev.id); }
+                            }
+
+                            HorizontalLayout {
+                                width: parent.width;
+                                height: parent.height;
+                                padding-left: Tema.espacio-sm;
+                                padding-right: Tema.espacio-sm;
+                                spacing: Tema.espacio-sm;
+                                cross-axis-alignment: center;
+
+                                Text {
+                                    text: "◷";
+                                    font-size: Tema.tamano-pequeno;
+                                    color: Tema.acento;
+                                }
+
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: ev.fecha + " · " + ev.hora;
+                                    font-size: Tema.tamano-pequeno;
+                                    color: Tema.texto;
+                                    overflow: elide;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2119,6 +2197,77 @@ export component AppWindow inherits Window {
                             width: Tema.ancho-boton-restaurar;
                             clicked => { root.atajos-restaurar(); }
                         }
+                    }
+                }
+            }
+
+            // --- Evento de un solo día ------------------------------------
+            if root.formulario == 10 : Marco {
+                encabezado: root.form-encabezado;
+                sub: root.f-evento-tarea != ""
+                    ? "Ligado a la tarea: " + root.f-evento-tarea
+                    : "Bloque de un solo día en order.toml.";
+                alto-panel: Tema.alto-panel-evento;
+                error: root.form-error;
+                confirma: root.form-confirma;
+                pregunta-confirma: "¿Borrar este evento del archivo?";
+                puede-borrar: root.form-edita;
+
+                guardar => { root.guardar-formulario(); }
+                cancelar => { root.cancelar-formulario(); }
+                pedir-borrar => { root.form-confirma = true; }
+                confirmar-borrado => { root.confirmar-borrado(); }
+                no-borrar => { root.form-confirma = false; }
+
+                VerticalLayout {
+                    spacing: Tema.espacio-md;
+
+                    Campo {
+                        etiqueta: "Título";
+                        texto <=> root.f-titulo;
+                        pista: "Estudiar Control";
+                        mal: root.campo-mal == 1;
+                        accepted => { root.guardar-formulario(); }
+                    }
+
+                    CampoBoton {
+                        etiqueta: "Fecha";
+                        valor: root.f-fecha;
+                        pista: "Elegir fecha";
+                        glifo: "▦";
+                        mal: root.campo-mal == 2;
+                        clicked => { root.abrir-fecha(2); }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Tema.espacio-md;
+
+                        CampoBoton {
+                            horizontal-stretch: 1;
+                            etiqueta: "Inicio";
+                            valor: root.f-hora;
+                            pista: "Elegir hora";
+                            glifo: "◷";
+                            mal: root.campo-mal == 3;
+                            clicked => { root.abrir-hora(3); }
+                        }
+
+                        CampoBoton {
+                            horizontal-stretch: 1;
+                            etiqueta: "Fin";
+                            valor: root.f-fin;
+                            pista: "Elegir hora";
+                            glifo: "◷";
+                            mal: root.campo-mal == 4;
+                            clicked => { root.abrir-hora(4); }
+                        }
+                    }
+
+                    Campo {
+                        etiqueta: "Nota (opcional)";
+                        texto <=> root.f-nota;
+                        pista: "Capítulo 3, sala de estudio…";
+                        accepted => { root.guardar-formulario(); }
                     }
                 }
             }

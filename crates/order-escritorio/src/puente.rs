@@ -28,7 +28,7 @@ use order_core::conflictos::{self, Conflicto};
 use order_core::filtros::{Filtro, TipoFecha};
 use order_core::ical::{self, config::CalendarioVista};
 use order_core::modelo::{
-    self, Ajustes, Clase, Datos, Dia, ErrorDatos, FORMATO_FECHA, Recordatorio, Tarea,
+    self, Ajustes, Clase, Datos, Dia, ErrorDatos, Evento, FORMATO_FECHA, Recordatorio, Tarea,
 };
 use order_core::moodle::{self, EstadoMoodle};
 use order_core::ops;
@@ -74,6 +74,7 @@ enum Edicion {
     Ninguna,
     Tarea(String),
     Clase(String),
+    Evento { id: String, tarea_id: String },
     Recordatorio(String),
     Ajustes,
     Agente,
@@ -100,6 +101,13 @@ enum FormSnapshot {
         inicio: String,
         fin: String,
         lugar: String,
+    },
+    Evento {
+        titulo: String,
+        fecha: String,
+        inicio: String,
+        fin: String,
+        nota: String,
     },
     Ajustes {
         sin_semestre: bool,
@@ -330,6 +338,8 @@ struct Vista {
     recordatorios: Vec<RecordatorioUI>,
     inicio_fecha: String,
     inicio_clases: Vec<ClaseInicioUI>,
+    inicio_eventos: Vec<EventoUI>,
+    inicio_por_reagendar: Vec<EventoUI>,
     inicio_hay_siguiente: bool,
     inicio_siguiente: ClaseInicioUI,
     inicio_vencidas: Vec<TareaUI>,
@@ -340,6 +350,7 @@ struct Vista {
     dia_etiqueta: String,
     dia_es_hoy: bool,
     dia_clases: Vec<ClaseInicioUI>,
+    dia_elementos: Vec<ElementoDiaUI>,
     dia_tareas: Vec<TareaUI>,
     dia_recordatorios: Vec<RecordatorioInicioUI>,
     filtro_materia: String,
@@ -663,6 +674,59 @@ fn conectar(ui: &AppWindow) {
         match clase_por_id(&id) {
             Some(clase) => abrir_clase(&ui, Some(&clase)),
             None => aviso(&ui, "Esa clase ya no está en el archivo."),
+        }
+    });
+
+    // --- Eventos ---------------------------------------------------------
+    let debil = ui.as_weak();
+    ui.on_nuevo_evento(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        let fecha_defecto = if ui.get_pestana() == 1 {
+            con_estado(|estado| estado.dia)
+        } else {
+            Local::now().date_naive()
+        };
+        abrir_evento(&ui, None, fecha_defecto, None, None);
+    });
+
+    let debil = ui.as_weak();
+    ui.on_editar_evento(move |id: SharedString| {
+        let Some(ui) = debil.upgrade() else { return };
+        match evento_por_id(&id) {
+            Some(ev) => abrir_evento(&ui, Some(&ev), ev.fecha, None, None),
+            None => aviso(&ui, "Ese evento ya no está en el archivo."),
+        }
+    });
+
+    let debil = ui.as_weak();
+    ui.on_reagendar_evento(move |id: SharedString| {
+        let Some(ui) = debil.upgrade() else { return };
+        match evento_por_id(&id) {
+            Some(ev) => abrir_evento(&ui, Some(&ev), ev.fecha, None, Some("Reagendar evento")),
+            None => aviso(&ui, "Ese evento ya no está en el archivo."),
+        }
+    });
+
+    let debil = ui.as_weak();
+    ui.on_agendar_tarea(move || {
+        let Some(ui) = debil.upgrade() else { return };
+        let edicion = con_estado(|estado| estado.edicion.clone());
+        if let Edicion::Tarea(tid) = edicion {
+            let titulo = ui.get_f_titulo().to_string();
+            let hoy = Local::now().date_naive();
+            let tarea = tarea_por_id(&tid).or_else(|| {
+                Some(Tarea {
+                    id: tid.clone(),
+                    titulo,
+                    materia: None,
+                    vence: hoy.and_hms_opt(23, 59, 0).unwrap_or_default(),
+                    hecha: false,
+                    hecha_en: None,
+                    origen: None,
+                    enlace: None,
+                })
+            });
+            abrir_evento(&ui, None, hoy, tarea.as_ref(), None);
         }
     });
 
@@ -1291,7 +1355,7 @@ fn abrir_tarea(ui: &AppWindow, tarea: Option<&Tarea>) {
         ),
     };
 
-    con_estado(|estado| estado.edicion = Edicion::Tarea(id));
+    con_estado(|estado| estado.edicion = Edicion::Tarea(id.clone()));
     ui.set_form_encabezado(
         if tarea.is_some() {
             "Editar tarea"
@@ -1307,6 +1371,24 @@ fn abrir_tarea(ui: &AppWindow, tarea: Option<&Tarea>) {
     ui.set_f_hora(hora.into());
     ui.set_f_hecha(hecha);
     ui.set_f_enlace(enlace.into());
+    let eventos_tarea: Vec<EventoUI> = if !id.is_empty() {
+        let hoy = Local::now().date_naive();
+        con_estado(|estado| {
+            estado
+                .datos
+                .as_ref()
+                .map(|d| {
+                    semana::eventos_de_tarea(d, &id, hoy)
+                        .iter()
+                        .map(|ev| evento_a_ui(ev, hoy))
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+    } else {
+        Vec::new()
+    };
+    ui.set_f_tarea_eventos(ModelRc::new(VecModel::from(eventos_tarea)));
     abrir_panel(ui, 1);
 }
 
@@ -1346,6 +1428,61 @@ fn abrir_clase(ui: &AppWindow, clase: Option<&Clase>) {
     ui.set_f_fin(hora_texto(fin).into());
     ui.set_f_lugar(lugar.into());
     abrir_panel(ui, 2);
+}
+
+fn abrir_evento(
+    ui: &AppWindow,
+    evento: Option<&Evento>,
+    fecha_defecto: NaiveDate,
+    tarea_nueva: Option<&Tarea>,
+    encabezado_override: Option<&str>,
+) {
+    let (id, titulo, fecha, inicio, fin, tarea_id, nota) = match evento {
+        Some(e) => (
+            e.id.clone(),
+            e.titulo.clone(),
+            e.fecha,
+            e.inicio,
+            e.fin,
+            e.tarea.clone().unwrap_or_default(),
+            e.nota.clone().unwrap_or_default(),
+        ),
+        None => (
+            String::new(),
+            tarea_nueva.map(|t| t.titulo.clone()).unwrap_or_default(),
+            fecha_defecto,
+            hora(15, 0),
+            hora(16, 0),
+            tarea_nueva.map(|t| t.id.clone()).unwrap_or_default(),
+            String::new(),
+        ),
+    };
+    let tarea_titulo = if tarea_id.is_empty() {
+        String::new()
+    } else {
+        tarea_por_id(&tarea_id)
+            .map(|t| t.titulo)
+            .or_else(|| tarea_nueva.map(|t| t.titulo.clone()))
+            .unwrap_or_default()
+    };
+
+    con_estado(|estado| estado.edicion = Edicion::Evento { id, tarea_id });
+    let encabezado = encabezado_override.unwrap_or(if evento.is_some() {
+        "Editar evento"
+    } else if !tarea_titulo.is_empty() {
+        "Agendar tarea"
+    } else {
+        "Nuevo evento"
+    });
+    ui.set_form_encabezado(encabezado.into());
+    ui.set_form_edita(evento.is_some());
+    ui.set_f_titulo(titulo.into());
+    ui.set_f_fecha(fecha.format(FORMATO_FECHA).to_string().into());
+    ui.set_f_hora(hora_texto(inicio).into());
+    ui.set_f_fin(hora_texto(fin).into());
+    ui.set_f_nota(nota.into());
+    ui.set_f_evento_tarea(tarea_titulo.into());
+    abrir_panel(ui, 10);
 }
 
 fn abrir_ajustes(ui: &AppWindow) {
@@ -1458,6 +1595,7 @@ fn guardar(ui: &AppWindow) {
     match con_estado(|estado| estado.edicion.clone()) {
         Edicion::Tarea(_) => guardar_tarea(ui),
         Edicion::Clase(_) => guardar_clase(ui),
+        Edicion::Evento { id, tarea_id } => guardar_evento(ui, &id, &tarea_id),
         Edicion::Recordatorio(_) => guardar_recordatorio(ui),
         Edicion::Ajustes => guardar_ajustes(ui),
         Edicion::Agente => guardar_agente(ui),
@@ -1531,6 +1669,33 @@ fn guardar_clase(ui: &AppWindow) {
     };
 
     let resultado = almacen().modificar(|doc| ops::guardar_clase(doc, &clase));
+    terminar(ui, resultado, false);
+}
+
+fn guardar_evento(ui: &AppWindow, id: &str, tarea_id: &str) {
+    let nuevo = match formularios::validar_evento(
+        &ui.get_f_titulo(),
+        &ui.get_f_fecha(),
+        &ui.get_f_hora(),
+        &ui.get_f_fin(),
+        tarea_id,
+        &ui.get_f_nota(),
+    ) {
+        Ok(nuevo) => nuevo,
+        Err(err) => {
+            falta(ui, err.campo, &err.mensaje);
+            return;
+        }
+    };
+
+    let id_limpio = id.trim().to_string();
+    let resultado = almacen().modificar(|doc| {
+        if id_limpio.is_empty() {
+            ops::agregar_evento(doc, &nuevo).map(|_| ())
+        } else {
+            ops::editar_evento(doc, &id_limpio, &nuevo)
+        }
+    });
     terminar(ui, resultado, false);
 }
 
@@ -1647,6 +1812,7 @@ fn borrar(ui: &AppWindow) {
     let resultado = almacen().modificar(|doc| match &edicion {
         Edicion::Tarea(id) => ops::borrar_tarea(doc, id),
         Edicion::Clase(id) => ops::borrar_clase(doc, id),
+        Edicion::Evento { id, .. } => ops::borrar_evento(doc, id),
         Edicion::Recordatorio(id) => ops::borrar_recordatorio(doc, id),
         _ => Err("no hay nada que borrar".to_string()),
     });
@@ -3293,6 +3459,8 @@ fn actualizar(ui: &AppWindow) {
     ui.set_recordatorios(ModelRc::new(VecModel::from(vista.recordatorios)));
     ui.set_inicio_fecha(vista.inicio_fecha.into());
     ui.set_inicio_clases(ModelRc::new(VecModel::from(vista.inicio_clases)));
+    ui.set_inicio_eventos(ModelRc::new(VecModel::from(vista.inicio_eventos)));
+    ui.set_inicio_por_reagendar(ModelRc::new(VecModel::from(vista.inicio_por_reagendar)));
     ui.set_inicio_hay_siguiente(vista.inicio_hay_siguiente);
     ui.set_inicio_siguiente(vista.inicio_siguiente);
     ui.set_inicio_vencidas(ModelRc::new(VecModel::from(vista.inicio_vencidas)));
@@ -3303,6 +3471,7 @@ fn actualizar(ui: &AppWindow) {
     ui.set_dia_etiqueta(vista.dia_etiqueta.into());
     ui.set_dia_es_hoy(vista.dia_es_hoy);
     ui.set_dia_clases(ModelRc::new(VecModel::from(vista.dia_clases)));
+    ui.set_dia_elementos(ModelRc::new(VecModel::from(vista.dia_elementos)));
     ui.set_dia_tareas(ModelRc::new(VecModel::from(vista.dia_tareas)));
     ui.set_dia_recordatorios(ModelRc::new(VecModel::from(vista.dia_recordatorios)));
     ui.set_resumen_pendientes(vista.resumen.into());
@@ -3377,6 +3546,11 @@ fn construir_vista() -> Vista {
                 let termina = bloque.fin.hour() as i32 + i32::from(bloque.fin.minute() > 0);
                 fin = fin.max(termina);
             }
+            for ev in &dia.eventos {
+                base = base.min(ev.inicio.hour() as i32);
+                let termina = ev.fin.hour() as i32 + i32::from(ev.fin.minute() > 0);
+                fin = fin.max(termina);
+            }
         }
 
         let hoy = ahora.date();
@@ -3387,7 +3561,7 @@ fn construir_vista() -> Vista {
         let es_actual = estado.lunes == semana::lunes_de(ahora.date());
         let mostrar_ahora = es_actual && ahora_min >= base * 60 && ahora_min <= fin * 60;
 
-        let dias: Vec<DiaUI> = dias_vista.iter().map(|dia| dia_ui(dia)).collect();
+        let dias: Vec<DiaUI> = dias_vista.iter().map(|dia| dia_ui(dia, hoy)).collect();
         let hay_tareas = dias_vista.iter().any(|dia| !dia.tareas.is_empty());
 
         // El pie cuenta lo pendiente de verdad; la lista, lo que pasa los
@@ -3416,6 +3590,16 @@ fn construir_vista() -> Vista {
                 .clases
                 .iter()
                 .map(|bloque| clase_ui(bloque, hoy, hoy))
+                .collect(),
+            inicio_eventos: resumen_inicio
+                .eventos
+                .iter()
+                .map(|ev| evento_a_ui(ev, hoy))
+                .collect(),
+            inicio_por_reagendar: resumen_inicio
+                .por_reagendar
+                .iter()
+                .map(|ev| evento_a_ui(ev, hoy))
                 .collect(),
             inicio_hay_siguiente: resumen_inicio.siguiente.is_some(),
             inicio_siguiente: resumen_inicio
@@ -3459,6 +3643,7 @@ fn construir_vista() -> Vista {
                 .iter()
                 .map(|bloque| clase_ui(bloque, estado.dia, hoy))
                 .collect(),
+            dia_elementos: elementos_dia_ui(&dia_vista),
             dia_tareas: dia_vista
                 .tareas
                 .iter()
@@ -3626,7 +3811,85 @@ fn recordatorio_ui(recordatorio: &semana::RecordatorioVisto, hoy: NaiveDate) -> 
     }
 }
 
-fn dia_ui(dia: &semana::DiaVista) -> DiaUI {
+fn evento_a_ui(ev: &semana::EventoVisto, hoy: NaiveDate) -> EventoUI {
+    let tono = match ev.materia.as_deref() {
+        Some(m) if !m.trim().is_empty() => tono_materia(m),
+        _ => order_core::presentacion::materias::TONO_SIN_MATERIA,
+    };
+    let fecha_txt = if ev.fecha == hoy {
+        "hoy".to_string()
+    } else if ev.fecha == hoy + TimeDelta::days(1) {
+        "mañana".to_string()
+    } else {
+        format!(
+            "{} {}",
+            textos::nombre_dia(ev.fecha).to_lowercase(),
+            textos::fecha_corta(ev.fecha)
+        )
+    };
+    EventoUI {
+        id: ev.id.clone().into(),
+        titulo: ev.titulo.clone().into(),
+        fecha: fecha_txt.into(),
+        hora: textos::rango_evento(ev.inicio, ev.fin).into(),
+        inicio: minutos(ev.inicio),
+        fin: minutos(ev.fin),
+        materia: ev.materia.clone().unwrap_or_default().into(),
+        tarea_id: ev.tarea_id.clone().unwrap_or_default().into(),
+        tarea_titulo: ev.tarea_titulo.clone().unwrap_or_default().into(),
+        tarea_hecha: ev.tarea_hecha,
+        tiene_tarea: ev.tarea_id.is_some(),
+        tono,
+        nota: ev.nota.clone().unwrap_or_default().into(),
+    }
+}
+
+fn elementos_dia_ui(dia: &semana::DiaVista) -> Vec<ElementoDiaUI> {
+    let mut items: Vec<(NaiveTime, ElementoDiaUI)> = Vec::new();
+    for b in &dia.bloques {
+        items.push((
+            b.inicio,
+            ElementoDiaUI {
+                es_evento: false,
+                id: b.clase_id.clone().into(),
+                titulo: b.materia.clone().into(),
+                detalle: b.lugar.clone().unwrap_or_default().into(),
+                hora: reloj::rango_texto(b.inicio, b.fin).into(),
+                tono: tono_materia(&b.materia),
+                hecha: false,
+            },
+        ));
+    }
+    for e in &dia.eventos {
+        let tono = match e.materia.as_deref() {
+            Some(m) if !m.trim().is_empty() => tono_materia(m),
+            _ => order_core::presentacion::materias::TONO_SIN_MATERIA,
+        };
+        let detalle = e
+            .nota
+            .as_deref()
+            .filter(|n| !n.trim().is_empty())
+            .map(str::to_string)
+            .or_else(|| e.materia.clone())
+            .unwrap_or_else(|| "Evento".to_string());
+        items.push((
+            e.inicio,
+            ElementoDiaUI {
+                es_evento: true,
+                id: e.id.clone().into(),
+                titulo: e.titulo.clone().into(),
+                detalle: detalle.into(),
+                hora: textos::rango_evento(e.inicio, e.fin).into(),
+                tono,
+                hecha: e.tarea_hecha,
+            },
+        ));
+    }
+    items.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.es_evento.cmp(&b.1.es_evento)));
+    items.into_iter().map(|(_, el)| el).collect()
+}
+
+fn dia_ui(dia: &semana::DiaVista, hoy: NaiveDate) -> DiaUI {
     let mut tareas: Vec<TareaDiaUI> = dia
         .tareas
         .iter()
@@ -3647,7 +3910,7 @@ fn dia_ui(dia: &semana::DiaVista) -> DiaUI {
     DiaUI {
         nombre: textos::nombre_dia(dia.fecha).to_string().into(),
         fecha: textos::fecha_corta(dia.fecha).into(),
-        es_hoy: dia.fecha == Local::now().date_naive(),
+        es_hoy: dia.fecha == hoy,
         bloques: ModelRc::new(VecModel::from(
             dia.bloques
                 .iter()
@@ -3660,6 +3923,12 @@ fn dia_ui(dia: &semana::DiaVista) -> DiaUI {
                     fin: minutos(bloque.fin),
                     tono: tono_materia(&bloque.materia),
                 })
+                .collect::<Vec<_>>(),
+        )),
+        eventos: ModelRc::new(VecModel::from(
+            dia.eventos
+                .iter()
+                .map(|ev| evento_a_ui(ev, hoy))
                 .collect::<Vec<_>>(),
         )),
         tareas: ModelRc::new(VecModel::from(tareas)),
@@ -3910,6 +4179,7 @@ fn fecha_del_campo(ui: &AppWindow, campo: i32) -> Option<NaiveDate> {
         CAMPO_FILTRO_HASTA => con_estado(|estado| estado.filtro.hasta),
         _ => match con_estado(|estado| estado.edicion.clone()) {
             Edicion::Tarea(_) if campo == 2 => interpretar_fecha(&ui.get_f_fecha()),
+            Edicion::Evento { .. } if campo == 2 => interpretar_fecha(&ui.get_f_fecha()),
             Edicion::Ajustes if campo == 1 => interpretar_fecha(&ui.get_a_inicio()),
             Edicion::Ajustes if campo == 2 => interpretar_fecha(&ui.get_a_fin()),
             _ => None,
@@ -3926,6 +4196,8 @@ fn hora_del_campo(ui: &AppWindow, campo: i32) -> Option<NaiveTime> {
             Edicion::Tarea(_) if campo == 3 => interpretar_hora(&ui.get_f_hora()),
             Edicion::Clase(_) if campo == 2 => interpretar_hora(&ui.get_f_hora()),
             Edicion::Clase(_) if campo == 3 => interpretar_hora(&ui.get_f_fin()),
+            Edicion::Evento { .. } if campo == 3 => interpretar_hora(&ui.get_f_hora()),
+            Edicion::Evento { .. } if campo == 4 => interpretar_hora(&ui.get_f_fin()),
             Edicion::Recordatorio(_) if campo == 2 => interpretar_hora(&ui.get_r_hora()),
             Edicion::Ajustes if campo == 3 => interpretar_hora(&ui.get_a_hora()),
             _ => None,
@@ -3947,6 +4219,7 @@ fn poner_fecha_en_campo(ui: &AppWindow, campo: i32, fecha: NaiveDate) {
         }),
         _ => match con_estado(|estado| estado.edicion.clone()) {
             Edicion::Tarea(_) if campo == 2 => ui.set_f_fecha(texto),
+            Edicion::Evento { .. } if campo == 2 => ui.set_f_fecha(texto),
             Edicion::Ajustes if campo == 1 => ui.set_a_inicio(texto),
             Edicion::Ajustes if campo == 2 => ui.set_a_fin(texto),
             _ => {}
@@ -3963,6 +4236,8 @@ fn poner_hora_en_campo(ui: &AppWindow, campo: i32, hora: NaiveTime) {
             Edicion::Tarea(_) if campo == 3 => ui.set_f_hora(texto),
             Edicion::Clase(_) if campo == 2 => ui.set_f_hora(texto),
             Edicion::Clase(_) if campo == 3 => ui.set_f_fin(texto),
+            Edicion::Evento { .. } if campo == 3 => ui.set_f_hora(texto),
+            Edicion::Evento { .. } if campo == 4 => ui.set_f_fin(texto),
             Edicion::Recordatorio(_) if campo == 2 => ui.set_r_hora(texto),
             Edicion::Ajustes if campo == 3 => ui.set_a_hora(texto),
             _ => {}
@@ -4072,6 +4347,11 @@ fn clase_por_id(id: &str) -> Option<Clase> {
     datos.clases.into_iter().find(|clase| clase.id == id)
 }
 
+fn evento_por_id(id: &str) -> Option<Evento> {
+    let datos = con_estado(|estado| estado.datos.clone())?;
+    datos.eventos.into_iter().find(|evento| evento.id == id)
+}
+
 fn recordatorio_por_id(id: &str) -> Option<Recordatorio> {
     let datos = con_estado(|estado| estado.datos.clone())?;
     datos
@@ -4136,6 +4416,13 @@ fn capturar_snapshot(ui: &AppWindow, edicion: &Edicion, estado: &Estado) -> Opti
             inicio: ui.get_f_hora().to_string(),
             fin: ui.get_f_fin().to_string(),
             lugar: ui.get_f_lugar().to_string(),
+        }),
+        Edicion::Evento { .. } => Some(FormSnapshot::Evento {
+            titulo: ui.get_f_titulo().to_string(),
+            fecha: ui.get_f_fecha().to_string(),
+            inicio: ui.get_f_hora().to_string(),
+            fin: ui.get_f_fin().to_string(),
+            nota: ui.get_f_nota().to_string(),
         }),
         Edicion::Ajustes => Some(FormSnapshot::Ajustes {
             sin_semestre: ui.get_a_sin_semestre(),
@@ -4527,6 +4814,7 @@ fn ejecutar_accion(ui: &AppWindow, accion: AccionAtajo, escribiendo: bool) -> bo
                     estado.edicion,
                     Edicion::Tarea(_)
                         | Edicion::Clase(_)
+                        | Edicion::Evento { .. }
                         | Edicion::Recordatorio(_)
                         | Edicion::Ajustes
                         | Edicion::Agente
@@ -4834,5 +5122,46 @@ mod pruebas {
         let nueva = ui_mod.iter().find(|i| i.id == "nueva_tarea").unwrap();
         assert_eq!(nueva.tecla, "Ctrl+Shift+N");
         assert!(!nueva.es_defecto);
+    }
+
+    #[test]
+    fn eventos_en_ui_y_cronologia_del_dia() {
+        let hoy = fecha(2026, 11, 25);
+        let ev = semana::EventoVisto {
+            id: "e-1".into(),
+            titulo: "Estudiar Control".into(),
+            fecha: hoy,
+            inicio: NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            fin: NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+            tarea_id: Some("t-1".into()),
+            tarea_titulo: Some("Taller 2".into()),
+            materia: Some("Control".into()),
+            tarea_hecha: false,
+            nota: Some("Repaso".into()),
+        };
+        let ui = evento_a_ui(&ev, hoy);
+        assert_eq!(ui.fecha, "hoy");
+        assert_eq!(ui.hora, "3:00–4:00 p. m.");
+        assert_eq!(ui.tono, tono_materia("Control"));
+        assert!(ui.tiene_tarea);
+        assert!(!ui.tarea_hecha);
+
+        let dia_vista = semana::DiaVista {
+            fecha: hoy,
+            bloques: vec![semana::Bloque {
+                clase_id: "c-1".into(),
+                materia: "Control".into(),
+                inicio: NaiveTime::from_hms_opt(7, 0, 0).unwrap(),
+                fin: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                lugar: None,
+            }],
+            eventos: vec![ev],
+            tareas: Vec::new(),
+        };
+        let elems = elementos_dia_ui(&dia_vista);
+        assert_eq!(elems.len(), 2);
+        assert!(!elems[0].es_evento);
+        assert!(elems[1].es_evento);
+        assert_eq!(elems[1].detalle, "Repaso");
     }
 }

@@ -7,7 +7,7 @@
 // salen siempre de Tema.
 
 import { Tema } from "tema.slint";
-import { CampoBoton, Casilla, Chip, Etiqueta, TituloTachado } from "formularios.slint";
+import { Boton, CampoBoton, Casilla, Chip, Etiqueta, TituloTachado } from "formularios.slint";
 import { PildoraMateria } from "materias.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -22,8 +22,90 @@ export struct TareaUI {
     tono: int,
 }
 
+/// Un evento de un solo día para Inicio, Día, Semana y detalle de tarea.
+export struct EventoUI {
+    id: string,
+    titulo: string,
+    fecha: string,
+    hora: string,
+    inicio: int,
+    fin: int,
+    materia: string,
+    tarea-id: string,
+    tarea-titulo: string,
+    tarea-hecha: bool,
+    tiene-tarea: bool,
+    tono: int,
+    nota: string,
+}
+
+/// Tarjeta de seguimiento para un evento terminado ligado a una tarea sin hacer.
+export component FilaReagendar inherits Rectangle {
+    in property <EventoUI> evento;
+
+    callback marcar-hecha();
+    callback reagendar();
+
+    height: Tema.alto-fila;
+    border-radius: Tema.radio-pequeno;
+    border-width: Tema.linea;
+    border-color: Tema.borde-aviso;
+    background: Tema.fondo-panel-alto;
+
+    HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding-left: Tema.espacio-md;
+        padding-right: Tema.espacio-md;
+        spacing: Tema.espacio-sm;
+        cross-axis-alignment: center;
+
+        Text {
+            text: "◷";
+            font-size: Tema.tamano-texto;
+            color: Tema.acento;
+            vertical-alignment: center;
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 0;
+
+            Text {
+                text: "¿Terminaste «" + (root.evento.tarea-titulo != "" ? root.evento.tarea-titulo : root.evento.titulo) + "»?";
+                font-size: Tema.tamano-texto;
+                color: Tema.texto;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.evento.fecha + " · " + root.evento.hora
+                    + (root.evento.materia == "" ? "" : " · " + root.evento.materia);
+                font-size: Tema.tamano-hora;
+                color: Tema.texto-suave;
+                overflow: elide;
+            }
+        }
+
+        Boton {
+            texto: "Hecha";
+            principal: true;
+            width: Tema.ancho-boton-aplicar;
+            clicked => { root.marcar-hecha(); }
+        }
+
+        Boton {
+            texto: "Reagendar";
+            width: Tema.ancho-boton-form;
+            clicked => { root.reagendar(); }
+        }
+    }
+}
+
 export component PendientesVista inherits Rectangle {
     in property <[TareaUI]> tareas;
+    in property <[EventoUI]> por-reagendar;
     in property <string> resumen;
 
     // --- Filtros ---------------------------------------------------------
@@ -39,6 +121,7 @@ export component PendientesVista inherits Rectangle {
 
     callback editar(string);
     callback marcar(string, bool);
+    callback reagendar-evento(string);
 
     callback filtro-materia();
     callback filtro-fecha(int);
@@ -217,6 +300,17 @@ export component PendientesVista inherits Rectangle {
 
             VerticalLayout {
                 spacing: 0;
+
+                if root.por-reagendar.length > 0 : VerticalLayout {
+                    spacing: Tema.espacio-xs;
+                    padding-bottom: Tema.espacio-md;
+
+                    for ev in root.por-reagendar : FilaReagendar {
+                        evento: ev;
+                        marcar-hecha => { root.marcar(ev.tarea-id, true); }
+                        reagendar => { root.reagendar-evento(ev.id); }
+                    }
+                }
 
                 for tarea in root.tareas : Rectangle {
                     height: Tema.alto-fila;
