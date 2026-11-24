@@ -104,6 +104,7 @@ mod pruebas {
             clases: Vec::new(),
             tareas: Vec::new(),
             recordatorios: Vec::new(),
+            eventos: Vec::new(),
         }
     }
 

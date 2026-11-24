@@ -217,6 +217,7 @@ mod pruebas {
             clases: Vec::new(),
             tareas: Vec::new(),
             recordatorios: Vec::new(),
+            eventos: Vec::new(),
         };
         datos.clases.push(crate::modelo::Clase {
             id: "c-uno".into(),
@@ -291,6 +292,7 @@ mod pruebas {
             clases: Vec::new(),
             tareas: Vec::new(),
             recordatorios: Vec::new(),
+            eventos: Vec::new(),
         };
         let texto = resumen(&vacio, momento("2026-11-22T01:12"), "UTC-05:00");
         assert!(texto.contains("Materias: ninguna."), "{texto}");

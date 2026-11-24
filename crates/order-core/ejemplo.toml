@@ -8,7 +8,7 @@
 #   horas   : "HH:MM"                     (24 h, siempre entre comillas)
 #   fechas  : "YYYY-MM-DD"
 #   vence   : "YYYY-MM-DDTHH:MM"          (hora local)
-#   id      : se puede omitir; la app lo asigna ("t-...", "c-...", "r-...")
+#   id      : se puede omitir; la app lo asigna ("t-...", "c-...", "r-...", "e-...")
 # ---------------------------------------------------------------------------
 
 # Cómo y cuándo avisar. Si falta esta sección se usan estos mismos valores.

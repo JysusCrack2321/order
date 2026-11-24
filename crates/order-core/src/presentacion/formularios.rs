@@ -5,7 +5,7 @@ use crate::agente::config::{
 };
 use crate::filtros::TipoFecha;
 use crate::modelo::{Ajustes, Clase, Dia, FORMATO_FECHA, FORMATO_HORA, Recordatorio, Semestre};
-use crate::ops::NuevaTarea;
+use crate::ops::{NuevaTarea, NuevoEvento};
 use crate::presentacion::materias::canonica;
 use crate::reloj::a_24h;
 use chrono::{NaiveDate, NaiveTime};
@@ -173,6 +173,40 @@ pub fn validar_recordatorio(
         texto,
         dias,
         hora,
+    })
+}
+
+pub fn validar_evento(
+    titulo: &str,
+    fecha: &str,
+    hora_inicio: &str,
+    hora_fin: &str,
+    tarea: &str,
+    nota: &str,
+) -> Result<NuevoEvento, ErrorCampo> {
+    let titulo = titulo.trim().to_string();
+    if titulo.is_empty() {
+        return Err(error(1, "El título del evento no puede quedar vacío."));
+    }
+    let Some(fecha) = interpretar_fecha(fecha) else {
+        return Err(error(2, "Elige la fecha del evento."));
+    };
+    let Some(inicio) = interpretar_hora(hora_inicio) else {
+        return Err(error(3, "Elige la hora de inicio."));
+    };
+    let Some(fin) = interpretar_hora(hora_fin) else {
+        return Err(error(4, "Elige la hora de fin."));
+    };
+    if fin <= inicio {
+        return Err(error(4, "La hora de fin debe ser posterior a la de inicio."));
+    }
+    Ok(NuevoEvento {
+        titulo,
+        fecha,
+        inicio,
+        fin,
+        tarea: opcional(tarea),
+        nota: opcional(nota),
     })
 }
 
@@ -409,6 +443,24 @@ mod pruebas {
                 .campo,
             2
         );
+        assert_eq!(
+            validar_evento(" ", "2026-11-26", "15:00", "16:00", "", "")
+                .unwrap_err()
+                .campo,
+            1
+        );
+        assert_eq!(
+            validar_evento("Estudio", "2026-11-26", "16:00", "15:00", "", "")
+                .unwrap_err()
+                .campo,
+            4
+        );
+        let ev = validar_evento("Estudio", "2026-11-26", "3:00 p. m.", "4:00 p. m.", "t-1", " ")
+            .expect("evento válido");
+        assert_eq!(ev.inicio, hora(15, 0));
+        assert_eq!(ev.fin, hora(16, 0));
+        assert_eq!(ev.tarea.as_deref(), Some("t-1"));
+        assert_eq!(ev.nota, None);
     }
 
     /// El agente se valida con los valores de su ficha: URL sin esquema, key

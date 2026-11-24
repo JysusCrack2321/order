@@ -13,7 +13,7 @@ use crate::almacen::nuevo_id;
 use crate::modelo::{
     Ajustes, Clase, Datos, FORMATO_FECHA, FORMATO_FECHA_HORA, FORMATO_HORA, Recordatorio, Semestre,
 };
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
 /// Campos que el formulario de tarea entrega para crear o editar una tarea.
@@ -22,6 +22,17 @@ pub struct NuevaTarea {
     pub titulo: String,
     pub materia: Option<String>,
     pub vence: NaiveDateTime,
+}
+
+/// Campos para crear o editar un evento de un solo día.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NuevoEvento {
+    pub titulo: String,
+    pub fecha: NaiveDate,
+    pub inicio: NaiveTime,
+    pub fin: NaiveTime,
+    pub tarea: Option<String>,
+    pub nota: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +134,9 @@ pub fn marcar_tarea(
 }
 
 pub fn borrar_tarea(doc: &mut DocumentMut, id: &str) -> Result<(), String> {
-    borrar_por_id(doc, "tarea", "la tarea", id)
+    borrar_por_id(doc, "tarea", "la tarea", id)?;
+    soltar_eventos_de_tarea(doc, id);
+    Ok(())
 }
 
 /// ¿Hay alguna tarea hecha hace más de 30 días que toque archivar? Sirve para
@@ -153,6 +166,7 @@ pub fn archivar_hechas(
     };
 
     let mut archivadas = 0;
+    let mut ids_archivadas = Vec::new();
     let mut i = 0;
     while i < tareas.len() {
         let vieja = tareas
@@ -161,6 +175,11 @@ pub fn archivar_hechas(
         if vieja {
             // `remove` no devuelve la tabla: se copia antes de quitarla.
             if let Some(mut tabla) = tareas.get(i).cloned() {
+                if let Some(id) = tabla.get("id").and_then(Item::as_str) {
+                    if !id.trim().is_empty() {
+                        ids_archivadas.push(id.to_string());
+                    }
+                }
                 // El comentario que va encima de la tabla es decoración suya:
                 // se queda en `order.toml` (encima de la siguiente tarea) para
                 // no perder las notas de sección, y la tarea viaja al historial
@@ -204,6 +223,9 @@ pub fn archivar_hechas(
         } else {
             i += 1;
         }
+    }
+    for id in ids_archivadas {
+        soltar_eventos_de_tarea(doc, &id);
     }
     archivadas
 }
@@ -272,6 +294,115 @@ pub fn guardar_recordatorio(doc: &mut DocumentMut, r: &Recordatorio) -> Result<(
 
 pub fn borrar_recordatorio(doc: &mut DocumentMut, id: &str) -> Result<(), String> {
     borrar_por_id(doc, "recordatorio", "el recordatorio", id)
+}
+
+// ---------------------------------------------------------------------------
+// Eventos
+// ---------------------------------------------------------------------------
+
+/// Añade un evento de un solo día al final de `[[evento]]` y devuelve su `id`.
+pub fn agregar_evento(doc: &mut DocumentMut, e: &NuevoEvento) -> Result<String, String> {
+    validar_nuevo_evento(e)?;
+    let tarea = tarea_valida(doc, e.tarea.as_deref());
+    let id = nuevo_id('e');
+    let mut tabla = Table::new();
+    poner(&mut tabla, "id", texto(&id));
+    campos_evento(&mut tabla, e, tarea.as_deref());
+    tablas_creadas(doc, "evento")?.push(tabla);
+    Ok(id)
+}
+
+/// Reemplaza los campos de un evento existente manteniendo su `id`.
+pub fn editar_evento(doc: &mut DocumentMut, id: &str, e: &NuevoEvento) -> Result<(), String> {
+    validar_nuevo_evento(e)?;
+    let tarea = tarea_valida(doc, e.tarea.as_deref());
+    let tabla = por_id(doc, "evento", "el evento", id.trim())?;
+    campos_evento(tabla, e, tarea.as_deref());
+    Ok(())
+}
+
+/// Mueve un evento existente a otra fecha y franja horaria sin tocar título,
+/// tarea ni nota.
+pub fn mover_evento(
+    doc: &mut DocumentMut,
+    id: &str,
+    fecha: NaiveDate,
+    inicio: NaiveTime,
+    fin: NaiveTime,
+) -> Result<(), String> {
+    if fin <= inicio {
+        return Err("la hora de fin debe ser posterior a la de inicio".to_string());
+    }
+    let tabla = por_id(doc, "evento", "el evento", id.trim())?;
+    poner(tabla, "fecha", texto(fecha.format(FORMATO_FECHA)));
+    poner(tabla, "inicio", texto(inicio.format(FORMATO_HORA)));
+    poner(tabla, "fin", texto(fin.format(FORMATO_HORA)));
+    Ok(())
+}
+
+pub fn borrar_evento(doc: &mut DocumentMut, id: &str) -> Result<(), String> {
+    borrar_por_id(doc, "evento", "el evento", id.trim())
+}
+
+fn validar_nuevo_evento(e: &NuevoEvento) -> Result<(), String> {
+    if e.titulo.trim().is_empty() {
+        return Err("el título del evento no puede quedar vacío".to_string());
+    }
+    if e.fin <= e.inicio {
+        return Err("la hora de fin debe ser posterior a la de inicio".to_string());
+    }
+    Ok(())
+}
+
+fn campos_evento(tabla: &mut Table, e: &NuevoEvento, tarea: Option<&str>) {
+    poner(tabla, "titulo", texto(e.titulo.trim()));
+    poner(tabla, "fecha", texto(e.fecha.format(FORMATO_FECHA)));
+    poner(tabla, "inicio", texto(e.inicio.format(FORMATO_HORA)));
+    poner(tabla, "fin", texto(e.fin.format(FORMATO_HORA)));
+    poner_opcional(tabla, "tarea", tarea.map(texto));
+    let nota = e
+        .nota
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty());
+    poner_opcional(tabla, "nota", nota.map(texto));
+}
+
+fn tarea_valida(doc: &DocumentMut, tarea: Option<&str>) -> Option<String> {
+    let tid = tarea?.trim();
+    if tid.is_empty() || !existe_tarea(doc, tid) {
+        None
+    } else {
+        Some(tid.to_string())
+    }
+}
+
+fn existe_tarea(doc: &DocumentMut, id: &str) -> bool {
+    match doc.get("tarea") {
+        Some(Item::ArrayOfTables(tablas)) => tablas
+            .iter()
+            .any(|t| t.get("id").and_then(Item::as_str) == Some(id)),
+        Some(Item::Value(Value::Array(valores))) => valores.iter().any(|v| {
+            matches!(v, Value::InlineTable(t) if t.get("id").and_then(Value::as_str) == Some(id))
+        }),
+        _ => false,
+    }
+}
+
+/// Quita el enlace `tarea` de los eventos que apuntaban a la tarea borrada o
+/// archivada: los eventos sobreviven como eventos sueltos.
+fn soltar_eventos_de_tarea(doc: &mut DocumentMut, tarea_id: &str) {
+    let id = tarea_id.trim();
+    if id.is_empty() {
+        return;
+    }
+    if let Ok(Some(tablas)) = tablas_de(doc, "evento") {
+        for tabla in tablas.iter_mut() {
+            if tabla.get("tarea").and_then(Item::as_str) == Some(id) {
+                tabla.remove("tarea");
+            }
+        }
+    }
 }
 
 fn campos_clase(tabla: &mut Table, c: &Clase) {
@@ -767,5 +898,100 @@ hecha = false
         assert_eq!(pasado.tareas.len(), 1);
         assert_eq!(pasado.tareas[0].id, "t-vieja");
         assert_eq!(pasado.tareas[0].hecha_en, Some(fecha("2026-10-01")));
+    }
+
+    #[test]
+    fn crud_y_mover_evento_y_borrado_de_tarea_lo_suelta() {
+        let mut doc = doc(BASE);
+
+        // fin <= inicio se rechaza.
+        let invalido = NuevoEvento {
+            titulo: "Malo".into(),
+            fecha: fecha("2026-11-26"),
+            inicio: hora("15:00"),
+            fin: hora("15:00"),
+            tarea: None,
+            nota: None,
+        };
+        assert!(agregar_evento(&mut doc, &invalido).is_err());
+
+        // Crear evento ligado a tarea existente y uno ligado a tarea inexistente (se quita).
+        let id = agregar_evento(
+            &mut doc,
+            &NuevoEvento {
+                titulo: "Estudiar Taller 2".into(),
+                fecha: fecha("2026-11-26"),
+                inicio: hora("15:00"),
+                fin: hora("16:00"),
+                tarea: Some("t-uno".into()),
+                nota: Some("Repasar capítulo 3".into()),
+            },
+        )
+        .expect("agregar evento");
+        assert!(id.starts_with("e-"), "id: {id}");
+
+        let id_huerfano = agregar_evento(
+            &mut doc,
+            &NuevoEvento {
+                titulo: "Suelto".into(),
+                fecha: fecha("2026-11-27"),
+                inicio: hora("10:00"),
+                fin: hora("11:00"),
+                tarea: Some("t-fantasma".into()),
+                nota: None,
+            },
+        )
+        .expect("agregar evento con tarea inexistente");
+
+        let datos = modelo::parsear(&doc.to_string()).expect("válido");
+        assert_eq!(datos.eventos.len(), 2);
+        assert_eq!(datos.eventos[0].tarea.as_deref(), Some("t-uno"));
+        assert_eq!(datos.eventos[1].tarea, None);
+
+        // Editar.
+        editar_evento(
+            &mut doc,
+            &id,
+            &NuevoEvento {
+                titulo: "Estudiar Taller 2 (parte 2)".into(),
+                fecha: fecha("2026-11-26"),
+                inicio: hora("15:00"),
+                fin: hora("16:30"),
+                tarea: Some("t-uno".into()),
+                nota: None,
+            },
+        )
+        .expect("editar evento");
+
+        // Mover.
+        mover_evento(
+            &mut doc,
+            &id,
+            fecha("2026-11-28"),
+            hora("09:00"),
+            hora("10:30"),
+        )
+        .expect("mover evento");
+        let datos = modelo::parsear(&doc.to_string()).expect("válido");
+        assert_eq!(datos.eventos[0].titulo, "Estudiar Taller 2 (parte 2)");
+        assert_eq!(datos.eventos[0].fecha, fecha("2026-11-28"));
+        assert_eq!(datos.eventos[0].inicio, hora("09:00"));
+        assert_eq!(datos.eventos[0].fin, hora("10:30"));
+        assert_eq!(datos.eventos[0].tarea.as_deref(), Some("t-uno"));
+
+        // Borrar la tarea suelta el evento sin borrarlo.
+        borrar_tarea(&mut doc, "t-uno").expect("borrar tarea");
+        let datos = modelo::parsear(&doc.to_string()).expect("válido");
+        assert!(datos.tareas.is_empty());
+        assert_eq!(datos.eventos.len(), 2);
+        assert_eq!(datos.eventos[0].id, id);
+        assert_eq!(datos.eventos[0].tarea, None);
+
+        // Borrar evento.
+        borrar_evento(&mut doc, &id).expect("borrar evento");
+        borrar_evento(&mut doc, &id_huerfano).expect("borrar segundo evento");
+        assert!(borrar_evento(&mut doc, "e-no-existe").is_err());
+        let datos = modelo::parsear(&doc.to_string()).expect("válido");
+        assert!(datos.eventos.is_empty());
     }
 }

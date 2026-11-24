@@ -25,7 +25,12 @@ use toml_edit::{DocumentMut, Item, Value, value};
 const EJEMPLO: &str = include_str!("../ejemplo.toml");
 
 /// Secciones que la app numera, con el prefijo de su `id`.
-const IDS: [(&str, char); 3] = [("clase", 'c'), ("tarea", 't'), ("recordatorio", 'r')];
+const IDS: [(&str, char); 4] = [
+    ("clase", 'c'),
+    ("tarea", 't'),
+    ("recordatorio", 'r'),
+    ("evento", 'e'),
+];
 
 /// El archivo de datos y todo lo necesario para leerlo y reemplazarlo sin
 /// perder nada. Se le puede dar cualquier ruta (las pruebas usan una temporal).
@@ -264,6 +269,7 @@ fn falta_algun_id(datos: &Datos) -> bool {
     datos.clases.iter().any(|c| c.id.trim().is_empty())
         || datos.tareas.iter().any(|t| t.id.trim().is_empty())
         || datos.recordatorios.iter().any(|r| r.id.trim().is_empty())
+        || datos.eventos.iter().any(|e| e.id.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -408,6 +414,23 @@ hecha = false
         let datos = almacen.cargar().expect("cargar asigna el id");
         let id = datos.clases[0].id.clone();
         assert!(id.starts_with("c-"), "id: {id}");
+
+        let leido = fs::read_to_string(&almacen.ruta).expect("leer el archivo");
+        assert!(leido.contains(&id), "el id debe quedar en disco:\n{leido}");
+    }
+
+    #[test]
+    fn asigna_id_a_evento_sin_id() {
+        let (_dir, almacen) = temporal();
+        fs::write(
+            &almacen.ruta,
+            "[[evento]]\ntitulo = \"Estudiar\"\nfecha = \"2026-11-26\"\ninicio = \"15:00\"\nfin = \"16:00\"\n",
+        )
+        .expect("escribir un evento sin id");
+
+        let datos = almacen.cargar().expect("cargar asigna el id");
+        let id = datos.eventos[0].id.clone();
+        assert!(id.starts_with("e-"), "id: {id}");
 
         let leido = fs::read_to_string(&almacen.ruta).expect("leer el archivo");
         assert!(leido.contains(&id), "el id debe quedar en disco:\n{leido}");

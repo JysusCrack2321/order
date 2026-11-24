@@ -1,14 +1,15 @@
 //! Detección de cambios locales, fusión LWW por campo y escritura segura sobre `order.toml`.
 
 use super::estado::{
-    AjustesEstado, Campo, ClaseEstado, EstadoSync, MensajeSync, RecordatorioEstado,
+    AjustesEstado, Campo, ClaseEstado, EstadoSync, EventoEstado, MensajeSync, RecordatorioEstado,
     SemestreEstado, TareaEstado,
 };
 use super::hlc::Marca;
 use crate::modelo::{
-    Ajustes, Clase, Datos, FORMATO_FECHA, FORMATO_FECHA_HORA, FORMATO_HORA, Recordatorio, Semestre,
-    Tarea,
+    Ajustes, Clase, Datos, Evento, FORMATO_FECHA, FORMATO_FECHA_HORA, FORMATO_HORA, Recordatorio,
+    Semestre, Tarea,
 };
+use chrono::NaiveTime;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
@@ -331,6 +332,92 @@ pub fn registrar_cambios_locales(datos: &Datos, estado: &mut EstadoSync, ahora_m
         }
     }
 
+    // 6. Eventos
+    let prev_eventos: HashMap<&str, &Evento> = prev
+        .map(|d| d.eventos.as_slice())
+        .unwrap_or(&[])
+        .iter()
+        .filter(|e| !e.id.trim().is_empty())
+        .map(|e| (e.id.as_str(), e))
+        .collect();
+    let ids_eventos: BTreeSet<&str> = datos
+        .eventos
+        .iter()
+        .map(|e| e.id.trim())
+        .filter(|id| !id.is_empty())
+        .collect();
+
+    for id in prev_eventos.keys() {
+        if !ids_eventos.contains(id) {
+            if let Some(ee) = estado.crdt.eventos.get_mut(*id) {
+                if ee.esta_vivo() {
+                    ee.borrado = Some(estado.reloj.tick(ahora_ms));
+                    cambio = true;
+                }
+            }
+        }
+    }
+    for e in &datos.eventos {
+        let id = e.id.trim();
+        if id.is_empty() {
+            continue;
+        }
+        match prev_eventos.get(id) {
+            None => {
+                let borrado = estado.crdt.eventos.get(id).and_then(|ee| ee.borrado.clone());
+                let ee = EventoEstado {
+                    titulo: Campo::nuevo(e.titulo.clone(), estado.reloj.tick(ahora_ms)),
+                    fecha: Campo::nuevo(e.fecha, estado.reloj.tick(ahora_ms)),
+                    inicio: Campo::nuevo(e.inicio, estado.reloj.tick(ahora_ms)),
+                    fin: Campo::nuevo(e.fin, estado.reloj.tick(ahora_ms)),
+                    tarea: Campo::nuevo(e.tarea.clone(), estado.reloj.tick(ahora_ms)),
+                    nota: Campo::nuevo(e.nota.clone(), estado.reloj.tick(ahora_ms)),
+                    borrado,
+                };
+                estado.crdt.eventos.insert(id.to_string(), ee);
+                cambio = true;
+            }
+            Some(p) => {
+                let ee = estado.crdt.eventos.entry(id.to_string()).or_insert_with(|| {
+                    EventoEstado {
+                        titulo: Campo::nuevo(p.titulo.clone(), estado.reloj.tick(ahora_ms)),
+                        fecha: Campo::nuevo(p.fecha, estado.reloj.tick(ahora_ms)),
+                        inicio: Campo::nuevo(p.inicio, estado.reloj.tick(ahora_ms)),
+                        fin: Campo::nuevo(p.fin, estado.reloj.tick(ahora_ms)),
+                        tarea: Campo::nuevo(p.tarea.clone(), estado.reloj.tick(ahora_ms)),
+                        nota: Campo::nuevo(p.nota.clone(), estado.reloj.tick(ahora_ms)),
+                        borrado: None,
+                    }
+                });
+                let vivo = ee.esta_vivo();
+                if e.titulo != p.titulo || !vivo {
+                    ee.titulo = Campo::nuevo(e.titulo.clone(), estado.reloj.tick(ahora_ms));
+                    cambio = true;
+                }
+                if e.fecha != p.fecha {
+                    ee.fecha = Campo::nuevo(e.fecha, estado.reloj.tick(ahora_ms));
+                    cambio = true;
+                }
+                if e.inicio != p.inicio {
+                    ee.inicio = Campo::nuevo(e.inicio, estado.reloj.tick(ahora_ms));
+                    cambio = true;
+                }
+                if e.fin != p.fin {
+                    ee.fin = Campo::nuevo(e.fin, estado.reloj.tick(ahora_ms));
+                    cambio = true;
+                }
+                if e.tarea != p.tarea {
+                    ee.tarea = Campo::nuevo(e.tarea.clone(), estado.reloj.tick(ahora_ms));
+                    cambio = true;
+                }
+                if e.nota != p.nota {
+                    ee.nota = Campo::nuevo(e.nota.clone(), estado.reloj.tick(ahora_ms));
+                    cambio = true;
+                }
+            }
+        }
+    }
+
     estado.foto = Some(datos.clone());
     cambio
 }
@@ -378,6 +465,16 @@ pub fn fusionar(local: &EstadoSync, remoto: &MensajeSync) -> Resultado {
         }
     }
 
+    for (id, rem) in &remoto.eventos {
+        match nuevo.crdt.eventos.get_mut(id) {
+            Some(loc) => cambio |= fusionar_evento(loc, rem),
+            None => {
+                nuevo.crdt.eventos.insert(id.clone(), rem.clone());
+                cambio = true;
+            }
+        }
+    }
+
     deduplicar_por_origen(&mut nuevo.crdt.tareas);
     let cambio_real = nuevo.crdt != local.crdt;
     let _ = cambio;
@@ -420,7 +517,7 @@ pub fn aplicar(estado: &EstadoSync) -> Datos {
         })
         .collect();
 
-    let tareas = estado
+    let tareas: Vec<Tarea> = estado
         .crdt
         .tareas
         .iter()
@@ -450,12 +547,61 @@ pub fn aplicar(estado: &EstadoSync) -> Datos {
         })
         .collect();
 
+    let ids_tareas: BTreeSet<&str> = tareas.iter().map(|t| t.id.as_str()).collect();
+    let eventos = estado
+        .crdt
+        .eventos
+        .iter()
+        .filter(|(_, e)| e.esta_vivo())
+        .map(|(id, e)| {
+            let (inicio, fin) = normalizar_franja(e.inicio.valor, e.fin.valor);
+            let tarea = e
+                .tarea
+                .valor
+                .as_ref()
+                .filter(|tid| ids_tareas.contains(tid.trim()))
+                .cloned();
+            Evento {
+                id: id.clone(),
+                titulo: e.titulo.valor.clone(),
+                fecha: e.fecha.valor,
+                inicio,
+                fin,
+                tarea,
+                nota: e.nota.valor.clone(),
+            }
+        })
+        .collect();
+
     Datos {
         ajustes,
         semestre,
         clases,
         tareas,
         recordatorios,
+        eventos,
+    }
+}
+
+/// Si una fusión LWW concurrente dejara `fin <= inicio`, ajusta la franja para
+/// mantener invariante `fin > inicio` al guardar en TOML.
+fn normalizar_franja(inicio: NaiveTime, fin: NaiveTime) -> (NaiveTime, NaiveTime) {
+    if fin > inicio {
+        return (inicio, fin);
+    }
+    let tope = NaiveTime::from_hms_opt(23, 59, 0).expect("23:59 válido");
+    if inicio >= tope {
+        (
+            NaiveTime::from_hms_opt(23, 0, 0).expect("23:00 válido"),
+            tope,
+        )
+    } else {
+        let mas_una = inicio + chrono::TimeDelta::hours(1);
+        if mas_una > inicio {
+            (inicio, mas_una)
+        } else {
+            (inicio, tope)
+        }
     }
 }
 
@@ -485,7 +631,12 @@ pub fn datos_equivalentes(a: &Datos, b: &Datos) -> bool {
         .iter()
         .map(|r| (r.id.as_str(), r))
         .collect();
-    recs_a == recs_b
+    if recs_a != recs_b {
+        return false;
+    }
+    let eventos_a: BTreeMap<&str, &Evento> = a.eventos.iter().map(|e| (e.id.as_str(), e)).collect();
+    let eventos_b: BTreeMap<&str, &Evento> = b.eventos.iter().map(|e| (e.id.as_str(), e)).collect();
+    eventos_a == eventos_b
 }
 
 /// Aplica `nuevos` sobre un `DocumentMut` existente (usado dentro de
@@ -515,6 +666,13 @@ pub fn aplicar_en_doc(doc: &mut DocumentMut, nuevos: &Datos) -> Result<(), Strin
         &nuevos.recordatorios,
         |r| r.id.as_str(),
         escribir_recordatorio_en_tabla,
+    )?;
+    sincronizar_seccion(
+        doc,
+        "evento",
+        &nuevos.eventos,
+        |e| e.id.as_str(),
+        escribir_evento_en_tabla,
     )?;
 
     Ok(())
@@ -602,6 +760,18 @@ fn fusionar_recordatorio(local: &mut RecordatorioEstado, remoto: &RecordatorioEs
     c |= fusionar_campo(&mut local.texto, &remoto.texto);
     c |= fusionar_campo(&mut local.dias, &remoto.dias);
     c |= fusionar_campo(&mut local.hora, &remoto.hora);
+    c |= fusionar_borrado(&mut local.borrado, &remoto.borrado);
+    c
+}
+
+fn fusionar_evento(local: &mut EventoEstado, remoto: &EventoEstado) -> bool {
+    let mut c = false;
+    c |= fusionar_campo(&mut local.titulo, &remoto.titulo);
+    c |= fusionar_campo(&mut local.fecha, &remoto.fecha);
+    c |= fusionar_campo(&mut local.inicio, &remoto.inicio);
+    c |= fusionar_campo(&mut local.fin, &remoto.fin);
+    c |= fusionar_campo(&mut local.tarea, &remoto.tarea);
+    c |= fusionar_campo(&mut local.nota, &remoto.nota);
     c |= fusionar_borrado(&mut local.borrado, &remoto.borrado);
     c
 }
@@ -763,6 +933,28 @@ fn escribir_recordatorio_en_tabla(tabla: &mut Table, r: &Recordatorio) {
         "hora",
         Value::from(r.hora.format(FORMATO_HORA).to_string()),
     );
+}
+
+fn escribir_evento_en_tabla(tabla: &mut Table, e: &Evento) {
+    poner_valor(tabla, "id", Value::from(e.id.as_str()));
+    poner_valor(tabla, "titulo", Value::from(e.titulo.as_str()));
+    poner_valor(
+        tabla,
+        "fecha",
+        Value::from(e.fecha.format(FORMATO_FECHA).to_string()),
+    );
+    poner_valor(
+        tabla,
+        "inicio",
+        Value::from(e.inicio.format(FORMATO_HORA).to_string()),
+    );
+    poner_valor(
+        tabla,
+        "fin",
+        Value::from(e.fin.format(FORMATO_HORA).to_string()),
+    );
+    poner_opcional(tabla, "tarea", e.tarea.as_deref().map(Value::from));
+    poner_opcional(tabla, "nota", e.nota.as_deref().map(Value::from));
 }
 
 fn poner_valor(tabla: &mut Table, clave: &str, mut nuevo: Value) {

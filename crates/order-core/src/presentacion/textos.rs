@@ -130,6 +130,32 @@ pub fn rango_hora(bloque: &semana::Bloque) -> String {
     reloj::rango_texto(bloque.inicio, bloque.fin)
 }
 
+/// "3:00–4:00 p. m.".
+pub fn rango_evento(inicio: NaiveTime, fin: NaiveTime) -> String {
+    reloj::rango_texto(inicio, fin)
+}
+
+/// Cuándo es un evento: "hoy · 3:00–4:00 p. m.", "mañana · ..." o "jue 26 nov · ...".
+pub fn cuando_evento(
+    fecha: NaiveDate,
+    inicio: NaiveTime,
+    fin: NaiveTime,
+    hoy: NaiveDate,
+) -> String {
+    let rango = rango_evento(inicio, fin);
+    if fecha == hoy {
+        format!("hoy · {rango}")
+    } else if fecha == hoy + TimeDelta::days(1) {
+        format!("mañana · {rango}")
+    } else {
+        format!(
+            "{} {} · {rango}",
+            nombre_dia(fecha).to_lowercase(),
+            fecha_corta(fecha)
+        )
+    }
+}
+
 /// Hora de una clase en las vistas de resumen. Si no es de hoy, lleva delante
 /// el día ("jue 26 nov · 7:00–9:00 a. m.").
 pub fn hora_clase(bloque: &semana::Bloque, fecha: NaiveDate, hoy: NaiveDate) -> String {
@@ -326,6 +352,7 @@ mod pruebas {
             clases: Vec::new(),
             tareas: Vec::new(),
             recordatorios: Vec::new(),
+            eventos: Vec::new(),
         }
     }
 
@@ -473,5 +500,22 @@ mod pruebas {
     fn fecha_larga_en_espanol() {
         assert_eq!(fecha_larga(fecha(2026, 11, 25)), "miércoles 25 de noviembre");
         assert_eq!(fecha_larga(fecha(2026, 8, 3)), "lunes 3 de agosto");
+    }
+
+    #[test]
+    fn texto_de_evento() {
+        let hoy = fecha(2026, 11, 25);
+        assert_eq!(
+            cuando_evento(hoy, hora(15, 0), hora(16, 0), hoy),
+            "hoy · 3:00–4:00 p. m."
+        );
+        assert_eq!(
+            cuando_evento(fecha(2026, 11, 26), hora(15, 0), hora(16, 0), hoy),
+            "mañana · 3:00–4:00 p. m."
+        );
+        assert_eq!(
+            cuando_evento(fecha(2026, 11, 28), hora(9, 0), hora(10, 30), hoy),
+            "sáb 28 nov · 9:00–10:30 a. m."
+        );
     }
 }

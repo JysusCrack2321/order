@@ -205,6 +205,50 @@ impl RecordatorioEstado {
     }
 }
 
+/// Campos de `[[evento]]` identificados por `id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventoEstado {
+    pub titulo: Campo<String>,
+    pub fecha: Campo<NaiveDate>,
+    pub inicio: Campo<NaiveTime>,
+    pub fin: Campo<NaiveTime>,
+    pub tarea: Campo<Option<String>>,
+    pub nota: Campo<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub borrado: Option<Marca>,
+}
+
+impl EventoEstado {
+    pub fn max_campo(&self) -> &Marca {
+        [
+            &self.titulo.marca,
+            &self.fecha.marca,
+            &self.inicio.marca,
+            &self.fin.marca,
+            &self.tarea.marca,
+            &self.nota.marca,
+        ]
+        .into_iter()
+        .max()
+        .expect("lista fija no vacía")
+    }
+
+    pub fn max_marca(&self) -> &Marca {
+        let mc = self.max_campo();
+        match &self.borrado {
+            Some(b) if b > mc => b,
+            _ => mc,
+        }
+    }
+
+    pub fn esta_vivo(&self) -> bool {
+        match &self.borrado {
+            None => true,
+            Some(b) => self.max_campo() > b,
+        }
+    }
+}
+
 /// Mensaje completo intercambiado entre dispositivos durante una sincronización.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -214,6 +258,7 @@ pub struct MensajeSync {
     pub clases: BTreeMap<String, ClaseEstado>,
     pub tareas: BTreeMap<String, TareaEstado>,
     pub recordatorios: BTreeMap<String, RecordatorioEstado>,
+    pub eventos: BTreeMap<String, EventoEstado>,
 }
 
 impl MensajeSync {
@@ -240,6 +285,12 @@ impl MensajeSync {
         }
         for r in self.recordatorios.values() {
             let m = r.max_marca();
+            if max.is_none_or(|cur| m > cur) {
+                max = Some(m);
+            }
+        }
+        for e in self.eventos.values() {
+            let m = e.max_marca();
             if max.is_none_or(|cur| m > cur) {
                 max = Some(m);
             }
@@ -347,6 +398,12 @@ impl EstadoSync {
             .recordatorios
             .retain(|_, r| !expirada(&r.borrado, r.esta_vivo()));
         purgadas += antes_r - self.crdt.recordatorios.len();
+
+        let antes_e = self.crdt.eventos.len();
+        self.crdt
+            .eventos
+            .retain(|_, e| !expirada(&e.borrado, e.esta_vivo()));
+        purgadas += antes_e - self.crdt.eventos.len();
 
         purgadas
     }

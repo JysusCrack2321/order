@@ -5,7 +5,7 @@ pub mod fusion;
 pub mod hlc;
 
 pub use estado::{
-    AjustesEstado, Campo, ClaseEstado, EstadoSync, MensajeSync, RecordatorioEstado,
+    AjustesEstado, Campo, ClaseEstado, EstadoSync, EventoEstado, MensajeSync, RecordatorioEstado,
     SESENTA_DIAS_MS, SemestreEstado, TareaEstado, cargar_estado, guardar_estado,
 };
 pub use fusion::{
@@ -18,7 +18,7 @@ mod pruebas {
     use super::*;
     use crate::almacen::Almacen;
     use crate::modelo::{
-        self, Ajustes, Clase, Datos, Dia, FORMATO_FECHA, FORMATO_FECHA_HORA, FORMATO_HORA,
+        self, Ajustes, Clase, Datos, Dia, Evento, FORMATO_FECHA, FORMATO_FECHA_HORA, FORMATO_HORA,
         Recordatorio, Semestre, Tarea,
     };
     use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
@@ -42,6 +42,7 @@ mod pruebas {
             clases: Vec::new(),
             tareas: Vec::new(),
             recordatorios: Vec::new(),
+            eventos: Vec::new(),
         }
     }
 
@@ -419,5 +420,81 @@ hecha = false
             let modo = std::fs::metadata(&ruta).unwrap().permissions().mode() & 0o777;
             assert_eq!(modo, 0o600);
         }
+    }
+
+    #[test]
+    fn eventos_lww_crear_mover_renombrar_y_borrar() {
+        let mut base = datos_vacios();
+        base.tareas
+            .push(tarea_base("t-1", "Taller 1", "2026-11-28T23:59"));
+        base.eventos.push(Evento {
+            id: "e-1".to_string(),
+            titulo: "Estudiar Control".to_string(),
+            fecha: fecha("2026-11-26"),
+            inicio: hora("15:00"),
+            fin: hora("16:00"),
+            tarea: Some("t-1".to_string()),
+            nota: None,
+        });
+
+        let mut pc = EstadoSync::nuevo("pc");
+        registrar_cambios_locales(&base, &mut pc, 1_000);
+        let mut cel = fusionar(&EstadoSync::nuevo("cel"), &pc.mensaje()).estado;
+        cel.foto = Some(aplicar(&cel));
+
+        // 1. Crear un evento en PC llega a Cel.
+        let mut d_pc = aplicar(&pc);
+        d_pc.eventos.push(Evento {
+            id: "e-2".to_string(),
+            titulo: "Repaso laboratorio".to_string(),
+            fecha: fecha("2026-11-27"),
+            inicio: hora("10:00"),
+            fin: hora("11:00"),
+            tarea: None,
+            nota: Some("Traer guía".to_string()),
+        });
+        registrar_cambios_locales(&d_pc, &mut pc, 2_000);
+
+        let cel_res = fusionar(&cel, &pc.mensaje());
+        assert!(cel_res.cambio);
+        cel = cel_res.estado;
+        cel.foto = Some(aplicar(&cel));
+        assert_eq!(aplicar(&cel).eventos.len(), 2);
+        assert_eq!(aplicar(&cel).eventos[1].titulo, "Repaso laboratorio");
+
+        // 2. Mover la hora en PC y cambiar el título en Cel conserva ambos cambios.
+        let mut d_pc = aplicar(&pc);
+        d_pc.eventos[0].fecha = fecha("2026-11-27");
+        d_pc.eventos[0].inicio = hora("17:00");
+        d_pc.eventos[0].fin = hora("18:30");
+        registrar_cambios_locales(&d_pc, &mut pc, 3_000);
+
+        let mut d_cel = aplicar(&cel);
+        d_cel.eventos[0].titulo = "Estudiar Control II".to_string();
+        registrar_cambios_locales(&d_cel, &mut cel, 3_100);
+
+        let m_pc = fusionar(&pc, &cel.mensaje());
+        let m_cel = fusionar(&cel, &pc.mensaje());
+        assert_eq!(m_pc.estado.crdt, m_cel.estado.crdt);
+        let fin_datos = aplicar(&m_pc.estado);
+        assert_eq!(fin_datos.eventos[0].titulo, "Estudiar Control II");
+        assert_eq!(fin_datos.eventos[0].fecha, fecha("2026-11-27"));
+        assert_eq!(fin_datos.eventos[0].inicio, hora("17:00"));
+        assert_eq!(fin_datos.eventos[0].fin, hora("18:30"));
+
+        // 3. Borrar en uno propaga al otro.
+        pc = m_pc.estado;
+        pc.foto = Some(aplicar(&pc));
+        cel = m_cel.estado;
+        cel.foto = Some(aplicar(&cel));
+
+        let mut d_cel_del = aplicar(&cel);
+        d_cel_del.eventos.retain(|e| e.id != "e-2");
+        registrar_cambios_locales(&d_cel_del, &mut cel, 4_000);
+
+        let pc_tras = fusionar(&pc, &cel.mensaje());
+        let datos_tras = aplicar(&pc_tras.estado);
+        assert_eq!(datos_tras.eventos.len(), 1);
+        assert_eq!(datos_tras.eventos[0].id, "e-1");
     }
 }

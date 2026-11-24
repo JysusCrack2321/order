@@ -5,7 +5,7 @@
 //! y las clases se repiten cada siete días mientras la fecha caiga dentro de
 //! `[semestre]`; sin `[semestre]`, aparecen todas las semanas.
 
-use crate::modelo::{Datos, Dia, Tarea};
+use crate::modelo::{Datos, Dia, Evento, Tarea};
 use chrono::{Datelike, Days, NaiveDate, NaiveDateTime, NaiveTime, Weekday};
 
 /// Una clase ya colocada en un día concreto de la semana mostrada.
@@ -18,11 +18,28 @@ pub struct Bloque {
     pub lugar: Option<String>,
 }
 
-/// Un día de la semana: sus clases y las tareas que vencen ese día.
+/// Un evento de un solo día ya resuelto para mostrarse en Día, Semana o Inicio.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventoVisto {
+    pub id: String,
+    pub titulo: String,
+    pub fecha: NaiveDate,
+    pub inicio: NaiveTime,
+    pub fin: NaiveTime,
+    pub tarea_id: Option<String>,
+    pub tarea_titulo: Option<String>,
+    pub materia: Option<String>,
+    pub tarea_hecha: bool,
+    pub nota: Option<String>,
+}
+
+/// Un día de la semana: sus clases, eventos y las tareas que vencen ese día.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiaVista {
     pub fecha: NaiveDate,
     pub bloques: Vec<Bloque>,
+    /// Eventos de un solo día en `fecha`, ordenados por hora.
+    pub eventos: Vec<EventoVisto>,
     /// Tareas (hechas o no) cuyo `vence` cae en `fecha`, por hora.
     pub tareas: Vec<Tarea>,
 }
@@ -41,6 +58,10 @@ pub struct RecordatorioVisto {
 pub struct InicioVista {
     /// Clases de hoy, por hora.
     pub clases: Vec<Bloque>,
+    /// Eventos de hoy, por hora.
+    pub eventos: Vec<EventoVisto>,
+    /// Eventos ligados a una tarea sin hacer que ya terminaron.
+    pub por_reagendar: Vec<EventoVisto>,
     /// La próxima clase (hoy si aún no termina, o la primera de los próximos
     /// siete días) con la fecha en la que cae.
     pub siguiente: Option<(NaiveDate, Bloque)>,
@@ -62,7 +83,7 @@ pub fn lunes_de(fecha: NaiveDate) -> NaiveDate {
 }
 
 /// Los días de la semana que empieza en `lunes`: de lunes a viernes siempre, y
-/// sábado o domingo solo si ese día tiene clases dentro del semestre.
+/// sábado o domingo solo si ese día tiene clases dentro del semestre o eventos.
 pub fn semana(datos: &Datos, lunes: NaiveDate) -> Vec<DiaVista> {
     let mut dias = Vec::with_capacity(7);
 
@@ -71,14 +92,17 @@ pub fn semana(datos: &Datos, lunes: NaiveDate) -> Vec<DiaVista> {
             break;
         };
         let dia = dia_de(fecha);
-        let bloques = bloques_de(datos, fecha);
+        let vista = dia_completo(datos, fecha);
 
-        // El fin de semana solo ocupa columna si de verdad hay clase.
-        if matches!(dia, Dia::Sab | Dia::Dom) && bloques.is_empty() {
+        // El fin de semana solo ocupa columna si hay clase o evento.
+        if matches!(dia, Dia::Sab | Dia::Dom)
+            && vista.bloques.is_empty()
+            && vista.eventos.is_empty()
+        {
             continue;
         }
 
-        dias.push(dia_completo(datos, fecha));
+        dias.push(vista);
     }
 
     dias
@@ -128,8 +152,96 @@ fn dia_completo(datos: &Datos, fecha: NaiveDate) -> DiaVista {
     DiaVista {
         fecha,
         bloques: bloques_de(datos, fecha),
+        eventos: eventos_de(datos, fecha),
         tareas,
     }
+}
+
+fn evento_visto(datos: &Datos, e: &Evento) -> EventoVisto {
+    let tarea = e.tarea.as_deref().and_then(|tid| {
+        let limpia = tid.trim();
+        if limpia.is_empty() {
+            None
+        } else {
+            datos.tareas.iter().find(|t| t.id == limpia)
+        }
+    });
+    EventoVisto {
+        id: e.id.clone(),
+        titulo: e.titulo.clone(),
+        fecha: e.fecha,
+        inicio: e.inicio,
+        fin: e.fin,
+        tarea_id: tarea.map(|t| t.id.clone()),
+        tarea_titulo: tarea.map(|t| t.titulo.clone()),
+        materia: tarea.and_then(|t| t.materia.clone()),
+        tarea_hecha: tarea.is_some_and(|t| t.hecha),
+        nota: e.nota.clone(),
+    }
+}
+
+fn ordenar_eventos(lista: &mut [EventoVisto]) {
+    lista.sort_by(|a, b| {
+        a.fecha
+            .cmp(&b.fecha)
+            .then(a.inicio.cmp(&b.inicio))
+            .then(a.fin.cmp(&b.fin))
+            .then(a.titulo.cmp(&b.titulo))
+            .then(a.id.cmp(&b.id))
+    });
+}
+
+/// Eventos de una fecha concreta, ordenados por hora.
+pub fn eventos_de(datos: &Datos, fecha: NaiveDate) -> Vec<EventoVisto> {
+    let mut lista: Vec<EventoVisto> = datos
+        .eventos
+        .iter()
+        .filter(|e| e.fecha == fecha)
+        .map(|e| evento_visto(datos, e))
+        .collect();
+    ordenar_eventos(&mut lista);
+    lista
+}
+
+/// Eventos dentro de `[desde, hasta]` (ambos inclusive), ordenados por fecha y hora.
+pub fn eventos_en_rango(datos: &Datos, desde: NaiveDate, hasta: NaiveDate) -> Vec<EventoVisto> {
+    let mut lista: Vec<EventoVisto> = datos
+        .eventos
+        .iter()
+        .filter(|e| e.fecha >= desde && e.fecha <= hasta)
+        .map(|e| evento_visto(datos, e))
+        .collect();
+    ordenar_eventos(&mut lista);
+    lista
+}
+
+/// Eventos próximos (desde `desde` en adelante) ligados a una tarea concreta.
+pub fn eventos_de_tarea(datos: &Datos, tarea_id: &str, desde: NaiveDate) -> Vec<EventoVisto> {
+    let id = tarea_id.trim();
+    if id.is_empty() {
+        return Vec::new();
+    }
+    let mut lista: Vec<EventoVisto> = datos
+        .eventos
+        .iter()
+        .filter(|e| e.fecha >= desde && e.tarea.as_deref() == Some(id))
+        .map(|e| evento_visto(datos, e))
+        .collect();
+    ordenar_eventos(&mut lista);
+    lista
+}
+
+/// Eventos terminados que están ligados a una tarea todavía sin hacer.
+pub fn eventos_por_reagendar(datos: &Datos, ahora: NaiveDateTime) -> Vec<EventoVisto> {
+    let mut lista: Vec<EventoVisto> = datos
+        .eventos
+        .iter()
+        .filter(|e| e.fecha.and_time(e.fin) <= ahora)
+        .map(|e| evento_visto(datos, e))
+        .filter(|ev| ev.tarea_id.is_some() && !ev.tarea_hecha)
+        .collect();
+    ordenar_eventos(&mut lista);
+    lista
 }
 
 /// Los recordatorios que tocan en una fecha, por hora y, a la misma hora, por
@@ -235,6 +347,8 @@ pub fn inicio(datos: &Datos, ahora: NaiveDateTime) -> InicioVista {
 
     InicioVista {
         clases: bloques_de(datos, hoy),
+        eventos: eventos_de(datos, hoy),
+        por_reagendar: eventos_por_reagendar(datos, ahora),
         siguiente,
         vencidas,
         de_hoy,
@@ -320,6 +434,7 @@ mod pruebas {
             clases,
             tareas,
             recordatorios: Vec::new(),
+            eventos: Vec::new(),
         }
     }
 
@@ -704,5 +819,82 @@ mod pruebas {
             lista.windows(2).all(|par| par[0].vence <= par[1].vence),
             "van de la fecha más próxima a la más lejana"
         );
+    }
+
+    #[test]
+    fn eventos_en_dia_semana_inicio_y_reagendar() {
+        let mut d = datos(
+            vec![clase("Control", Dia::Lun)],
+            vec![
+                {
+                    let mut t = tarea("Taller 2", momento(2026, 11, 28, 23, 59), false);
+                    t.id = "t-pend".into();
+                    t.materia = Some("Control".into());
+                    t
+                },
+                {
+                    let mut t = tarea("Quiz listo", momento(2026, 11, 26, 12, 0), true);
+                    t.id = "t-hecha".into();
+                    t.materia = Some("Robótica".into());
+                    t
+                },
+            ],
+            None,
+        );
+        d.eventos = vec![
+            Evento {
+                id: "e-1".into(),
+                titulo: "Estudiar Taller 2".into(),
+                fecha: fecha(2026, 11, 25),
+                inicio: hora(15, 0),
+                fin: hora(16, 0),
+                tarea: Some("t-pend".into()),
+                nota: None,
+            },
+            Evento {
+                id: "e-2".into(),
+                titulo: "Repaso Quiz".into(),
+                fecha: fecha(2026, 11, 25),
+                inicio: hora(10, 0),
+                fin: hora(11, 0),
+                tarea: Some("t-hecha".into()),
+                nota: None,
+            },
+            Evento {
+                id: "e-sab".into(),
+                titulo: "Simulacro".into(),
+                fecha: fecha(2026, 11, 28),
+                inicio: hora(9, 0),
+                fin: hora(10, 0),
+                tarea: None,
+                nota: None,
+            },
+        ];
+
+        // Día muestra eventos ordenados por hora con materia y estado de tarea.
+        let mie = dia(&d, fecha(2026, 11, 25));
+        assert_eq!(mie.eventos.len(), 2);
+        assert_eq!(mie.eventos[0].id, "e-2");
+        assert!(mie.eventos[0].tarea_hecha);
+        assert_eq!(mie.eventos[0].materia.as_deref(), Some("Robótica"));
+        assert_eq!(mie.eventos[1].id, "e-1");
+        assert!(!mie.eventos[1].tarea_hecha);
+        assert_eq!(mie.eventos[1].materia.as_deref(), Some("Control"));
+
+        // Semana incluye el sábado si tiene evento aunque no tenga clase.
+        let sem = semana(&d, fecha(2026, 11, 23));
+        assert_eq!(sem.len(), 6);
+        assert_eq!(sem[5].fecha, fecha(2026, 11, 28));
+        assert_eq!(sem[5].eventos[0].id, "e-sab");
+
+        // Inicio a las 16:30: e-1 ya terminó y su tarea no está hecha -> por reagendar.
+        let ini = inicio(&d, momento(2026, 11, 25, 16, 30));
+        assert_eq!(ini.eventos.len(), 2);
+        assert_eq!(ini.por_reagendar.len(), 1);
+        assert_eq!(ini.por_reagendar[0].id, "e-1");
+
+        // Eventos próximos de la tarea t-pend.
+        assert_eq!(eventos_de_tarea(&d, "t-pend", fecha(2026, 11, 25)).len(), 1);
+        assert!(eventos_de_tarea(&d, "t-pend", fecha(2026, 11, 26)).is_empty());
     }
 }

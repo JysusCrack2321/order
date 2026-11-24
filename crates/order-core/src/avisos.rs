@@ -12,7 +12,7 @@
 //! ráfaga; para eso está `resumen_arranque`, que da una sola línea al abrir.
 //! Aquí no se envía nada: solo se calcula la lista y se anota en el registro.
 
-use crate::modelo::{Datos, Dia, FORMATO_FECHA, Tarea};
+use crate::modelo::{Datos, Dia, Evento, FORMATO_FECHA, Tarea};
 use crate::reloj;
 use chrono::{Datelike, Days, Duration, NaiveDate, NaiveDateTime, Weekday};
 use std::collections::HashSet;
@@ -43,6 +43,8 @@ pub struct AvisoProgramado {
     pub momento: NaiveDateTime,
     pub aviso: Aviso,
     pub es_recordatorio: bool,
+    pub evento_id: Option<String>,
+    pub tarea_id: Option<String>,
 }
 
 /// Todos los avisos futuros dentro de `[desde, hasta]` (sin contar tareas
@@ -127,6 +129,21 @@ pub fn proximos_avisos(
         dia = siguiente;
     }
 
+    for e in &datos.eventos {
+        for (momento, aviso, evento_id, tarea_id) in avisos_de_evento(datos, e) {
+            añadir_programado_evento(
+                &mut lista,
+                enviados,
+                momento,
+                desde,
+                hasta,
+                aviso,
+                evento_id,
+                tarea_id,
+            );
+        }
+    }
+
     lista.sort_by(|a, b| {
         a.momento
             .cmp(&b.momento)
@@ -198,6 +215,14 @@ pub fn avisos_debidos(
             r.texto.clone(),
             format!("Recordatorio de las {}", reloj::hora_texto(r.hora)),
         );
+    }
+
+    for e in &datos.eventos {
+        for (momento, aviso, _, _) in avisos_de_evento(datos, e) {
+            if en_ventana(momento, ahora) && !enviados.contains(&aviso.clave) {
+                lista.push(aviso);
+            }
+        }
     }
 
     lista
@@ -349,8 +374,89 @@ fn añadir_programado(
                 cuerpo,
             },
             es_recordatorio,
+            evento_id: None,
+            tarea_id: None,
         });
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn añadir_programado_evento(
+    lista: &mut Vec<AvisoProgramado>,
+    enviados: &HashSet<String>,
+    momento: NaiveDateTime,
+    desde: NaiveDateTime,
+    hasta: NaiveDateTime,
+    aviso: Aviso,
+    evento_id: Option<String>,
+    tarea_id: Option<String>,
+) {
+    if momento >= desde && momento <= hasta && !enviados.contains(&aviso.clave) {
+        lista.push(AvisoProgramado {
+            momento,
+            aviso,
+            es_recordatorio: false,
+            evento_id,
+            tarea_id,
+        });
+    }
+}
+
+/// Calcula los avisos propios de un evento: uno al empezar y, si está ligado
+/// a una tarea no hecha, la pregunta "¿Terminaste ...?" al terminar.
+fn avisos_de_evento(
+    datos: &Datos,
+    e: &Evento,
+) -> Vec<(NaiveDateTime, Aviso, Option<String>, Option<String>)> {
+    let tarea = e.tarea.as_deref().and_then(|tid| {
+        let limpia = tid.trim();
+        if limpia.is_empty() {
+            None
+        } else {
+            datos.tareas.iter().find(|t| t.id == limpia)
+        }
+    });
+    let fecha_txt = e.fecha.format(FORMATO_FECHA).to_string();
+    let rango = reloj::rango_texto(e.inicio, e.fin);
+    let cuerpo_inicio = match tarea.and_then(|t| t.materia.as_deref()).map(str::trim) {
+        Some(materia) if !materia.is_empty() => format!("{materia} · {rango}"),
+        _ => match e.nota.as_deref().map(str::trim) {
+            Some(nota) if !nota.is_empty() => format!("{rango} · {nota}"),
+            _ => format!("Evento · {rango}"),
+        },
+    };
+
+    let mut salida = vec![(
+        e.fecha.and_time(e.inicio),
+        Aviso {
+            clave: format!("e:{}:inicio:{}:{}", e.id, e.inicio.format("%H%M"), fecha_txt),
+            titulo: e.titulo.clone(),
+            cuerpo: cuerpo_inicio,
+        },
+        Some(e.id.clone()),
+        tarea.map(|t| t.id.clone()),
+    )];
+
+    if let Some(t) = tarea.filter(|t| !t.hecha) {
+        let cuerpo_fin = match t.materia.as_deref().map(str::trim) {
+            Some(materia) if !materia.is_empty() => {
+                format!("{materia} · ¿la marcas hecha o reagendas?")
+            }
+            _ => "¿La marcas hecha o reagendas?".to_string(),
+        };
+        salida.push((
+            e.fecha.and_time(e.fin),
+            Aviso {
+                clave: format!("e:{}:fin:{}:{}", e.id, e.fin.format("%H%M"), fecha_txt),
+                titulo: format!("¿Terminaste {}?", t.titulo),
+                cuerpo: cuerpo_fin,
+            },
+            Some(e.id.clone()),
+            Some(t.id.clone()),
+        ));
+    }
+
+    salida
 }
 
 /// `momento <= ahora < momento + VENTANA_MINUTOS`.
@@ -428,6 +534,7 @@ mod pruebas {
             clases: Vec::new(),
             tareas,
             recordatorios,
+            eventos: Vec::new(),
         }
     }
 
@@ -599,5 +706,76 @@ mod pruebas {
         let lista2 = proximos_avisos(&d, momento(2026, 11, 28, 10, 0), hasta, &enviados);
         assert_eq!(lista2.len(), 1);
         assert_eq!(lista2[0].aviso.clave, "t:t-uno:horas:2026-11-28");
+    }
+
+    #[test]
+    fn avisos_de_evento_inicio_y_terminaste_solo_si_tarea_sin_hacer() {
+        let mut d = datos(vec![tarea(false)], Vec::new());
+        d.eventos.push(Evento {
+            id: "e-suelto".into(),
+            titulo: "Estudiar Control".into(),
+            fecha: fecha(2026, 11, 26),
+            inicio: chrono::NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            fin: chrono::NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+            tarea: None,
+            nota: None,
+        });
+        d.eventos.push(Evento {
+            id: "e-ligado".into(),
+            titulo: "Avanzar Taller 2".into(),
+            fecha: fecha(2026, 11, 26),
+            inicio: chrono::NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+            fin: chrono::NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
+            tarea: Some("t-uno".into()),
+            nota: None,
+        });
+
+        // Inicio del evento suelto.
+        let debidos = avisos_debidos(&d, momento(2026, 11, 26, 15, 2), &HashSet::new());
+        assert_eq!(debidos.len(), 1);
+        assert_eq!(debidos[0].clave, "e:e-suelto:inicio:1500:2026-11-26");
+        assert_eq!(debidos[0].titulo, "Estudiar Control");
+
+        // Al terminar el evento suelto no pregunta "¿Terminaste?".
+        assert!(avisos_debidos(&d, momento(2026, 11, 26, 16, 2), &HashSet::new()).is_empty());
+
+        // Al terminar el evento ligado con tarea sin hacer sí pregunta.
+        let debidos_fin = avisos_debidos(&d, momento(2026, 11, 26, 18, 2), &HashSet::new());
+        assert_eq!(debidos_fin.len(), 1);
+        assert_eq!(debidos_fin[0].clave, "e:e-ligado:fin:1800:2026-11-26");
+        assert_eq!(debidos_fin[0].titulo, "¿Terminaste Taller 2?");
+
+        // Si se mueve el evento a otra hora, cambia su clave.
+        let clave_antes = debidos[0].clave.clone();
+        d.eventos[0].inicio = chrono::NaiveTime::from_hms_opt(16, 0, 0).unwrap();
+        d.eventos[0].fin = chrono::NaiveTime::from_hms_opt(17, 0, 0).unwrap();
+        let movido = avisos_debidos(&d, momento(2026, 11, 26, 16, 1), &HashSet::from([clave_antes]));
+        assert_eq!(movido.len(), 1);
+        assert_eq!(movido[0].clave, "e:e-suelto:inicio:1600:2026-11-26");
+
+        // En proximos_avisos aparecen inicio y fin (cuando tarea no está hecha).
+        let prog = proximos_avisos(
+            &d,
+            momento(2026, 11, 26, 14, 0),
+            momento(2026, 11, 26, 20, 0),
+            &HashSet::new(),
+        );
+        assert_eq!(prog.len(), 3);
+        assert_eq!(prog[0].aviso.clave, "e:e-suelto:inicio:1600:2026-11-26");
+        assert_eq!(prog[1].aviso.clave, "e:e-ligado:inicio:1700:2026-11-26");
+        assert_eq!(prog[2].aviso.clave, "e:e-ligado:fin:1800:2026-11-26");
+        assert_eq!(prog[2].evento_id.as_deref(), Some("e-ligado"));
+        assert_eq!(prog[2].tarea_id.as_deref(), Some("t-uno"));
+
+        // Si la tarea ya está hecha, no pregunta al terminar.
+        d.tareas[0].hecha = true;
+        assert!(avisos_debidos(&d, momento(2026, 11, 26, 18, 2), &HashSet::new()).is_empty());
+        let prog_hecha = proximos_avisos(
+            &d,
+            momento(2026, 11, 26, 14, 0),
+            momento(2026, 11, 26, 20, 0),
+            &HashSet::new(),
+        );
+        assert_eq!(prog_hecha.len(), 2);
     }
 }

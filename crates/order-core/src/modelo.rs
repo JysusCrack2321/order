@@ -267,6 +267,23 @@ pub struct Recordatorio {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Evento {
+    #[serde(default)]
+    pub id: String,
+    pub titulo: String,
+    #[serde(with = "fecha")]
+    pub fecha: NaiveDate,
+    #[serde(with = "hora")]
+    pub inicio: NaiveTime,
+    #[serde(with = "hora")]
+    pub fin: NaiveTime,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tarea: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nota: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Datos {
     #[serde(default)]
     pub ajustes: Ajustes,
@@ -278,6 +295,8 @@ pub struct Datos {
     pub tareas: Vec<Tarea>,
     #[serde(default, rename = "recordatorio")]
     pub recordatorios: Vec<Recordatorio>,
+    #[serde(default, rename = "evento", skip_serializing_if = "Vec::is_empty")]
+    pub eventos: Vec<Evento>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -299,10 +318,40 @@ impl std::error::Error for ErrorDatos {}
 
 /// Lee el TOML completo. Si hay un error, informa la línea donde está.
 pub fn parsear(texto: &str) -> Result<Datos, ErrorDatos> {
-    toml::from_str::<Datos>(texto).map_err(|e| ErrorDatos {
+    let mut datos = toml::from_str::<Datos>(texto).map_err(|e| ErrorDatos {
         linea: e.span().map(|rango| numero_de_linea(texto, rango.start)),
         mensaje: con_ayuda(mensaje_corto(&e)),
-    })
+    })?;
+    validar_y_limpiar_eventos(&mut datos)?;
+    Ok(datos)
+}
+
+fn validar_y_limpiar_eventos(datos: &mut Datos) -> Result<(), ErrorDatos> {
+    for e in &mut datos.eventos {
+        if e.fin <= e.inicio {
+            return Err(ErrorDatos {
+                linea: None,
+                mensaje: format!(
+                    "el evento «{}» termina a las {} antes o igual que su inicio ({})",
+                    e.titulo,
+                    e.fin.format(FORMATO_HORA),
+                    e.inicio.format(FORMATO_HORA)
+                ),
+            });
+        }
+        if let Some(tid) = e.tarea.as_deref() {
+            let limpia = tid.trim();
+            let existe = !limpia.is_empty()
+                && datos
+                    .tareas
+                    .iter()
+                    .any(|t| !t.id.trim().is_empty() && t.id == limpia);
+            if !existe {
+                e.tarea = None;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Recuerda el formato cuando el error parece ser de hora o fecha.
@@ -392,7 +441,14 @@ pub fn canonica_materia(materias: &[String], texto: &str) -> String {
 // silencio. Esta función las señala con su línea; la ventana las muestra en
 // amarillo, aparte del rojo de los errores que sí bloquean.
 
-const CLAVES_RAIZ: &[&str] = &["ajustes", "semestre", "clase", "tarea", "recordatorio"];
+const CLAVES_RAIZ: &[&str] = &[
+    "ajustes",
+    "semestre",
+    "clase",
+    "tarea",
+    "recordatorio",
+    "evento",
+];
 const CLAVES_AJUSTES: &[&str] = &["aviso_dia_antes", "aviso_horas_antes"];
 const CLAVES_SEMESTRE: &[&str] = &["inicio", "fin"];
 const CLAVES_CLASE: &[&str] = &["id", "materia", "dia", "dias", "inicio", "fin", "lugar"];
@@ -407,6 +463,7 @@ const CLAVES_TAREA: &[&str] = &[
     "enlace",
 ];
 const CLAVES_RECORDATORIO: &[&str] = &["id", "texto", "dias", "hora"];
+const CLAVES_EVENTO: &[&str] = &["id", "titulo", "fecha", "inicio", "fin", "tarea", "nota"];
 
 /// Sección en la que va el escáner y las claves que admite.
 enum Seccion {
@@ -531,6 +588,7 @@ fn nueva_seccion(limpia: &str, numero: usize, avisos: &mut Vec<ErrorDatos>) -> S
         "clase" => CLAVES_CLASE,
         "tarea" => CLAVES_TAREA,
         "recordatorio" => CLAVES_RECORDATORIO,
+        "evento" => CLAVES_EVENTO,
         _ => {
             avisos.push(ErrorDatos {
                 linea: Some(numero),
@@ -776,5 +834,82 @@ hecha = false
         );
         let leidos = parsear(&doc_toml).expect("vuelve a parsear");
         assert_eq!(leidos.tareas[0], con_extras);
+    }
+
+    #[test]
+    fn evento_ida_y_vuelta_y_validacion() {
+        // TOML viejo sin eventos sigue siendo válido.
+        let viejo = "\
+[[tarea]]
+id = \"t-uno\"
+titulo = \"Taller 2\"
+vence = \"2026-11-28T23:59\"
+hecha = false
+";
+        let datos_viejos = parsear(viejo).expect("TOML sin eventos");
+        assert!(datos_viejos.eventos.is_empty());
+
+        // Evento con todos los campos opcionales en None solo serializa lo obligatorio.
+        let suelto = Evento {
+            id: "e-1".to_string(),
+            titulo: "Estudiar Control".to_string(),
+            fecha: NaiveDate::from_ymd_opt(2026, 11, 26).unwrap(),
+            inicio: NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            fin: NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+            tarea: None,
+            nota: None,
+        };
+        let toml_suelto = toml::to_string(&suelto).expect("serializa suelto");
+        assert!(!toml_suelto.contains("tarea"), "{toml_suelto}");
+        assert!(!toml_suelto.contains("nota"), "{toml_suelto}");
+
+        // Con tarea y nota sobrevive a ida y vuelta sin advertencias.
+        let ligado = Evento {
+            id: "e-2".to_string(),
+            titulo: "Avanzar Taller 2".to_string(),
+            fecha: NaiveDate::from_ymd_opt(2026, 11, 27).unwrap(),
+            inicio: NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+            fin: NaiveTime::from_hms_opt(11, 30, 0).unwrap(),
+            tarea: Some("t-uno".to_string()),
+            nota: Some("Capítulo 4".to_string()),
+        };
+        let doc = format!(
+            "{viejo}\n[[evento]]\n{toml_suelto}\n[[evento]]\n{}",
+            toml::to_string(&ligado).expect("serializa ligado")
+        );
+        assert!(
+            advertencias(&doc).is_empty(),
+            "sin advertencias: {:?}",
+            advertencias(&doc)
+        );
+        let leido = parsear(&doc).expect("parsea eventos");
+        assert_eq!(leido.eventos, vec![suelto, ligado]);
+
+        // Si la tarea apuntada no existe, se quita el enlace.
+        let huerfano = "\
+[[evento]]
+id = \"e-3\"
+titulo = \"Huérfano\"
+fecha = \"2026-11-27\"
+inicio = \"09:00\"
+fin = \"10:00\"
+tarea = \"t-no-existe\"
+";
+        let d_huerfano = parsear(huerfano).expect("evento huérfano válido sin enlace");
+        assert_eq!(d_huerfano.eventos[0].tarea, None);
+
+        // fin <= inicio se rechaza.
+        let invalido = "\
+[[evento]]
+id = \"e-4\"
+titulo = \"Al revés\"
+fecha = \"2026-11-27\"
+inicio = \"15:00\"
+fin = \"14:00\"
+";
+        assert!(parsear(invalido).is_err(), "fin < inicio debe fallar");
+
+        let igual = invalido.replace("14:00", "15:00");
+        assert!(parsear(&igual).is_err(), "fin == inicio debe fallar");
     }
 }

@@ -4095,6 +4095,7 @@ fn datos_vacios() -> Datos {
         clases: Vec::new(),
         tareas: Vec::new(),
         recordatorios: Vec::new(),
+        eventos: Vec::new(),
     }
 }
 

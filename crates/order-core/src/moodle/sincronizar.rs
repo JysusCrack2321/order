@@ -263,6 +263,7 @@ mod pruebas {
                 enlace: None,
             }],
             recordatorios: Vec::new(),
+            eventos: Vec::new(),
         }
     }
 
