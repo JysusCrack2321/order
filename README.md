@@ -1,9 +1,9 @@
 # ORDER
 
-Aplicación de escritorio personal para Linux (niri + barra DMS) que muestra el
-horario de la semana, las tareas pendientes y los recordatorios, y avisa por
-notificaciones de escritorio. Un solo binario Rust con Slint: sin servidor, sin
-puerto, sin base de datos y sin navegador. Arranca oculto (solo el icono de la
+Aplicación de escritorio personal para Linux (niri + barra DMS) y Android que muestra el
+horario de la semana, los eventos de un día, las tareas pendientes y los recordatorios, y avisa por
+notificaciones. Un solo binario Rust con Slint en escritorio y Jetpack Compose + UniFFI en Android: sin servidor, sin
+puerto, sin base de datos y sin navegador. En escritorio arranca oculto (solo el icono de la
 bandeja) y la ventana se abre cuando se pide.
 
 - Código: `~/apps/order`
@@ -15,7 +15,7 @@ Todo vive en un único archivo TOML, legible y editable a mano o con Hermes:
 
 | Archivo | Qué guarda |
 |---|---|
-| `~/.config/order/order.toml` | ajustes, semestre, clases, tareas y recordatorios |
+| `~/.config/order/order.toml` | ajustes, semestre, clases, tareas, eventos y recordatorios |
 | `~/.config/order/historial.toml` | tareas hechas con más de 30 días (las mueve la app) |
 | `~/.config/order/moodle.toml` | conexión con Moodle (solo token, permisos `600`, nunca se sincroniza) |
 | `~/.config/order/calendarios.toml` | suscripciones iCal (permisos `600`, nunca se sincroniza) |
@@ -192,14 +192,27 @@ Todos los atajos se pueden personalizar desde **Ajustes → Atajos** (se guardan
 | Abrir Ajustes | `Ctrl+,` |
 | Mostrar la lista de atajos | `?` |
 
+## Eventos, clases, tareas y recordatorios
+
+ORDER distingue cuatro piezas dentro de `order.toml`:
+
+- **Clase**: bloque recurrente semanal dentro del semestre (por ejemplo, una asignatura cada lunes y miércoles).
+- **Tarea**: entrega con fecha y hora límite (`vence`) que aparece en pendientes y puede marcarse hecha.
+- **Recordatorio**: aviso fijo semanal sin franja horaria (por ejemplo, revisar el correo los viernes).
+- **Evento**: bloque de **un solo día** con fecha, hora de inicio y hora de fin (`[[evento]]`), pensado para reservar tiempo real en la agenda (como una sesión de estudio, una tutoría o una cita).
+
+### Agendar y Reagendar
+
+- **Agendar desde una tarea**: al editar una tarea, el botón **Agendar** abre un evento vinculado a ella (`tarea = "<id>"`) con su título precargado y muestra los bloques agendados para esa tarea en las vistas de **Inicio**, **Día** y **Semana**. Si la tarea se marca hecha antes de la sesión, sus eventos aparecen atenuados y tachados.
+- **Reagendar y seguimiento**: cuando termina un evento vinculado a una tarea que sigue pendiente, ORDER pregunta **«¿Terminaste …?»** tanto en una notificación (con acciones **Hecha** y **Reagendar** en Android; y aviso en escritorio) como en las tarjetas superiores de **Inicio** y **Pendientes**. **Hecha** marca la tarea como completada y **Reagendar** abre el evento directamente en el selector de fecha y horario para moverlo a otro momento.
+
 ## Avisos
 
 - Tarea por vencer: un aviso el día antes a `aviso_dia_antes` y otro
   `aviso_horas_antes` antes de `vence` (ambos en `[ajustes]`).
+- Evento de un día: un aviso a la hora de inicio del evento; si está ligado a una tarea aún pendiente, al terminar el bloque lanza el aviso **«¿Terminaste …?»** (en Android con botones **Hecha** y **Reagendar**).
 - Recordatorios fijos: los `dias` indicados a la `hora` indicada.
-- Las notificaciones no llevan botones. Un aviso ya mostrado no se repite, ni
-  siquiera tras reiniciar la app; los que se perdieron con el equipo apagado no
-  se disparan en ráfaga (como mucho un resumen al arrancar).
+- Un aviso ya mostrado no se repite, ni siquiera tras reiniciar la app; los que se perdieron con el equipo apagado no se disparan en ráfaga (como mucho un resumen al arrancar).
 
 ## Agente y adjuntos
 
@@ -262,7 +275,7 @@ ORDER sincroniza `order.toml` directamente entre tu PC y tu celular sin cuentas 
   1. En un dispositivo (por ejemplo el PC), abre **Ajustes → Dispositivos** y toca **Agregar dispositivo**. Aparece un código QR (válido 10 minutos, de un solo uso), un código de **8 palabras** (para la misma red Wi-Fi) y un enlace `order://emparejar?…`.
   2. En el celular, abre **Ajustes → Dispositivos** y toca **Escanear QR** (o **Escribir código** para introducir las 8 palabras en la misma Wi-Fi o pegar el enlace `order://emparejar?…`).
   3. Solo se aceptan conexiones de nodos previamente emparejados.
-- **Qué viaja**: exclusivamente los campos de tu agenda (`ajustes`, `semestre`, `clase`, `tarea`, `recordatorio`) con sus marcas lógicas, sobre QUIC (`iroh`, ALPN `order/sync/1`) con **cifrado de extremo a extremo**. En la misma red Wi-Fi se descubren localmente por mDNS; cuando están en redes distintas, los relays públicos de n0 actúan solo como paso de tráfico cifrado (nunca ven tu agenda ni tus claves).
+- **Qué viaja**: exclusivamente los campos de tu agenda (`ajustes`, `semestre`, `clase`, `tarea`, `evento`, `recordatorio`) con sus marcas lógicas, sobre QUIC (`iroh`, ALPN `order/sync/1`) con **cifrado de extremo a extremo**. En la misma red Wi-Fi se descubren localmente por mDNS; cuando están en redes distintas, los relays públicos de n0 actúan solo como paso de tráfico cifrado (nunca ven tu agenda ni tus claves).
 - **Dónde vive el estado**: en **`sync.toml`** (clave privada del nodo, nombre del dispositivo y lista de emparejados) y **`sync-estado.json`** (marcas HLC, lápidas y última foto sincronizada), siempre con permisos **`600`** en el almacenamiento privado junto a `agente.toml` (`~/.config/order/` en escritorio o `filesDir` en Android, nunca dentro de `order.toml` ni de la carpeta compartida).
 - **Cuándo sincroniza**: como no hay servidor intermedio, **ambos dispositivos deben estar encendidos a la vez** para intercambiar cambios (en escritorio basta con que ORDER esté vivo en la bandeja). El escritorio escucha siempre y sincroniza al arrancar, cada 5 minutos y 2 segundos después de cada cambio local; Android sincroniza al abrir o volver a primer plano, tras cada cambio y cada **1 hora** en segundo plano (`TrabajoRespaldo`), y escucha mientras la app está abierta.
 
