@@ -4,7 +4,7 @@
 //! del TOML (`YYYY-MM-DDTHH:MM`) y los `id` de todo lo que se puede editar o
 //! borrar, para que las acciones apunten a elementos que existen.
 
-use crate::modelo::{Datos, Tarea};
+use crate::modelo::{Datos, FORMATO_FECHA, Tarea};
 use chrono::{Datelike, NaiveDateTime, Timelike};
 
 const DIAS: [&str; 7] = [
@@ -122,6 +122,43 @@ pub fn resumen(datos: &Datos, ahora: NaiveDateTime, zona: &str) -> String {
             dias.join(", "),
             hora(recordatorio.hora)
         ));
+    }
+
+    texto.push_str("\nEventos:\n");
+    if datos.eventos.is_empty() {
+        texto.push_str("- (ninguno)\n");
+    } else {
+        let mut eventos: Vec<_> = datos.eventos.iter().collect();
+        eventos.sort_by(|a, b| {
+            a.fecha
+                .cmp(&b.fecha)
+                .then(a.inicio.cmp(&b.inicio))
+                .then(a.fin.cmp(&b.fin))
+                .then(a.id.cmp(&b.id))
+        });
+        for evento in eventos {
+            let tarea = evento
+                .tarea
+                .as_deref()
+                .and_then(|tid| datos.tareas.iter().find(|t| t.id == tid))
+                .map(|t| format!(" · tarea {} («{}»)", t.id, t.titulo))
+                .unwrap_or_default();
+            let nota = evento
+                .nota
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(|n| format!(" · nota: {n}"))
+                .unwrap_or_default();
+            texto.push_str(&format!(
+                "- id {}: «{}» · {} · {}–{}{tarea}{nota}\n",
+                evento.id,
+                evento.titulo,
+                evento.fecha.format(FORMATO_FECHA),
+                hora(evento.inicio),
+                hora(evento.fin),
+            ));
+        }
     }
 
     texto
@@ -281,6 +318,23 @@ mod pruebas {
         assert!(
             texto.contains("- id r-uno: «Revisar Moodle» · lun, vie · 18:00"),
             "{texto}"
+        );
+        assert!(texto.contains("Eventos:\n- (ninguno)"), "{texto}");
+
+        let mut con_evento = datos();
+        con_evento.eventos.push(crate::modelo::Evento {
+            id: "e-uno".into(),
+            titulo: "Estudiar Taller 2".into(),
+            fecha: fecha("2026-11-26"),
+            inicio: chrono::NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            fin: chrono::NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+            tarea: Some("t-uno".into()),
+            nota: None,
+        });
+        let texto_ev = resumen(&con_evento, momento("2026-11-22T01:12"), "UTC-05:00");
+        assert!(
+            texto_ev.contains("- id e-uno: «Estudiar Taller 2» · 2026-11-26 · 15:00–16:00 · tarea t-uno («Taller 2»)"),
+            "{texto_ev}"
         );
     }
 

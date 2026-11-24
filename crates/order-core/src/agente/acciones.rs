@@ -8,9 +8,10 @@
 
 use crate::almacen::Almacen;
 use crate::modelo::{
-    self, Clase, Datos, Dia, ErrorDatos, FORMATO_FECHA_HORA, FORMATO_HORA, Recordatorio, Tarea,
+    self, Clase, Datos, Dia, ErrorDatos, Evento, FORMATO_FECHA, FORMATO_FECHA_HORA, FORMATO_HORA,
+    Recordatorio, Tarea,
 };
-use crate::ops::{self, NuevaTarea};
+use crate::ops::{self, NuevaTarea, NuevoEvento};
 use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -63,6 +64,31 @@ pub enum Accion {
         hora: String,
     },
     BorrarRecordatorio { id: String },
+    CrearEvento {
+        #[serde(default)]
+        titulo: String,
+        fecha: String,
+        inicio: String,
+        fin: String,
+        #[serde(default)]
+        tarea: Option<String>,
+        #[serde(default)]
+        nota: Option<String>,
+    },
+    MoverEvento {
+        id: String,
+        #[serde(default)]
+        fecha: Option<String>,
+        #[serde(default)]
+        inicio: Option<String>,
+        #[serde(default)]
+        fin: Option<String>,
+        #[serde(default)]
+        titulo: Option<String>,
+        #[serde(default)]
+        nota: Option<String>,
+    },
+    BorrarEvento { id: String },
 }
 
 impl Accion {
@@ -79,6 +105,9 @@ impl Accion {
             Accion::GuardarRecordatorio { id: None, .. } => "Crear recordatorio",
             Accion::GuardarRecordatorio { .. } => "Editar recordatorio",
             Accion::BorrarRecordatorio { .. } => "Borrar recordatorio",
+            Accion::CrearEvento { .. } => "Crear evento",
+            Accion::MoverEvento { .. } => "Mover evento",
+            Accion::BorrarEvento { .. } => "Borrar evento",
         }
     }
 
@@ -197,6 +226,79 @@ impl Accion {
                     .unwrap_or_else(|| id.clone());
                 format!("Borrar el recordatorio «{nombre}».")
             }
+            Accion::CrearEvento {
+                titulo,
+                fecha,
+                inicio,
+                fin,
+                tarea,
+                ..
+            } => {
+                let nombre = {
+                    let limpio = titulo.trim();
+                    if !limpio.is_empty() {
+                        limpio.to_string()
+                    } else if let Some(tid) = tarea.as_deref() {
+                        tarea_de(datos, tid)
+                            .map(|t| t.titulo.clone())
+                            .unwrap_or_else(|| tid.to_string())
+                    } else {
+                        String::new()
+                    }
+                };
+                let enlace = tarea
+                    .as_deref()
+                    .and_then(|tid| tarea_de(datos, tid))
+                    .map(|t| format!(" (para la tarea «{}»)", t.titulo))
+                    .unwrap_or_default();
+                format!(
+                    "Crear el evento «{nombre}» el {} de {} a {}{enlace}.",
+                    fecha_solo_legible(fecha),
+                    inicio.trim(),
+                    fin.trim()
+                )
+            }
+            Accion::MoverEvento {
+                id,
+                fecha,
+                inicio,
+                fin,
+                titulo,
+                ..
+            } => {
+                let nombre = titulo
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .or_else(|| evento_de(datos, id).map(|e| e.titulo.clone()))
+                    .unwrap_or_else(|| id.clone());
+                let mut cambios = Vec::new();
+                if let Some(f) = fecha {
+                    cambios.push(format!("fecha {}", fecha_solo_legible(f)));
+                }
+                if let (Some(i), Some(f)) = (inicio, fin) {
+                    cambios.push(format!("{}–{}", i.trim(), f.trim()));
+                } else {
+                    if let Some(i) = inicio {
+                        cambios.push(format!("inicio {}", i.trim()));
+                    }
+                    if let Some(f) = fin {
+                        cambios.push(format!("fin {}", f.trim()));
+                    }
+                }
+                if cambios.is_empty() {
+                    format!("Mover el evento «{nombre}».")
+                } else {
+                    format!("Mover el evento «{nombre}»: {}.", cambios.join(", "))
+                }
+            }
+            Accion::BorrarEvento { id } => {
+                let nombre = evento_de(datos, id)
+                    .map(|e| e.titulo.clone())
+                    .unwrap_or_else(|| id.clone());
+                format!("Borrar el evento «{nombre}».")
+            }
         }
     }
 }
@@ -274,7 +376,8 @@ pub fn esquema() -> Value {
                 "type": "string",
                 "enum": [
                     "crear_tarea", "editar_tarea", "marcar_tarea", "borrar_tarea",
-                    "guardar_clase", "borrar_clase", "guardar_recordatorio", "borrar_recordatorio"
+                    "guardar_clase", "borrar_clase", "guardar_recordatorio", "borrar_recordatorio",
+                    "crear_evento", "mover_evento", "borrar_evento"
                 ]
             },
             "id": { "type": ["string", "null"] },
@@ -284,10 +387,13 @@ pub fn esquema() -> Value {
             "vence": { "type": "string" },
             "hecha": { "type": "boolean" },
             "dias": dias,
-            "inicio": { "type": "string" },
-            "fin": { "type": "string" },
+            "inicio": opcional,
+            "fin": opcional,
             "hora": { "type": "string" },
-            "lugar": opcional
+            "lugar": opcional,
+            "fecha": opcional,
+            "tarea": opcional,
+            "nota": opcional
         },
         "required": ["tipo"],
         "additionalProperties": false
@@ -498,6 +604,121 @@ pub fn aplicar_en(doc: &mut DocumentMut, accion: &Accion) -> Result<(), String> 
             }
             ops::borrar_recordatorio(doc, id)
         }
+        Accion::CrearEvento {
+            titulo,
+            fecha,
+            inicio,
+            fin,
+            tarea,
+            nota,
+        } => {
+            let tarea_id = match tarea.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                Some(tid) => {
+                    if tarea_de(&datos, tid).is_none() {
+                        return Err(no_existe("la tarea", tid));
+                    }
+                    Some(tid.to_string())
+                }
+                None => None,
+            };
+            let titulo = {
+                let limpio = titulo.trim();
+                if !limpio.is_empty() {
+                    limpio.to_string()
+                } else if let Some(tid) = tarea_id.as_deref() {
+                    tarea_de(&datos, tid)
+                        .map(|t| t.titulo.clone())
+                        .unwrap_or_default()
+                } else {
+                    return Err("el evento nuevo no tiene título".to_string());
+                }
+            };
+            let fecha = fecha_simple(fecha, "la fecha del evento")?;
+            let inicio = hora(inicio, "la hora de inicio")?;
+            let fin = hora(fin, "la hora de fin")?;
+            if fin <= inicio {
+                return Err(
+                    "la hora de fin del evento debe ser posterior a la de inicio".to_string(),
+                );
+            }
+            let nuevo = NuevoEvento {
+                titulo,
+                fecha,
+                inicio,
+                fin,
+                tarea: tarea_id,
+                nota: nota.as_deref().and_then(opcional),
+            };
+            ops::agregar_evento(doc, &nuevo).map(|_| ())
+        }
+        Accion::MoverEvento {
+            id,
+            fecha,
+            inicio,
+            fin,
+            titulo,
+            nota,
+        } => {
+            let actual = evento_de(&datos, id)
+                .cloned()
+                .ok_or_else(|| no_existe("el evento", id))?;
+            let nueva_fecha = match fecha {
+                Some(f) => fecha_simple(f, "la fecha del evento")?,
+                None => actual.fecha,
+            };
+            let nuevo_inicio = match inicio {
+                Some(i) => hora(i, "la hora de inicio")?,
+                None => actual.inicio,
+            };
+            let nueva_fin = match fin {
+                Some(f) => hora(f, "la hora de fin")?,
+                None => {
+                    if inicio.is_some() && actual.fin <= nuevo_inicio {
+                        let duracion = actual.fin - actual.inicio;
+                        let candidato = nuevo_inicio + duracion;
+                        if candidato > nuevo_inicio {
+                            candidato
+                        } else {
+                            NaiveTime::from_hms_opt(23, 59, 0).unwrap_or(actual.fin)
+                        }
+                    } else {
+                        actual.fin
+                    }
+                }
+            };
+            if nueva_fin <= nuevo_inicio {
+                return Err(
+                    "la hora de fin del evento debe ser posterior a la de inicio".to_string(),
+                );
+            }
+            let nuevo_titulo = titulo
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            if nuevo_titulo.is_some() || nota.is_some() {
+                let editado = NuevoEvento {
+                    titulo: nuevo_titulo.unwrap_or(actual.titulo),
+                    fecha: nueva_fecha,
+                    inicio: nuevo_inicio,
+                    fin: nueva_fin,
+                    tarea: actual.tarea,
+                    nota: match nota {
+                        Some(n) => opcional(n),
+                        None => actual.nota,
+                    },
+                };
+                ops::editar_evento(doc, id, &editado)
+            } else {
+                ops::mover_evento(doc, id, nueva_fecha, nuevo_inicio, nueva_fin)
+            }
+        }
+        Accion::BorrarEvento { id } => {
+            if evento_de(&datos, id).is_none() {
+                return Err(no_existe("el evento", id));
+            }
+            ops::borrar_evento(doc, id)
+        }
     }
 }
 
@@ -507,6 +728,10 @@ pub fn aplicar_en(doc: &mut DocumentMut, accion: &Accion) -> Result<(), String> 
 
 fn tarea_de<'a>(datos: &'a Datos, id: &str) -> Option<&'a Tarea> {
     datos.tareas.iter().find(|tarea| tarea.id == id)
+}
+
+fn evento_de<'a>(datos: &'a Datos, id: &str) -> Option<&'a Evento> {
+    datos.eventos.iter().find(|evento| evento.id == id)
 }
 
 fn no_existe(que: &str, id: &str) -> String {
@@ -532,6 +757,19 @@ fn fecha_hora(texto: &str, campo: &str) -> Result<NaiveDateTime, String> {
 fn fecha_legible(texto: &str) -> String {
     match fecha_hora(texto, "la fecha") {
         Ok(momento) => momento.format("%d/%m/%Y a las %H:%M").to_string(),
+        Err(_) => format!("«{}»", texto.trim()),
+    }
+}
+
+fn fecha_simple(texto: &str, campo: &str) -> Result<NaiveDate, String> {
+    let limpio = texto.trim();
+    NaiveDate::parse_from_str(limpio, FORMATO_FECHA)
+        .map_err(|_| format!("{campo} «{limpio}» no es una fecha válida (se espera YYYY-MM-DD)"))
+}
+
+fn fecha_solo_legible(texto: &str) -> String {
+    match fecha_simple(texto, "la fecha") {
+        Ok(fecha) => fecha.format("%d/%m/%Y").to_string(),
         Err(_) => format!("«{}»", texto.trim()),
     }
 }
@@ -983,7 +1221,7 @@ hora = \"18:00\"
         let tipos = esquema["properties"]["acciones"]["items"]["properties"]["tipo"]["enum"]
             .as_array()
             .expect("enum de tipos");
-        assert_eq!(tipos.len(), 8);
+        assert_eq!(tipos.len(), 11);
         for accion in [
             "crear_tarea",
             "editar_tarea",
@@ -993,6 +1231,9 @@ hora = \"18:00\"
             "borrar_clase",
             "guardar_recordatorio",
             "borrar_recordatorio",
+            "crear_evento",
+            "mover_evento",
+            "borrar_evento",
         ] {
             assert!(
                 tipos.iter().any(|valor| valor == accion),
@@ -1039,5 +1280,50 @@ hora = \"18:00\"
         assert_eq!(datos.tareas.len(), 2);
         let err = resultado.error.expect("la segunda falló");
         assert!(err.starts_with("Aplicadas 1; falló «Borrar tarea»"), "{err}");
+    }
+
+    #[test]
+    fn eventos_crear_mover_y_borrar() {
+        let (_dir, almacen) = almacen_con_base();
+
+        // Crear evento ligado a tarea existente sin repetir título: toma el de la tarea.
+        let datos = aplicar(
+            &almacen,
+            &Accion::CrearEvento {
+                titulo: String::new(),
+                fecha: "2026-11-26".into(),
+                inicio: "10:00".into(),
+                fin: "11:00".into(),
+                tarea: Some("t-uno".into()),
+                nota: Some("Capítulo 2".into()),
+            },
+        )
+        .expect("crear evento");
+        assert_eq!(datos.eventos.len(), 1);
+        let id = datos.eventos[0].id.clone();
+        assert!(id.starts_with("e-"));
+        assert_eq!(datos.eventos[0].titulo, "Taller 2");
+        assert_eq!(datos.eventos[0].tarea.as_deref(), Some("t-uno"));
+
+        // Mover solo la hora de inicio conserva la duración (1h -> 15:00 a 16:00).
+        let datos = aplicar(
+            &almacen,
+            &Accion::MoverEvento {
+                id: id.clone(),
+                fecha: Some("2026-11-27".into()),
+                inicio: Some("15:00".into()),
+                fin: None,
+                titulo: None,
+                nota: None,
+            },
+        )
+        .expect("mover evento");
+        assert_eq!(datos.eventos[0].fecha.format("%Y-%m-%d").to_string(), "2026-11-27");
+        assert_eq!(datos.eventos[0].inicio.format("%H:%M").to_string(), "15:00");
+        assert_eq!(datos.eventos[0].fin.format("%H:%M").to_string(), "16:00");
+
+        // Borrar evento.
+        let datos = aplicar(&almacen, &Accion::BorrarEvento { id }).expect("borrar evento");
+        assert!(datos.eventos.is_empty());
     }
 }

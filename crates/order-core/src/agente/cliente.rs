@@ -352,15 +352,22 @@ fn agente_http() -> ureq::Agent {
 /// System prompt: el contrato que el modelo debe cumplir.
 pub fn sistema() -> String {
     format!(
-        r#"Eres el asistente de ORDER, una app personal de horario, tareas y recordatorios.
+        r#"Eres el asistente de ORDER, una app personal de horario, tareas, eventos y recordatorios.
 
 Respondes SIEMPRE con un único objeto JSON, sin texto fuera del JSON:
 {{"respuesta": "texto corto en español", "acciones": [ ... ]}}
 
+Diferencia entre cada elemento:
+- clase: horario fijo semanal que se repite cada semana del semestre.
+- recordatorio: aviso semanal recurrente a una hora fija (p. ej. revisar Moodle los lunes).
+- tarea: entrega o pendiente con fecha límite ("vence") y estado hecha/pendiente.
+- evento: bloque de tiempo que ocurre UNA SOLA VEZ en una fecha concreta (estudiar, cita, parcial, o reservar un rato para hacer una tarea ligando su id en "tarea").
+
 Formatos exactos (los mismos del archivo):
 - vencimiento de tarea: "YYYY-MM-DDTHH:MM" (hora local, 24 h)
-- hora de clase o recordatorio: "HH:MM"
-- días: "lun", "mar", "mie", "jue", "vie", "sab", "dom"
+- fecha de evento: "YYYY-MM-DD"
+- hora de clase, evento o recordatorio: "HH:MM"
+- días (para clase o recordatorio): "lun", "mar", "mie", "jue", "vie", "sab", "dom"
 
 Tipos de acción admitidos (campo "tipo"):
 - crear_tarea: {{"tipo":"crear_tarea","titulo":"…","materia":"…"|null,"vence":"YYYY-MM-DDTHH:MM"}}
@@ -371,9 +378,12 @@ Tipos de acción admitidos (campo "tipo"):
 - borrar_clase: {{"tipo":"borrar_clase","id":"c-…"}}
 - guardar_recordatorio: {{"tipo":"guardar_recordatorio","id":"r-…"|null,"texto":"…","dias":["lun"],"hora":"HH:MM"}}
 - borrar_recordatorio: {{"tipo":"borrar_recordatorio","id":"r-…"}}
+- crear_evento: {{"tipo":"crear_evento","titulo":"…","fecha":"YYYY-MM-DD","inicio":"HH:MM","fin":"HH:MM","tarea":"t-…"|null,"nota":"…"|null}}
+- mover_evento: {{"tipo":"mover_evento","id":"e-…","fecha":"YYYY-MM-DD","inicio":"HH:MM","fin":"HH:MM"}} (solo los campos que cambian)
+- borrar_evento: {{"tipo":"borrar_evento","id":"e-…"}}
 
 Reglas:
-1. Solo puedes editar, marcar o borrar con los id que aparecen en los datos. Nunca inventes un id.
+1. Solo puedes editar, marcar, mover o borrar con los id que aparecen en los datos. Nunca inventes un id.
 2. Usa la grafía exacta de las materias que ya existen en los datos; no traduzcas ni cambies mayúsculas.
 3. Si la petición es una pregunta o una consulta, contéstala breve en "respuesta" y deja "acciones" vacío.
 4. Propón una acción por cada cosa que se pida; no apliques nada tú: el usuario confirma.
@@ -1072,10 +1082,15 @@ mod pruebas {
     fn system_prompt_en_espanol() {
         let sistema = sistema();
         assert!(sistema.contains("YYYY-MM-DDTHH:MM"));
+        assert!(sistema.contains("YYYY-MM-DD"));
         assert!(sistema.contains("\"HH:MM\""));
         assert!(sistema.contains("no inventes un id") || sistema.contains("Nunca inventes un id"));
         assert!(sistema.contains("grafía exacta de las materias"));
         assert!(sistema.contains("pregunta"));
+        assert!(sistema.contains("crear_evento"));
+        assert!(sistema.contains("mover_evento"));
+        assert!(sistema.contains("borrar_evento"));
+        assert!(sistema.contains("evento:") && sistema.contains("clase:") && sistema.contains("recordatorio:") && sistema.contains("tarea:"));
         assert!(!sistema.contains("\"resumen\""));
     }
 
@@ -1253,5 +1268,162 @@ mod pruebas {
         assert_eq!(res_red.mensaje, "Sin internet; inténtalo luego.");
         assert!(res_red.guardada);
         assert_eq!(config::cargar_de(&ruta_red).api_key, "AIzaOffline12345");
+    }
+
+    #[test]
+    fn proveedor_simulado_agenda_mueve_y_borra_eventos() {
+        use crate::agente::contexto;
+        use crate::almacen::Almacen;
+        use chrono::NaiveDateTime;
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let almacen = Almacen {
+            ruta: dir.path().join("order.toml"),
+        };
+        std::fs::write(
+            &almacen.ruta,
+            "\
+[[tarea]]
+id = \"t-3\"
+titulo = \"Tarea 3 de control\"
+materia = \"Control\"
+vence = \"2026-11-28T23:59\"
+hecha = false
+",
+        )
+        .expect("escribir");
+
+        let respuestas = vec![
+            // Turno 1: crear evento suelto y evento ligado a tarea t-3.
+            json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": serde_json::to_string(&json!({
+                            "respuesta": "Agendé tu estudio de Control y la tarea 3.",
+                            "acciones": [
+                                {
+                                    "tipo": "crear_evento",
+                                    "titulo": "Estudiar Control",
+                                    "fecha": "2026-11-25",
+                                    "inicio": "15:00",
+                                    "fin": "16:00"
+                                },
+                                {
+                                    "tipo": "crear_evento",
+                                    "titulo": "Tarea 3 de control",
+                                    "fecha": "2026-11-26",
+                                    "inicio": "10:00",
+                                    "fin": "11:00",
+                                    "tarea": "t-3"
+                                }
+                            ]
+                        })).unwrap()
+                    }
+                }]
+            })
+            .to_string(),
+        ];
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let handle = std::thread::spawn(move || {
+            for body in respuestas {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let mut buf = [0u8; 8192];
+                    let _ = stream.read(&mut buf);
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                    let _ = stream.flush();
+                }
+            }
+        });
+
+        let mut cfg = config(Proveedor::OpenAICompatible);
+        cfg.modelo = "modelo-simulado".into();
+        cfg.url_base = format!("http://{addr}");
+        let datos = almacen.cargar().expect("cargar");
+        let ahora = NaiveDateTime::parse_from_str("2026-11-24T12:00", "%Y-%m-%dT%H:%M").unwrap();
+        let ctx = contexto::resumen(&datos, ahora, "UTC-05:00");
+        let crudo = consultar(
+            &cfg,
+            &ctx,
+            "mañana a las 3 estudio control una hora, y agenda la tarea 3 el jueves a las 10",
+            &[],
+            &Conversacion::nueva(),
+        )
+        .expect("consultar simulado");
+        let _ = handle.join();
+
+        let resp = acciones::parsear(&crudo).expect("parsear");
+        assert_eq!(resp.acciones.len(), 2);
+        let res = acciones::aplicar_todas(&almacen, &resp.acciones);
+        assert_eq!(res.aplicadas, 2);
+        let actualizados = res.ultimos_datos.expect("datos");
+        assert_eq!(actualizados.eventos.len(), 2);
+        assert_eq!(actualizados.eventos[0].titulo, "Estudiar Control");
+        assert_eq!(actualizados.eventos[1].tarea.as_deref(), Some("t-3"));
+
+        // Segundo servidor simulado que recibe el contexto con los id e-... para mover y borrar.
+        let id_suelto = actualizados.eventos[0].id.clone();
+        let id_tarea = actualizados.eventos[1].id.clone();
+        let ctx2 = contexto::resumen(&actualizados, ahora, "UTC-05:00");
+        assert!(ctx2.contains(&id_suelto), "{ctx2}");
+
+        let body2 = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": serde_json::to_string(&json!({
+                        "respuesta": "Moví uno y borré el otro.",
+                        "acciones": [
+                            {
+                                "tipo": "mover_evento",
+                                "id": id_suelto,
+                                "fecha": "2026-11-27",
+                                "inicio": "17:00",
+                                "fin": "18:00"
+                            },
+                            {
+                                "tipo": "borrar_evento",
+                                "id": id_tarea
+                            }
+                        ]
+                    })).unwrap()
+                }
+            }]
+        })
+        .to_string();
+
+        let listener2 = TcpListener::bind("127.0.0.1:0").expect("bind 2");
+        let addr2 = listener2.local_addr().expect("addr 2");
+        let handle2 = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener2.accept() {
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body2}",
+                    body2.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        cfg.url_base = format!("http://{addr2}");
+        let crudo2 = consultar(&cfg, &ctx2, "mueve el primero y borra el segundo", &[], &Conversacion::nueva())
+            .expect("consultar 2");
+        let _ = handle2.join();
+
+        let resp2 = acciones::parsear(&crudo2).expect("parsear 2");
+        let res2 = acciones::aplicar_todas(&almacen, &resp2.acciones);
+        assert_eq!(res2.aplicadas, 2);
+        let finales = res2.ultimos_datos.expect("datos finales");
+        assert_eq!(finales.eventos.len(), 1);
+        assert_eq!(finales.eventos[0].inicio.format("%H:%M").to_string(), "17:00");
     }
 }
