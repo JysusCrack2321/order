@@ -594,6 +594,7 @@ class FakePuenteOrder : PuenteOrder {
             numTareas = 2u,
             numTareasPendientes = 1u,
             numRecordatorios = 1u,
+            numEventos = 0u,
             advertencias = advertencias,
             conflictos = conflictos,
             pie = "Hoy: 1 tarea pendiente",
@@ -611,6 +612,8 @@ class FakePuenteOrder : PuenteOrder {
     override fun vistaInicio(ruta: String): InicioVistaFfi = InicioVistaFfi(
         fechaLarga = "domingo 22 de noviembre",
         clases = emptyList(),
+        eventos = emptyList(),
+        porReagendar = emptyList(),
         siguiente = null,
         vencidas = emptyList(),
         deHoy = listOf(tareaEjemplo),
@@ -625,6 +628,7 @@ class FakePuenteOrder : PuenteOrder {
         etiqueta = "domingo 22 de noviembre",
         esHoy = true,
         clases = emptyList(),
+        eventos = emptyList(),
         tareas = listOf(tareaEjemplo),
         recordatorios = emptyList(),
     )

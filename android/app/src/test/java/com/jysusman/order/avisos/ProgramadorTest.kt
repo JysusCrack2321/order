@@ -53,6 +53,9 @@ class ProgramadorTest {
                     titulo = "Vence mañana: Parcial",
                     cuerpo = "Control · vence el 28/11 a las 11:59 p. m.",
                     esRecordatorio = false,
+                    esPreguntaEvento = false,
+                    eventoId = null,
+                    tareaId = null,
                 ),
                 AvisoProgramableFfi(
                     clave = "r:r-1:2026-11-28",
@@ -60,6 +63,9 @@ class ProgramadorTest {
                     titulo = "Revisar Moodle",
                     cuerpo = "Recordatorio de las 6:00 p. m.",
                     esRecordatorio = true,
+                    esPreguntaEvento = false,
+                    eventoId = null,
+                    tareaId = null,
                 ),
                 // Aviso pasado: no debe programarse.
                 AvisoProgramableFfi(
@@ -68,6 +74,9 @@ class ProgramadorTest {
                     titulo = "Pasada",
                     cuerpo = "No debe sonar",
                     esRecordatorio = false,
+                    esPreguntaEvento = false,
+                    eventoId = null,
+                    tareaId = null,
                 ),
             )
         )
@@ -129,6 +138,9 @@ class ProgramadorTest {
                     titulo = "Planear semana",
                     cuerpo = "Recordatorio de las 7:30 p. m.",
                     esRecordatorio = true,
+                    esPreguntaEvento = false,
+                    eventoId = null,
+                    tareaId = null,
                 ),
             )
         )

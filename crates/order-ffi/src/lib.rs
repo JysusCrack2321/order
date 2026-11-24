@@ -174,6 +174,7 @@ pub struct ResumenArchivoFfi {
     pub num_tareas: u32,
     pub num_tareas_pendientes: u32,
     pub num_recordatorios: u32,
+    pub num_eventos: u32,
     pub advertencias: Vec<String>,
     pub conflictos: Vec<ConflictoFfi>,
     pub pie: String,
@@ -216,9 +217,30 @@ pub struct ConteoMateriaFfi {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct EventoFfi {
+    pub id: String,
+    pub titulo: String,
+    pub fecha_iso: String,
+    pub fecha_texto: String,
+    pub hora_inicio: String,
+    pub hora_fin: String,
+    pub rango_hora: String,
+    pub inicio_min: i32,
+    pub fin_min: i32,
+    pub tarea_id: String,
+    pub tarea_titulo: String,
+    pub materia: String,
+    pub tarea_hecha: bool,
+    pub tono: i32,
+    pub nota: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct InicioVistaFfi {
     pub fecha_larga: String,
     pub clases: Vec<ClaseInicioFfi>,
+    pub eventos: Vec<EventoFfi>,
+    pub por_reagendar: Vec<EventoFfi>,
     pub siguiente: Option<ClaseInicioFfi>,
     pub vencidas: Vec<TareaFfi>,
     pub de_hoy: Vec<TareaFfi>,
@@ -234,6 +256,7 @@ pub struct DiaVistaFfi {
     pub etiqueta: String,
     pub es_hoy: bool,
     pub clases: Vec<ClaseInicioFfi>,
+    pub eventos: Vec<EventoFfi>,
     pub tareas: Vec<TareaFfi>,
     pub recordatorios: Vec<RecordatorioInicioFfi>,
 }
@@ -264,6 +287,7 @@ pub struct DiaSemanaFfi {
     pub fecha_corta: String,
     pub es_hoy: bool,
     pub bloques: Vec<BloqueSemanaFfi>,
+    pub eventos: Vec<EventoFfi>,
     pub tareas: Vec<TareaDiaSemanaFfi>,
     pub extra_tareas: String,
 }
@@ -344,6 +368,18 @@ pub struct RecordatorioFormFfi {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct EventoFormFfi {
+    pub id: String,
+    pub titulo: String,
+    pub fecha_iso: String,
+    pub hora_inicio: String,
+    pub hora_fin: String,
+    pub tarea_id: String,
+    pub tarea_titulo: String,
+    pub nota: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct RecordatorioListaFfi {
     pub id: String,
     pub texto: String,
@@ -410,6 +446,9 @@ pub struct AvisoProgramableFfi {
     pub titulo: String,
     pub cuerpo: String,
     pub es_recordatorio: bool,
+    pub es_pregunta_evento: bool,
+    pub evento_id: Option<String>,
+    pub tarea_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -747,6 +786,54 @@ pub fn vista_pendientes(
 }
 
 #[uniffi::export]
+pub fn listar_eventos(
+    ruta: String,
+    desde_iso: String,
+    hasta_iso: String,
+) -> Result<Vec<EventoFfi>, ErrorFfi> {
+    let desde = interpretar_fecha(&desde_iso).ok_or_else(|| ErrorFfi::Operacion {
+        mensaje: format!("fecha inicial no válida: {desde_iso}"),
+    })?;
+    let hasta = interpretar_fecha(&hasta_iso).ok_or_else(|| ErrorFfi::Operacion {
+        mensaje: format!("fecha final no válida: {hasta_iso}"),
+    })?;
+    let almacen = Almacen {
+        ruta: PathBuf::from(&ruta),
+    };
+    let datos = almacen.cargar()?;
+    Ok(semana::eventos_en_rango(&datos, desde, hasta)
+        .iter()
+        .map(evento_a_ffi)
+        .collect())
+}
+
+#[uniffi::export]
+pub fn eventos_de_tarea(ruta: String, tarea_id: String) -> Result<Vec<EventoFfi>, ErrorFfi> {
+    let almacen = Almacen {
+        ruta: PathBuf::from(&ruta),
+    };
+    let datos = almacen.cargar()?;
+    let hoy = Local::now().date_naive();
+    Ok(semana::eventos_de_tarea(&datos, &tarea_id, hoy)
+        .iter()
+        .map(evento_a_ffi)
+        .collect())
+}
+
+#[uniffi::export]
+pub fn eventos_por_reagendar(ruta: String) -> Result<Vec<EventoFfi>, ErrorFfi> {
+    let almacen = Almacen {
+        ruta: PathBuf::from(&ruta),
+    };
+    let datos = almacen.cargar()?;
+    let ahora = Local::now().naive_local();
+    Ok(semana::eventos_por_reagendar(&datos, ahora)
+        .iter()
+        .map(evento_a_ffi)
+        .collect())
+}
+
+#[uniffi::export]
 pub fn materias_con_tono(ruta: String) -> Result<Vec<MateriaConTonoFfi>, ErrorFfi> {
     let almacen = Almacen {
         ruta: PathBuf::from(&ruta),
@@ -891,6 +978,67 @@ pub fn obtener_recordatorio_form(
 }
 
 #[uniffi::export]
+pub fn obtener_evento_form(
+    ruta: String,
+    id: Option<String>,
+    fecha_iso: Option<String>,
+    tarea_id: Option<String>,
+) -> Result<EventoFormFfi, ErrorFfi> {
+    let almacen = Almacen {
+        ruta: PathBuf::from(&ruta),
+    };
+    let datos = almacen.cargar()?;
+    match id.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(id_buscado) => {
+            let evento = datos
+                .eventos
+                .iter()
+                .find(|e| e.id == id_buscado)
+                .ok_or_else(|| ErrorFfi::Operacion {
+                    mensaje: "Ese evento ya no está en el archivo.".to_string(),
+                })?;
+            let tarea_titulo = evento
+                .tarea
+                .as_deref()
+                .and_then(|tid| datos.tareas.iter().find(|t| t.id == tid))
+                .map(|t| t.titulo.clone())
+                .unwrap_or_default();
+            Ok(EventoFormFfi {
+                id: evento.id.clone(),
+                titulo: evento.titulo.clone(),
+                fecha_iso: evento.fecha.format(FORMATO_FECHA).to_string(),
+                hora_inicio: hora_texto(evento.inicio),
+                hora_fin: hora_texto(evento.fin),
+                tarea_id: evento.tarea.clone().unwrap_or_default(),
+                tarea_titulo,
+                nota: evento.nota.clone().unwrap_or_default(),
+            })
+        }
+        None => {
+            let fecha = fecha_iso
+                .as_deref()
+                .and_then(interpretar_fecha)
+                .unwrap_or_else(|| Local::now().date_naive());
+            let tarea = tarea_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(|tid| datos.tareas.iter().find(|t| t.id == tid));
+            Ok(EventoFormFfi {
+                id: String::new(),
+                titulo: tarea.map(|t| t.titulo.clone()).unwrap_or_default(),
+                fecha_iso: fecha.format(FORMATO_FECHA).to_string(),
+                hora_inicio: hora_texto(construir_hora(15, 0)),
+                hora_fin: hora_texto(construir_hora(16, 0)),
+                tarea_id: tarea.map(|t| t.id.clone()).unwrap_or_default(),
+                tarea_titulo: tarea.map(|t| t.titulo.clone()).unwrap_or_default(),
+                nota: String::new(),
+            })
+        }
+    }
+}
+
+#[uniffi::export]
 pub fn obtener_ajustes_form(ruta: String) -> Result<AjustesFormFfi, ErrorFfi> {
     let almacen = Almacen {
         ruta: PathBuf::from(&ruta),
@@ -965,6 +1113,19 @@ pub fn validar_recordatorio_campos(
 ) -> Result<(), ErrorFfi> {
     let dias_modelo: Vec<Dia> = dias.into_iter().map(Dia::from).collect();
     formularios::validar_recordatorio(id, &texto, &hora, dias_modelo)?;
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn validar_evento_campos(
+    titulo: String,
+    fecha_iso: String,
+    hora_inicio: String,
+    hora_fin: String,
+    tarea_id: String,
+    nota: String,
+) -> Result<(), ErrorFfi> {
+    formularios::validar_evento(&titulo, &fecha_iso, &hora_inicio, &hora_fin, &tarea_id, &nota)?;
     Ok(())
 }
 
@@ -1126,6 +1287,77 @@ pub fn borrar_recordatorio(ruta: String, id: String) -> Result<ResumenArchivoFfi
 }
 
 #[uniffi::export]
+#[allow(clippy::too_many_arguments)]
+pub fn guardar_evento(
+    ruta: String,
+    id: Option<String>,
+    titulo: String,
+    fecha_iso: String,
+    hora_inicio: String,
+    hora_fin: String,
+    tarea_id: String,
+    nota: String,
+) -> Result<ResumenArchivoFfi, ErrorFfi> {
+    let almacen = Almacen {
+        ruta: PathBuf::from(&ruta),
+    };
+    let nuevo = formularios::validar_evento(
+        &titulo,
+        &fecha_iso,
+        &hora_inicio,
+        &hora_fin,
+        &tarea_id,
+        &nota,
+    )?;
+    let id_limpio = id.unwrap_or_default().trim().to_string();
+    let datos = almacen.modificar(|doc| {
+        if id_limpio.is_empty() {
+            ops::agregar_evento(doc, &nuevo).map(|_| ())
+        } else {
+            ops::editar_evento(doc, &id_limpio, &nuevo)
+        }
+    })?;
+    let ahora = Local::now().naive_local();
+    Ok(construir_resumen(&almacen, &datos, ahora))
+}
+
+#[uniffi::export]
+pub fn reagendar_evento(
+    ruta: String,
+    id: String,
+    fecha_iso: String,
+    hora_inicio: String,
+    hora_fin: String,
+) -> Result<ResumenArchivoFfi, ErrorFfi> {
+    let almacen = Almacen {
+        ruta: PathBuf::from(&ruta),
+    };
+    let validado = formularios::validar_evento(
+        "evento",
+        &fecha_iso,
+        &hora_inicio,
+        &hora_fin,
+        "",
+        "",
+    )?;
+    let datos = almacen.modificar(|doc| {
+        ops::mover_evento(doc, &id, validado.fecha, validado.inicio, validado.fin)
+    })?;
+    let ahora = Local::now().naive_local();
+    Ok(construir_resumen(&almacen, &datos, ahora))
+}
+
+#[uniffi::export]
+pub fn borrar_evento(ruta: String, id: String) -> Result<ResumenArchivoFfi, ErrorFfi> {
+    let almacen = Almacen {
+        ruta: PathBuf::from(&ruta),
+    };
+    let datos = almacen.modificar(|doc| ops::borrar_evento(doc, &id))?;
+    let ahora = Local::now().naive_local();
+    Ok(construir_resumen(&almacen, &datos, ahora))
+}
+
+#[uniffi::export]
 pub fn guardar_ajustes(
     ruta: String,
     sin_semestre: bool,
@@ -1280,12 +1512,19 @@ pub fn proximos_avisos(
 
     Ok(avisos::proximos_avisos(&datos, desde, hasta, &enviados)
         .into_iter()
-        .map(|item| AvisoProgramableFfi {
-            clave: item.aviso.clave,
-            momento_iso: item.momento.format(FORMATO_ISO_SEGUNDOS).to_string(),
-            titulo: item.aviso.titulo,
-            cuerpo: item.aviso.cuerpo,
-            es_recordatorio: item.es_recordatorio,
+        .map(|item| {
+            let es_pregunta_evento =
+                item.aviso.clave.starts_with("e:") && item.aviso.clave.contains(":fin:");
+            AvisoProgramableFfi {
+                clave: item.aviso.clave,
+                momento_iso: item.momento.format(FORMATO_ISO_SEGUNDOS).to_string(),
+                titulo: item.aviso.titulo,
+                cuerpo: item.aviso.cuerpo,
+                es_recordatorio: item.es_recordatorio,
+                es_pregunta_evento,
+                evento_id: item.evento_id,
+                tarea_id: item.tarea_id,
+            }
         })
         .collect())
 }
@@ -2259,6 +2498,7 @@ fn construir_resumen(almacen: &Almacen, datos: &Datos, ahora: NaiveDateTime) -> 
         num_tareas: datos.tareas.len() as u32,
         num_tareas_pendientes: pendientes.len() as u32,
         num_recordatorios: datos.recordatorios.len() as u32,
+        num_eventos: datos.eventos.len() as u32,
         advertencias: adv,
         conflictos: conf,
         pie: pie(datos, pendientes.len(), ahora),
@@ -2334,6 +2574,30 @@ fn recordatorio_inicio_a_ffi(
     }
 }
 
+fn evento_a_ffi(e: &semana::EventoVisto) -> EventoFfi {
+    let tono = match e.materia.as_deref() {
+        Some(m) if !m.trim().is_empty() => tono_materia(m),
+        _ => order_core::presentacion::materias::TONO_SIN_MATERIA,
+    };
+    EventoFfi {
+        id: e.id.clone(),
+        titulo: e.titulo.clone(),
+        fecha_iso: e.fecha.format(FORMATO_FECHA).to_string(),
+        fecha_texto: format!("{} {}", nombre_dia(e.fecha).to_lowercase(), fecha_corta(e.fecha)),
+        hora_inicio: hora_texto(e.inicio),
+        hora_fin: hora_texto(e.fin),
+        rango_hora: textos::rango_evento(e.inicio, e.fin),
+        inicio_min: minutos(e.inicio),
+        fin_min: minutos(e.fin),
+        tarea_id: e.tarea_id.clone().unwrap_or_default(),
+        tarea_titulo: e.tarea_titulo.clone().unwrap_or_default(),
+        materia: e.materia.clone().unwrap_or_default(),
+        tarea_hecha: e.tarea_hecha,
+        tono,
+        nota: e.nota.clone().unwrap_or_default(),
+    }
+}
+
 fn construir_inicio(datos: &Datos, ahora: NaiveDateTime) -> InicioVistaFfi {
     let hoy = ahora.date();
     let resumen = semana::inicio(datos, ahora);
@@ -2346,6 +2610,8 @@ fn construir_inicio(datos: &Datos, ahora: NaiveDateTime) -> InicioVistaFfi {
             .iter()
             .map(|b| clase_inicio_a_ffi(b, hoy, hoy))
             .collect(),
+        eventos: resumen.eventos.iter().map(evento_a_ffi).collect(),
+        por_reagendar: resumen.por_reagendar.iter().map(evento_a_ffi).collect(),
         siguiente: resumen
             .siguiente
             .as_ref()
@@ -2395,6 +2661,7 @@ fn construir_dia(datos: &Datos, fecha: NaiveDate, ahora: NaiveDateTime) -> DiaVi
             .iter()
             .map(|b| clase_inicio_a_ffi(b, fecha, hoy))
             .collect(),
+        eventos: vista.eventos.iter().map(evento_a_ffi).collect(),
         tareas: vista
             .tareas
             .iter()
@@ -2417,6 +2684,11 @@ fn construir_semana(datos: &Datos, lunes: NaiveDate, ahora: NaiveDateTime) -> Se
         for b in &d.bloques {
             base = base.min(b.inicio.hour() as i32);
             let termina = b.fin.hour() as i32 + i32::from(b.fin.minute() > 0);
+            fin = fin.max(termina);
+        }
+        for e in &d.eventos {
+            base = base.min(e.inicio.hour() as i32);
+            let termina = e.fin.hour() as i32 + i32::from(e.fin.minute() > 0);
             fin = fin.max(termina);
         }
     }
@@ -2465,6 +2737,7 @@ fn construir_semana(datos: &Datos, lunes: NaiveDate, ahora: NaiveDateTime) -> Se
                         tono: tono_materia(&b.materia),
                     })
                     .collect(),
+                eventos: d.eventos.iter().map(evento_a_ffi).collect(),
                 tareas,
                 extra_tareas,
             }
@@ -3892,5 +4165,137 @@ hora = "18:00"
 
         sync_detener();
         assert!(!sync_estado().activo);
+    }
+
+    #[test]
+    fn eventos_crud_reagendar_rango_y_avisos_ffi() {
+        let dir = TempDir::new().expect("tempdir");
+        let ruta = ruta_temp(&dir);
+        let registro = dir.path().join("enviados.txt").to_string_lossy().into_owned();
+        fs::write(
+            &ruta,
+            "\
+[[tarea]]
+id = \"t-1\"
+titulo = \"Taller de Control\"
+materia = \"Control\"
+vence = \"2026-12-05T23:59\"
+hecha = false
+",
+        )
+        .expect("escribir");
+
+        // Formulario ligado a una tarea pre-rellena título y enlace.
+        let form = obtener_evento_form(
+            ruta.clone(),
+            None,
+            Some("2026-11-26".into()),
+            Some("t-1".into()),
+        )
+        .expect("form nuevo evento");
+        assert_eq!(form.titulo, "Taller de Control");
+        assert_eq!(form.tarea_id, "t-1");
+        assert_eq!(form.fecha_iso, "2026-11-26");
+
+        // Validación rechaza fin <= inicio.
+        let err = validar_evento_campos(
+            "Estudio".into(),
+            "2026-11-26".into(),
+            "4:00 p. m.".into(),
+            "3:00 p. m.".into(),
+            String::new(),
+            String::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ErrorFfi::Validacion { campo: 4, .. }));
+
+        // Guardar evento ligado a t-1 y otro suelto.
+        let res1 = guardar_evento(
+            ruta.clone(),
+            None,
+            "Estudiar Taller".into(),
+            "2026-11-26".into(),
+            "3:00 p. m.".into(),
+            "4:00 p. m.".into(),
+            "t-1".into(),
+            "Capítulo 3".into(),
+        )
+        .expect("guardar evento");
+        assert_eq!(res1.num_eventos, 1);
+
+        guardar_evento(
+            ruta.clone(),
+            None,
+            "Cita".into(),
+            "2026-11-28".into(),
+            "10:00 a. m.".into(),
+            "11:00 a. m.".into(),
+            String::new(),
+            String::new(),
+        )
+        .expect("guardar suelto");
+
+        let en_rango = listar_eventos(ruta.clone(), "2026-11-26".into(), "2026-11-27".into())
+            .expect("listar rango");
+        assert_eq!(en_rango.len(), 1);
+        assert_eq!(en_rango[0].titulo, "Estudiar Taller");
+        assert_eq!(en_rango[0].materia, "Control");
+        assert_eq!(en_rango[0].tono, tono_de_materia("Control".into()));
+
+        let ev_id = en_rango[0].id.clone();
+
+        // proximos_avisos incluye inicio y pregunta "¿Terminaste?" al finalizar.
+        let avisos = proximos_avisos(
+            ruta.clone(),
+            "2026-11-26T14:00:00".into(),
+            "2026-11-26T18:00:00".into(),
+            registro.clone(),
+        )
+        .expect("avisos evento");
+        assert_eq!(avisos.len(), 2);
+        assert!(!avisos[0].es_pregunta_evento);
+        assert_eq!(avisos[0].evento_id.as_deref(), Some(ev_id.as_str()));
+        assert!(avisos[1].es_pregunta_evento);
+        assert_eq!(avisos[1].titulo, "¿Terminaste Taller de Control?");
+        assert_eq!(avisos[1].tarea_id.as_deref(), Some("t-1"));
+
+        // Reagendar mueve el evento y cambia sus claves de aviso.
+        reagendar_evento(
+            ruta.clone(),
+            ev_id.clone(),
+            "2026-11-27".into(),
+            "5:00 p. m.".into(),
+            "6:30 p. m.".into(),
+        )
+        .expect("reagendar");
+        let movido = obtener_evento_form(ruta.clone(), Some(ev_id.clone()), None, None)
+            .expect("obtener editado");
+        assert_eq!(movido.fecha_iso, "2026-11-27");
+        assert_eq!(movido.hora_inicio, "5:00 p. m.");
+        assert_eq!(movido.hora_fin, "6:30 p. m.");
+
+        // Si la tarea se marca hecha, ya no aparece pregunta en proximos_avisos.
+        marcar_tarea(ruta.clone(), "t-1".into(), true).expect("marcar");
+        let avisos_hecha = proximos_avisos(
+            ruta.clone(),
+            "2026-11-27T16:00:00".into(),
+            "2026-11-27T20:00:00".into(),
+            registro,
+        )
+        .expect("avisos tras hecha");
+        assert_eq!(avisos_hecha.len(), 1);
+        assert!(!avisos_hecha[0].es_pregunta_evento);
+
+        // Vista día y semana reflejan el evento.
+        let dia = vista_dia(ruta.clone(), Some("2026-11-27".into())).expect("dia");
+        assert_eq!(dia.eventos.len(), 1);
+        assert!(dia.eventos[0].tarea_hecha);
+
+        let sem = vista_semana(ruta.clone(), Some("2026-11-23".into())).expect("semana");
+        assert_eq!(sem.dias[4].eventos.len(), 1);
+
+        // Borrar evento.
+        let res_del = borrar_evento(ruta, ev_id).expect("borrar");
+        assert_eq!(res_del.num_eventos, 1);
     }
 }
