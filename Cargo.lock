@@ -5058,7 +5058,7 @@ dependencies = [
 
 [[package]]
 name = "order-core"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5074,7 +5074,7 @@ dependencies = [
 
 [[package]]
 name = "order-escritorio"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "cpal",
@@ -5096,7 +5096,7 @@ dependencies = [
 
 [[package]]
 name = "order-ffi"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "order-core",
@@ -5107,7 +5107,7 @@ dependencies = [
 
 [[package]]
 name = "order-p2p"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "futures-core",

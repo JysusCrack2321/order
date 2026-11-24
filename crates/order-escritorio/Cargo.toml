@@ -1,6 +1,6 @@
 [package]
 name = "order-escritorio"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 authors = ["JysusCrack2321 <jaragonb@unal.edu.co>"]
 description = "Horario, tareas y recordatorios para organizarte en un solo binario"
