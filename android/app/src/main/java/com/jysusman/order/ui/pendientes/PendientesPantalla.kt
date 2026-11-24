@@ -28,21 +28,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.jysusman.order.ffi.EventoFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.PendientesVistaFfi
 import com.jysusman.order.ffi.TipoFechaFfi
 import com.jysusman.order.ui.comun.CasillaOrder
 import com.jysusman.order.ui.comun.ChipOrder
+import com.jysusman.order.ui.comun.FilaPorReagendar
 import com.jysusman.order.ui.comun.FilaTarea
+import com.jysusman.order.ui.comun.SeccionTitulo
 import com.jysusman.order.ui.theme.OrderTema
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PendientesPantalla(
     vista: PendientesVistaFfi?,
+    porReagendar: List<EventoFfi>,
     filtro: FiltroPendientesFfi,
     onEditarTarea: (String) -> Unit,
     onMarcarHecha: (String, Boolean) -> Unit,
+    onReagendarEvento: (String) -> Unit,
+    onEditarEvento: (String) -> Unit,
     onMostrarHechas: (Boolean) -> Unit,
     onFiltroFecha: (TipoFechaFfi) -> Unit,
     onElegirMateria: () -> Unit,
@@ -204,6 +210,21 @@ fun PendientesPantalla(
         }
 
         HorizontalDivider(color = OrderTema.BordeSuave, thickness = OrderTema.Linea)
+
+        if (porReagendar.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(OrderTema.EspacioXs)) {
+                SeccionTitulo(texto = "¿TERMINASTE?", detalle = "${porReagendar.size}")
+                porReagendar.forEach { evento ->
+                    FilaPorReagendar(
+                        evento = evento,
+                        onHecha = { tareaId -> onMarcarHecha(tareaId, true) },
+                        onReagendar = onReagendarEvento,
+                        onEditar = onEditarEvento,
+                    )
+                }
+            }
+            HorizontalDivider(color = OrderTema.BordeSuave, thickness = OrderTema.Linea)
+        }
 
         // --- Lista de tareas -----------------------------------------------
         if (vista.tareas.isEmpty()) {

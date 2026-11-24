@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -61,6 +62,9 @@ object Canales {
         titulo: String,
         cuerpo: String,
         esRecordatorio: Boolean,
+        esPreguntaEvento: Boolean = false,
+        eventoId: String? = null,
+        tareaId: String? = null,
     ) {
         asegurarCanales(context)
         if (!tienePermisoNotificaciones(context)) return
@@ -76,7 +80,7 @@ object Canales {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val notificacion = NotificationCompat.Builder(context, canalId)
+        val builder = NotificationCompat.Builder(context, canalId)
             .setSmallIcon(R.drawable.ic_notificacion_reloj)
             .setColor(COLOR_ACENTO)
             .setContentTitle(titulo)
@@ -85,7 +89,43 @@ object Canales {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(tapIntent)
             .setAutoCancel(true)
-            .build()
+
+        if (esPreguntaEvento) {
+            if (!tareaId.isNullOrBlank()) {
+                val hechaIntent = Intent(context, ReceptorAlarma::class.java).apply {
+                    action = ReceptorAlarma.ACCION_HECHA_TAREA
+                    data = Uri.parse("order://hecha/${Uri.encode(clave)}")
+                    putExtra(ReceptorAlarma.EXTRA_CLAVE, clave)
+                    putExtra(ReceptorAlarma.EXTRA_TAREA_ID, tareaId)
+                }
+                val hechaPi = PendingIntent.getBroadcast(
+                    context,
+                    (clave + ":hecha").hashCode(),
+                    hechaIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                builder.addAction(0, "Hecha", hechaPi)
+            }
+            if (!eventoId.isNullOrBlank()) {
+                val reagendarIntent = Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    data = Uri.parse("order://reagendar/${Uri.encode(eventoId)}")
+                    putExtra(MainActivity.EXTRA_REAGENDAR_EVENTO_ID, eventoId)
+                    putExtra(MainActivity.EXTRA_NOTIF_CLAVE, clave)
+                }
+                val reagendarPi = PendingIntent.getActivity(
+                    context,
+                    (clave + ":reagendar").hashCode(),
+                    reagendarIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                builder.addAction(0, "Reagendar", reagendarPi)
+            }
+        }
+
+        val notificacion = builder.build()
 
         runCatching {
             NotificationManagerCompat.from(context).notify(clave.hashCode(), notificacion)

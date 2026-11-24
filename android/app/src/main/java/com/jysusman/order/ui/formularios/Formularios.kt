@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jysusman.order.datos.Repositorio
 import com.jysusman.order.ffi.DiaFfi
+import com.jysusman.order.ffi.EventoFfi
 import com.jysusman.order.ffi.MateriaConTonoFfi
 import com.jysusman.order.ffi.RecordatorioListaFfi
 import com.jysusman.order.ui.agente.HojaAjustesAgente
@@ -67,6 +68,12 @@ import kotlinx.coroutines.launch
 sealed interface FormularioActivo {
     data class Tarea(val id: String?) : FormularioActivo
     data class Clase(val id: String?) : FormularioActivo
+    data class Evento(
+        val id: String?,
+        val fechaIso: String? = null,
+        val tareaId: String? = null,
+        val esReagendar: Boolean = false,
+    ) : FormularioActivo
     data class Recordatorio(val id: String?, val volverAjustes: Boolean = false) : FormularioActivo
     data object Ajustes : FormularioActivo
     data object Agente : FormularioActivo
@@ -106,6 +113,7 @@ fun ContenedorFormularioSheet(
                 id = formulario.id,
                 repositorio = repositorio,
                 materias = materias,
+                alAbrirFormulario = alAbrirFormulario,
                 alCerrar = alCerrar,
             )
 
@@ -113,6 +121,15 @@ fun ContenedorFormularioSheet(
                 id = formulario.id,
                 repositorio = repositorio,
                 materias = materias,
+                alCerrar = alCerrar,
+            )
+
+            is FormularioActivo.Evento -> HojaEvento(
+                id = formulario.id,
+                fechaIsoInicial = formulario.fechaIso,
+                tareaIdInicial = formulario.tareaId,
+                esReagendar = formulario.esReagendar,
+                repositorio = repositorio,
                 alCerrar = alCerrar,
             )
 
@@ -177,6 +194,7 @@ private fun HojaTarea(
     id: String?,
     repositorio: Repositorio,
     materias: List<MateriaConTonoFfi>,
+    alAbrirFormulario: (FormularioActivo) -> Unit,
     alCerrar: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -190,6 +208,7 @@ private fun HojaTarea(
     var hora by remember(id) { mutableStateOf("") }
     var hecha by remember(id) { mutableStateOf(false) }
     var enlace by remember(id) { mutableStateOf("") }
+    var eventosDeTarea by remember(id) { mutableStateOf<List<EventoFfi>>(emptyList()) }
 
     var errorMsg by remember(id) { mutableStateOf("") }
     var campoMal by remember(id) { mutableIntStateOf(0) }
@@ -207,6 +226,9 @@ private fun HojaTarea(
             hora = f.horaTexto
             hecha = f.hecha
             enlace = f.enlace
+            if (!id.isNullOrBlank()) {
+                eventosDeTarea = repositorio.eventosDeTarea(id).getOrDefault(emptyList())
+            }
             listo = true
         }.onFailure { err ->
             errorMsg = err.message ?: "No se pudo abrir la tarea."
@@ -224,7 +246,7 @@ private fun HojaTarea(
         alPedirBorrar = { confirmaBorrado = true },
         alCancelarBorrado = { confirmaBorrado = false },
         alConfirmarBorrado = {
-            if (id != null) {
+            if (!id.isNullOrBlank()) {
                 scope.launch {
                     if (repositorio.borrarTarea(id)) alCerrar()
                 }
@@ -298,6 +320,57 @@ private fun HojaTarea(
                 fontSize = OrderTema.TamanoPequeno,
                 color = OrderTema.TextoSuave,
             )
+        }
+
+        if (!id.isNullOrBlank()) {
+            Column(verticalArrangement = Arrangement.spacedBy(OrderTema.EspacioXs)) {
+                if (eventosDeTarea.isNotEmpty()) {
+                    EtiquetaCampo(texto = "Sesiones agendadas")
+                    eventosDeTarea.forEach { ev ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(OrderTema.RadioPequeno))
+                                .background(OrderTema.FondoCampo)
+                                .border(
+                                    OrderTema.Linea,
+                                    OrderTema.BordeCampo,
+                                    RoundedCornerShape(OrderTema.RadioPequeno),
+                                )
+                                .clickable { alAbrirFormulario(FormularioActivo.Evento(id = ev.id)) }
+                                .padding(horizontal = OrderTema.EspacioSm, vertical = OrderTema.EspacioXs),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(OrderTema.EspacioSm),
+                        ) {
+                            Text(
+                                text = "◷",
+                                fontSize = OrderTema.TamanoPequeno,
+                                color = OrderTema.Acento,
+                            )
+                            Text(
+                                text = "${ev.fechaTexto} · ${ev.rangoHora}",
+                                fontSize = OrderTema.TamanoPequeno,
+                                color = OrderTema.Texto,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+                OutlinedButton(
+                    onClick = { alAbrirFormulario(FormularioActivo.Evento(id = null, tareaId = id)) },
+                    shape = RoundedCornerShape(OrderTema.Radio),
+                    border = BorderStroke(OrderTema.Linea, OrderTema.AcentoSuave),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = "Agendar",
+                        fontSize = OrderTema.TamanoPequeno,
+                        color = OrderTema.Acento,
+                    )
+                }
+            }
         }
 
         if (edita && enlace.isNotBlank()) {
@@ -402,7 +475,7 @@ private fun HojaClase(
         alPedirBorrar = { confirmaBorrado = true },
         alCancelarBorrado = { confirmaBorrado = false },
         alConfirmarBorrado = {
-            if (id != null) {
+            if (!id.isNullOrBlank()) {
                 scope.launch {
                     if (repositorio.borrarClase(id)) alCerrar()
                 }
@@ -520,6 +593,194 @@ private fun HojaClase(
     }
 }
 
+@Composable
+private fun HojaEvento(
+    id: String?,
+    fechaIsoInicial: String?,
+    tareaIdInicial: String?,
+    esReagendar: Boolean,
+    repositorio: Repositorio,
+    alCerrar: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val edita = !id.isNullOrBlank()
+    var listo by remember(id, fechaIsoInicial, tareaIdInicial, esReagendar) { mutableStateOf(false) }
+
+    var titulo by remember(id) { mutableStateOf("") }
+    var fechaIso by remember(id) { mutableStateOf("") }
+    var horaInicio by remember(id) { mutableStateOf("2:00 p. m.") }
+    var horaFin by remember(id) { mutableStateOf("3:00 p. m.") }
+    var tareaId by remember(id) { mutableStateOf("") }
+    var tareaTitulo by remember(id) { mutableStateOf("") }
+    var nota by remember(id) { mutableStateOf("") }
+
+    var errorMsg by remember(id) { mutableStateOf("") }
+    var campoMal by remember(id) { mutableIntStateOf(0) }
+    var confirmaBorrado by remember(id) { mutableStateOf(false) }
+
+    var selectorFecha by remember { mutableStateOf(false) }
+    var selectorHoraCampo by remember { mutableIntStateOf(0) } // 2 = inicio, 3 = fin
+
+    LaunchedEffect(id, fechaIsoInicial, tareaIdInicial, esReagendar) {
+        repositorio.obtenerEventoForm(id, fechaIsoInicial, tareaIdInicial).onSuccess { f ->
+            titulo = f.titulo
+            fechaIso = f.fechaIso
+            horaInicio = f.horaInicio
+            horaFin = f.horaFin
+            tareaId = f.tareaId
+            tareaTitulo = f.tareaTitulo
+            nota = f.nota
+            listo = true
+        }.onFailure { err ->
+            errorMsg = err.message ?: "No se pudo abrir el evento."
+            listo = true
+        }
+    }
+
+    val encabezado = when {
+        esReagendar && edita -> "Reagendar evento"
+        edita -> "Editar evento"
+        else -> "Nuevo evento"
+    }
+    val subtitulo = when {
+        esReagendar && edita -> listOf(titulo, tareaTitulo).filter { it.isNotBlank() }.distinct().joinToString(" · ")
+        tareaTitulo.isNotBlank() -> "Tarea: $tareaTitulo"
+        else -> "Bloque de un solo día en tu horario."
+    }
+
+    MarcoHoja(
+        encabezado = encabezado,
+        sub = subtitulo,
+        error = errorMsg,
+        puedeBorrar = edita && !esReagendar,
+        confirmaBorrado = confirmaBorrado,
+        preguntaConfirma = "¿Borrar este evento del archivo?",
+        alPedirBorrar = { confirmaBorrado = true },
+        alCancelarBorrado = { confirmaBorrado = false },
+        alConfirmarBorrado = {
+            if (!id.isNullOrBlank()) {
+                scope.launch {
+                    if (repositorio.borrarEvento(id)) alCerrar()
+                }
+            }
+        },
+        alCancelar = alCerrar,
+        alGuardar = {
+            if (!listo) return@MarcoHoja
+            scope.launch {
+                val err = if (esReagendar && id != null) {
+                    repositorio.reagendarEvento(
+                        id = id,
+                        fechaIso = fechaIso,
+                        horaInicio = horaInicio,
+                        horaFin = horaFin,
+                    )
+                } else {
+                    repositorio.guardarEvento(
+                        id = id,
+                        titulo = titulo,
+                        fechaIso = fechaIso,
+                        horaInicio = horaInicio,
+                        horaFin = horaFin,
+                        tareaId = tareaId,
+                        nota = nota,
+                    )
+                }
+                if (err == null) {
+                    alCerrar()
+                } else {
+                    campoMal = err.campo
+                    errorMsg = err.mensaje
+                }
+            }
+        },
+    ) {
+        if (!esReagendar) {
+            CampoTexto(
+                etiqueta = "Título",
+                valor = titulo,
+                alCambiar = {
+                    titulo = it
+                    if (campoMal == 1) campoMal = 0
+                },
+                pista = "Avanzar en taller / Tutoría",
+                mal = campoMal == 1,
+            )
+        }
+
+        CampoSelector(
+            etiqueta = "Fecha",
+            valor = fechaIso,
+            pista = "Elegir fecha",
+            glifo = "▦",
+            mal = campoMal == 2,
+            onClick = { selectorFecha = true },
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(OrderTema.EspacioMd),
+        ) {
+            CampoSelector(
+                etiqueta = "Inicio",
+                valor = horaInicio,
+                pista = "Elegir hora",
+                glifo = "◷",
+                mal = campoMal == 3,
+                onClick = { selectorHoraCampo = 2 },
+                modifier = Modifier.weight(1f),
+            )
+            CampoSelector(
+                etiqueta = "Fin",
+                valor = horaFin,
+                pista = "Elegir hora",
+                glifo = "◷",
+                mal = campoMal == 4,
+                onClick = { selectorHoraCampo = 3 },
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        if (!esReagendar) {
+            CampoTexto(
+                etiqueta = "Nota (opcional)",
+                valor = nota,
+                alCambiar = { nota = it },
+                pista = "Enlace, lugar o detalle",
+            )
+        }
+    }
+
+    if (selectorFecha) {
+        SelectorFechaDialog(
+            fechaInicialIso = fechaIso,
+            repositorio = repositorio,
+            onAceptar = {
+                fechaIso = it
+                if (campoMal == 2) campoMal = 0
+            },
+            onCerrar = { selectorFecha = false },
+        )
+    }
+    if (selectorHoraCampo != 0) {
+        val inicial = if (selectorHoraCampo == 2) horaInicio else horaFin
+        SelectorHoraDialog(
+            horaInicialTexto = inicial,
+            repositorio = repositorio,
+            onAceptar = { elegida ->
+                if (selectorHoraCampo == 2) {
+                    horaInicio = elegida
+                    if (campoMal == 3) campoMal = 0
+                } else {
+                    horaFin = elegida
+                    if (campoMal == 4) campoMal = 0
+                }
+            },
+            onCerrar = { selectorHoraCampo = 0 },
+        )
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun HojaRecordatorio(
@@ -570,7 +831,7 @@ private fun HojaRecordatorio(
         alPedirBorrar = { confirmaBorrado = true },
         alCancelarBorrado = { confirmaBorrado = false },
         alConfirmarBorrado = {
-            if (id != null) {
+            if (!id.isNullOrBlank()) {
                 scope.launch {
                     if (repositorio.borrarRecordatorio(id)) salir()
                 }

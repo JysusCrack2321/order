@@ -19,6 +19,8 @@ import com.jysusman.order.ffi.ErrorFfi
 import com.jysusman.order.ffi.EstadoConexionFfi
 import com.jysusman.order.ffi.EstadoMoodleFfi
 import com.jysusman.order.ffi.EstadoSyncFfi
+import com.jysusman.order.ffi.EventoFfi
+import com.jysusman.order.ffi.EventoFormFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
@@ -530,6 +532,55 @@ class RepositorioTest {
 
         repo.detenerSincronizacionP2p()
     }
+
+    @Test
+    fun eventosCrudYReagendarReprogramanAvisosYActualizanVistas() = runTest {
+        val fake = FakePuenteOrder()
+        var avisosReprogramados = 0
+        val repo = Repositorio(
+            puente = fake,
+            carpetaInicial = "/tmp/order-eventos",
+            dispatcherIo = UnconfinedTestDispatcher(testScheduler),
+            asegurarCarpeta = {},
+            onDatosActualizados = { avisosReprogramados++ },
+        )
+
+        repo.cargarInicial()
+        avisosReprogramados = 0
+
+        val form = repo.obtenerEventoForm(id = null, fechaIso = "2026-11-24", tareaId = "t-1").getOrThrow()
+        assertEquals("2026-11-24", form.fechaIso)
+        assertEquals("t-1", form.tareaId)
+
+        val err = repo.guardarEvento(
+            id = null,
+            titulo = "Estudiar taller",
+            fechaIso = "2026-11-24",
+            horaInicio = "2:00 p. m.",
+            horaFin = "3:30 p. m.",
+            tareaId = "t-1",
+            nota = "Cap 3",
+        )
+        assertNull(err)
+        assertEquals(1, avisosReprogramados)
+        assertEquals(1, repo.estado.value.inicio?.eventos?.size)
+        assertEquals(1, repo.eventosDeTarea("t-1").getOrThrow().size)
+
+        val creadoId = repo.estado.value.inicio?.eventos?.first()?.id ?: error("sin evento creado")
+        val errReag = repo.reagendarEvento(
+            id = creadoId,
+            fechaIso = "2026-11-25",
+            horaInicio = "4:00 p. m.",
+            horaFin = "5:00 p. m.",
+        )
+        assertNull(errReag)
+        assertEquals(2, avisosReprogramados)
+        assertEquals("2026-11-25", repo.estado.value.inicio?.eventos?.first()?.fechaIso)
+
+        assertTrue(repo.borrarEvento(creadoId))
+        assertEquals(3, avisosReprogramados)
+        assertEquals(0, repo.estado.value.inicio?.eventos?.size)
+    }
 }
 
 class FakePuenteOrder : PuenteOrder {
@@ -569,6 +620,7 @@ class FakePuenteOrder : PuenteOrder {
     var resumenSyncP2pFake: ResumenSyncP2pFfi = ResumenSyncP2pFfi(0u, 0u, false, emptyList())
     var fallarEmparejarP2p: ErrorFfi? = null
     var llamadasSyncAhora: Int = 0
+    val eventosFake = mutableListOf<EventoFfi>()
 
     private val tareaEjemplo = TareaFfi(
         id = "t-1",
@@ -594,7 +646,7 @@ class FakePuenteOrder : PuenteOrder {
             numTareas = 2u,
             numTareasPendientes = 1u,
             numRecordatorios = 1u,
-            numEventos = 0u,
+            numEventos = eventosFake.size.toUInt(),
             advertencias = advertencias,
             conflictos = conflictos,
             pie = "Hoy: 1 tarea pendiente",
@@ -612,7 +664,7 @@ class FakePuenteOrder : PuenteOrder {
     override fun vistaInicio(ruta: String): InicioVistaFfi = InicioVistaFfi(
         fechaLarga = "domingo 22 de noviembre",
         clases = emptyList(),
-        eventos = emptyList(),
+        eventos = eventosFake.toList(),
         porReagendar = emptyList(),
         siguiente = null,
         vencidas = emptyList(),
@@ -628,7 +680,7 @@ class FakePuenteOrder : PuenteOrder {
         etiqueta = "domingo 22 de noviembre",
         esHoy = true,
         clases = emptyList(),
-        eventos = emptyList(),
+        eventos = eventosFake.toList(),
         tareas = listOf(tareaEjemplo),
         recordatorios = emptyList(),
     )
@@ -670,6 +722,115 @@ class FakePuenteOrder : PuenteOrder {
 
     override fun obtenerRecordatorioForm(ruta: String, id: String?): RecordatorioFormFfi =
         RecordatorioFormFfi("", "", emptyList(), "6:00 p. m.")
+
+    override fun obtenerEventoForm(
+        ruta: String,
+        id: String?,
+        fechaIso: String?,
+        tareaId: String?,
+    ): EventoFormFfi {
+        val existente = eventosFake.find { it.id == id }
+        return if (existente != null) {
+            EventoFormFfi(
+                id = existente.id,
+                titulo = existente.titulo,
+                fechaIso = existente.fechaIso,
+                horaInicio = existente.horaInicio,
+                horaFin = existente.horaFin,
+                tareaId = existente.tareaId,
+                tareaTitulo = existente.tareaTitulo,
+                nota = existente.nota,
+            )
+        } else {
+            EventoFormFfi(
+                id = "",
+                titulo = if (tareaId == "t-1") "Taller" else "",
+                fechaIso = fechaIso ?: "2026-11-22",
+                horaInicio = "2:00 p. m.",
+                horaFin = "3:00 p. m.",
+                tareaId = tareaId.orEmpty(),
+                tareaTitulo = if (tareaId == "t-1") "Taller" else "",
+                nota = "",
+            )
+        }
+    }
+
+    override fun listarEventos(ruta: String, desdeIso: String, hastaIso: String): List<EventoFfi> =
+        eventosFake.filter { it.fechaIso in desdeIso..hastaIso }
+
+    override fun eventosDeTarea(ruta: String, tareaId: String): List<EventoFfi> =
+        eventosFake.filter { it.tareaId == tareaId }
+
+    override fun eventosPorReagendar(ruta: String): List<EventoFfi> = emptyList()
+
+    override fun validarEventoCampos(
+        titulo: String,
+        fechaIso: String,
+        horaInicio: String,
+        horaFin: String,
+        tareaId: String,
+        nota: String,
+    ) {}
+
+    override fun guardarEvento(
+        ruta: String,
+        id: String?,
+        titulo: String,
+        fechaIso: String,
+        horaInicio: String,
+        horaFin: String,
+        tareaId: String,
+        nota: String,
+    ): ResumenArchivoFfi {
+        val realId = id?.takeIf { it.isNotBlank() } ?: "e-${eventosFake.size + 1}"
+        eventosFake.removeAll { it.id == realId }
+        eventosFake.add(
+            EventoFfi(
+                id = realId,
+                titulo = titulo,
+                fechaIso = fechaIso,
+                fechaTexto = fechaIso,
+                horaInicio = horaInicio,
+                horaFin = horaFin,
+                rangoHora = "$horaInicio – $horaFin",
+                inicioMin = 14 * 60,
+                finMin = 15 * 60 + 30,
+                tareaId = tareaId,
+                tareaTitulo = if (tareaId == "t-1") "Taller" else "",
+                materia = if (tareaId == "t-1") "Control" else "",
+                tareaHecha = false,
+                tono = 3,
+                nota = nota,
+            )
+        )
+        return cargar(ruta)
+    }
+
+    override fun reagendarEvento(
+        ruta: String,
+        id: String,
+        fechaIso: String,
+        horaInicio: String,
+        horaFin: String,
+    ): ResumenArchivoFfi {
+        val idx = eventosFake.indexOfFirst { it.id == id }
+        if (idx >= 0) {
+            val prev = eventosFake[idx]
+            eventosFake[idx] = prev.copy(
+                fechaIso = fechaIso,
+                fechaTexto = fechaIso,
+                horaInicio = horaInicio,
+                horaFin = horaFin,
+                rangoHora = "$horaInicio – $horaFin",
+            )
+        }
+        return cargar(ruta)
+    }
+
+    override fun borrarEvento(ruta: String, id: String): ResumenArchivoFfi {
+        eventosFake.removeAll { it.id == id }
+        return cargar(ruta)
+    }
 
     override fun obtenerAjustesForm(ruta: String): AjustesFormFfi =
         AjustesFormFfi(false, "2026-08-03", "2026-12-05", "8:00 p. m.", "3", emptyList())

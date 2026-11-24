@@ -17,6 +17,8 @@ import com.jysusman.order.ffi.DiaVistaFfi
 import com.jysusman.order.ffi.DispositivoSyncFfi
 import com.jysusman.order.ffi.EstadoMoodleFfi
 import com.jysusman.order.ffi.EstadoSyncFfi
+import com.jysusman.order.ffi.EventoFfi
+import com.jysusman.order.ffi.EventoFormFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
@@ -58,7 +60,47 @@ interface PuenteOrder {
     fun obtenerTareaForm(ruta: String, id: String?): TareaFormFfi
     fun obtenerClaseForm(ruta: String, id: String?): ClaseFormFfi
     fun obtenerRecordatorioForm(ruta: String, id: String?): RecordatorioFormFfi
+    fun obtenerEventoForm(
+        ruta: String,
+        id: String?,
+        fechaIso: String?,
+        tareaId: String?,
+    ): EventoFormFfi
     fun obtenerAjustesForm(ruta: String): AjustesFormFfi
+
+    fun listarEventos(ruta: String, desdeIso: String, hastaIso: String): List<EventoFfi>
+    fun eventosDeTarea(ruta: String, tareaId: String): List<EventoFfi>
+    fun eventosPorReagendar(ruta: String): List<EventoFfi>
+
+    fun validarEventoCampos(
+        titulo: String,
+        fechaIso: String,
+        horaInicio: String,
+        horaFin: String,
+        tareaId: String,
+        nota: String,
+    )
+
+    fun guardarEvento(
+        ruta: String,
+        id: String?,
+        titulo: String,
+        fechaIso: String,
+        horaInicio: String,
+        horaFin: String,
+        tareaId: String,
+        nota: String,
+    ): ResumenArchivoFfi
+
+    fun reagendarEvento(
+        ruta: String,
+        id: String,
+        fechaIso: String,
+        horaInicio: String,
+        horaFin: String,
+    ): ResumenArchivoFfi
+
+    fun borrarEvento(ruta: String, id: String): ResumenArchivoFfi
 
     fun guardarTarea(
         ruta: String,
@@ -241,8 +283,57 @@ class PuenteOrderNativo : PuenteOrder {
     override fun obtenerRecordatorioForm(ruta: String, id: String?): RecordatorioFormFfi =
         com.jysusman.order.ffi.obtenerRecordatorioForm(ruta, id)
 
+    override fun obtenerEventoForm(
+        ruta: String,
+        id: String?,
+        fechaIso: String?,
+        tareaId: String?,
+    ): EventoFormFfi = com.jysusman.order.ffi.obtenerEventoForm(ruta, id, fechaIso, tareaId)
+
     override fun obtenerAjustesForm(ruta: String): AjustesFormFfi =
         com.jysusman.order.ffi.obtenerAjustesForm(ruta)
+
+    override fun listarEventos(ruta: String, desdeIso: String, hastaIso: String): List<EventoFfi> =
+        com.jysusman.order.ffi.listarEventos(ruta, desdeIso, hastaIso)
+
+    override fun eventosDeTarea(ruta: String, tareaId: String): List<EventoFfi> =
+        com.jysusman.order.ffi.eventosDeTarea(ruta, tareaId)
+
+    override fun eventosPorReagendar(ruta: String): List<EventoFfi> =
+        com.jysusman.order.ffi.eventosPorReagendar(ruta)
+
+    override fun validarEventoCampos(
+        titulo: String,
+        fechaIso: String,
+        horaInicio: String,
+        horaFin: String,
+        tareaId: String,
+        nota: String,
+    ) = com.jysusman.order.ffi.validarEventoCampos(titulo, fechaIso, horaInicio, horaFin, tareaId, nota)
+
+    override fun guardarEvento(
+        ruta: String,
+        id: String?,
+        titulo: String,
+        fechaIso: String,
+        horaInicio: String,
+        horaFin: String,
+        tareaId: String,
+        nota: String,
+    ): ResumenArchivoFfi =
+        com.jysusman.order.ffi.guardarEvento(ruta, id, titulo, fechaIso, horaInicio, horaFin, tareaId, nota)
+
+    override fun reagendarEvento(
+        ruta: String,
+        id: String,
+        fechaIso: String,
+        horaInicio: String,
+        horaFin: String,
+    ): ResumenArchivoFfi =
+        com.jysusman.order.ffi.reagendarEvento(ruta, id, fechaIso, horaInicio, horaFin)
+
+    override fun borrarEvento(ruta: String, id: String): ResumenArchivoFfi =
+        com.jysusman.order.ffi.borrarEvento(ruta, id)
 
     override fun guardarTarea(
         ruta: String,

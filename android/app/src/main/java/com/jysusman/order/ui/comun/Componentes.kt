@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jysusman.order.ffi.ClaseInicioFfi
+import com.jysusman.order.ffi.EventoFfi
 import com.jysusman.order.ffi.RecordatorioInicioFfi
 import com.jysusman.order.ffi.TareaFfi
 import com.jysusman.order.ui.theme.OrderTema
@@ -358,6 +359,122 @@ fun FilaRecordatorio(
             color = OrderTema.TextoSuave,
             maxLines = 1,
         )
+    }
+}
+
+@Composable
+fun FilaEvento(
+    evento: EventoFfi,
+    onClick: () -> Unit,
+    mostrarFecha: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    val tinta = if (evento.tareaId.isNotBlank()) {
+        OrderTema.colorMateria(evento.tono)
+    } else {
+        OrderTema.Acento
+    }
+    val borde = if (evento.tareaHecha) OrderTema.BordeSuave else tinta.copy(alpha = 0.5f)
+    val fondo = if (evento.tareaHecha) OrderTema.FondoCampo else OrderTema.Tarjeta
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(OrderTema.RadioPequeno))
+            .background(fondo)
+            .border(OrderTema.Linea, borde, RoundedCornerShape(OrderTema.RadioPequeno))
+            .clickable(onClick = onClick)
+            .padding(horizontal = OrderTema.EspacioMd, vertical = OrderTema.EspacioSm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(OrderTema.EspacioMd),
+    ) {
+        Text(
+            text = "◷",
+            fontSize = OrderTema.TamanoTexto,
+            color = if (evento.tareaHecha) OrderTema.TextoTenue else tinta,
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(OrderTema.Espacio2xs),
+        ) {
+            Text(
+                text = evento.titulo,
+                fontSize = OrderTema.TamanoTexto,
+                fontWeight = FontWeight.Medium,
+                color = if (evento.tareaHecha) OrderTema.TextoTenue else OrderTema.Texto,
+                textDecoration = if (evento.tareaHecha) TextDecoration.LineThrough else TextDecoration.None,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val sub = if (mostrarFecha) "${evento.fechaTexto} · ${evento.rangoHora}" else evento.rangoHora
+            Text(
+                text = sub,
+                fontSize = OrderTema.TamanoHora,
+                color = OrderTema.TextoSuave,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (evento.materia.isNotBlank()) {
+            PildoraMateria(texto = evento.materia, tono = evento.tono)
+        }
+    }
+}
+
+@Composable
+fun FilaPorReagendar(
+    evento: EventoFfi,
+    onHecha: (String) -> Unit,
+    onReagendar: (String) -> Unit,
+    onEditar: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = OrderTema.AcentoTenue,
+        shape = RoundedCornerShape(OrderTema.RadioPequeno),
+        border = BorderStroke(OrderTema.Linea, OrderTema.AcentoSuave),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onEditar(evento.id) }
+                .padding(horizontal = OrderTema.EspacioMd, vertical = OrderTema.EspacioSm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(OrderTema.EspacioSm),
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(OrderTema.Espacio2xs),
+            ) {
+                Text(
+                    text = "¿Terminaste «${evento.tareaTitulo.ifBlank { evento.titulo }}»?",
+                    fontSize = OrderTema.TamanoPequeno,
+                    fontWeight = FontWeight.SemiBold,
+                    color = OrderTema.Texto,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "${evento.fechaTexto} · ${evento.rangoHora}",
+                    fontSize = OrderTema.TamanoHora,
+                    color = OrderTema.TextoSuave,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (evento.tareaId.isNotBlank()) {
+                BotonBorde(
+                    texto = "Hecha",
+                    onClick = { onHecha(evento.tareaId) },
+                    acento = true,
+                )
+            }
+            BotonBorde(
+                texto = "Reagendar",
+                onClick = { onReagendar(evento.id) },
+            )
+        }
     }
 }
 

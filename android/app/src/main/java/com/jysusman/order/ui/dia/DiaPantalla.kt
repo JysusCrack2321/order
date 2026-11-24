@@ -35,10 +35,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jysusman.order.ffi.ClaseInicioFfi
 import com.jysusman.order.ffi.DiaVistaFfi
+import com.jysusman.order.ffi.EventoFfi
 import com.jysusman.order.ui.comun.BotonBorde
 import com.jysusman.order.ui.comun.BotonPaso
 import com.jysusman.order.ui.comun.FilaRecordatorio
@@ -56,6 +58,8 @@ fun DiaPantalla(
     onIrHoy: () -> Unit,
     onNuevaClase: () -> Unit,
     onEditarClase: (String) -> Unit,
+    onNuevoEvento: (String) -> Unit,
+    onEditarEvento: (String) -> Unit,
     onEditarTarea: (String) -> Unit,
     onEditarRecordatorio: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -120,9 +124,21 @@ fun DiaPantalla(
                     InsigniaOrder("HOY")
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                BotonBorde(texto = "+  Clase", onClick = onNuevaClase)
+                BotonBorde(texto = "+ Evento", onClick = { onNuevoEvento(vista.fechaIso) })
+                BotonBorde(texto = "+ Clase", onClick = onNuevaClase)
                 BotonBorde(texto = "Hoy", onClick = onIrHoy, acento = true)
             }
+        }
+
+        val itemsHorario = remember(vista.clases, vista.eventos) {
+            buildList {
+                vista.clases.forEach { clase ->
+                    add(ItemHorarioDia.Clase(clase, horaInicioMin(clase.hora)))
+                }
+                vista.eventos.forEach { evento ->
+                    add(ItemHorarioDia.Evento(evento, evento.inicioMin))
+                }
+            }.sortedBy { it.ordenMin }
         }
 
         // --- Contenido -----------------------------------------------------
@@ -132,19 +148,35 @@ fun DiaPantalla(
             verticalArrangement = Arrangement.spacedBy(OrderTema.EspacioSm),
         ) {
             item {
-                val detalleClases = when (vista.clases.size) {
-                    0 -> ""
-                    1 -> "1 clase"
-                    else -> "${vista.clases.size} clases"
+                val partes = buildList {
+                    when (vista.clases.size) {
+                        0 -> {}
+                        1 -> add("1 clase")
+                        else -> add("${vista.clases.size} clases")
+                    }
+                    when (vista.eventos.size) {
+                        0 -> {}
+                        1 -> add("1 evento")
+                        else -> add("${vista.eventos.size} eventos")
+                    }
                 }
-                SeccionTitulo(texto = "CLASES", detalle = detalleClases)
+                SeccionTitulo(texto = "CLASES Y EVENTOS", detalle = partes.joinToString(" · "))
             }
 
-            if (vista.clases.isEmpty()) {
-                item { TextoVacio("sin clases este día") }
+            if (itemsHorario.isEmpty()) {
+                item { TextoVacio("sin clases ni eventos este día") }
             } else {
-                items(vista.clases, key = { it.id }) { clase ->
-                    FilaTiempo(clase = clase, onClick = { onEditarClase(clase.id) })
+                items(itemsHorario, key = { it.clave }) { entrada ->
+                    when (entrada) {
+                        is ItemHorarioDia.Clase -> FilaTiempo(
+                            clase = entrada.clase,
+                            onClick = { onEditarClase(entrada.clase.id) },
+                        )
+                        is ItemHorarioDia.Evento -> FilaTiempoEvento(
+                            evento = entrada.evento,
+                            onClick = { onEditarEvento(entrada.evento.id) },
+                        )
+                    }
                 }
             }
 
@@ -254,6 +286,122 @@ private fun FilaTiempo(
                         text = clase.lugar,
                         fontSize = OrderTema.TamanoHora,
                         color = OrderTema.TextoTenue,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private sealed interface ItemHorarioDia {
+    val clave: String
+    val ordenMin: Int
+
+    data class Clase(val clase: ClaseInicioFfi, override val ordenMin: Int) : ItemHorarioDia {
+        override val clave: String = "c:${clase.id}"
+    }
+
+    data class Evento(val evento: EventoFfi, override val ordenMin: Int) : ItemHorarioDia {
+        override val clave: String = "e:${evento.id}"
+    }
+}
+
+private fun horaInicioMin(rango: String): Int {
+    val primera = rango.substringBefore("–").substringBefore("-").trim()
+    val partes = primera.split(":")
+    val hora = partes.getOrNull(0)?.filter { it.isDigit() }?.toIntOrNull() ?: return 0
+    val min = partes.getOrNull(1)?.take(2)?.filter { it.isDigit() }?.toIntOrNull() ?: 0
+    val lower = (primera.ifBlank { rango }).lowercase()
+    val pm = lower.contains("p. m.") || lower.contains("pm")
+    val am = lower.contains("a. m.") || lower.contains("am")
+    val h24 = when {
+        pm && hora < 12 -> hora + 12
+        am && hora == 12 -> 0
+        else -> hora
+    }
+    return h24 * 60 + min
+}
+
+@Composable
+private fun FilaTiempoEvento(
+    evento: EventoFfi,
+    onClick: () -> Unit,
+) {
+    val color = if (evento.tareaId.isNotBlank()) OrderTema.colorMateria(evento.tono) else OrderTema.Acento
+    val fondo = if (evento.tareaHecha) OrderTema.FondoCampo else OrderTema.Tarjeta
+    val borde = if (evento.tareaHecha) OrderTema.BordeSuave else color.copy(alpha = 0.5f)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = evento.rangoHora,
+            fontSize = OrderTema.TamanoPequeno,
+            color = OrderTema.TextoSuave,
+            textAlign = TextAlign.End,
+            modifier = Modifier
+                .width(90.dp)
+                .padding(end = OrderTema.EspacioSm),
+        )
+        Box(
+            modifier = Modifier
+                .width(16.dp)
+                .fillMaxHeight(),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(OrderTema.Linea)
+                    .fillMaxHeight()
+                    .background(OrderTema.Borde)
+            )
+            Box(
+                modifier = Modifier
+                    .size(9.dp)
+                    .clip(CircleShape)
+                    .background(OrderTema.Fondo)
+                    .border(OrderTema.Trazo, color, CircleShape)
+            )
+        }
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .padding(vertical = OrderTema.EspacioXs)
+                .clip(RoundedCornerShape(OrderTema.RadioPequeno))
+                .background(fondo)
+                .border(OrderTema.Linea, borde, RoundedCornerShape(OrderTema.RadioPequeno))
+                .padding(horizontal = OrderTema.EspacioMd, vertical = OrderTema.EspacioMd),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(OrderTema.EspacioSm),
+            ) {
+                Text(
+                    text = "◷",
+                    fontSize = OrderTema.TamanoTexto,
+                    color = if (evento.tareaHecha) OrderTema.TextoTenue else color,
+                )
+                Text(
+                    text = evento.titulo,
+                    fontSize = OrderTema.TamanoTexto,
+                    fontWeight = FontWeight.Medium,
+                    color = if (evento.tareaHecha) OrderTema.TextoTenue else OrderTema.Texto,
+                    textDecoration = if (evento.tareaHecha) TextDecoration.LineThrough else TextDecoration.None,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (evento.materia.isNotBlank()) {
+                    Text(
+                        text = evento.materia,
+                        fontSize = OrderTema.TamanoHora,
+                        color = color,
                         maxLines = 1,
                     )
                 }

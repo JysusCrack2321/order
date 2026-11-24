@@ -12,6 +12,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.compose.foundation.background
@@ -122,10 +123,13 @@ private enum class SelectorFiltro {
 }
 
 class MainActivity : ComponentActivity() {
+    private var eventoPendienteReagendar by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Canales.asegurarCanales(this)
         TrabajoRespaldo.programar(this)
+        procesarIntentReagendar(intent)
 
         val puente = PuenteOrderNativo()
         val carpetaInicial = PreferenciasOrder.carpetaDatos(this)
@@ -147,6 +151,8 @@ class MainActivity : ComponentActivity() {
                 OrderApp(
                     repositorio = repositorio,
                     programador = programador,
+                    eventoReagendarInicial = eventoPendienteReagendar,
+                    alConsumirEventoReagendar = { eventoPendienteReagendar = null },
                     alCambiarCarpeta = { nueva ->
                         PreferenciasOrder.guardarCarpetaDatos(this, nueva)
                     },
@@ -154,12 +160,37 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        procesarIntentReagendar(intent)
+    }
+
+    private fun procesarIntentReagendar(intent: Intent?) {
+        val eventoId = intent?.getStringExtra(EXTRA_REAGENDAR_EVENTO_ID)?.takeIf { it.isNotBlank() }
+            ?: return
+        val clave = intent.getStringExtra(EXTRA_NOTIF_CLAVE)
+        if (!clave.isNullOrBlank()) {
+            NotificationManagerCompat.from(this).cancel(clave.hashCode())
+        }
+        intent.removeExtra(EXTRA_REAGENDAR_EVENTO_ID)
+        intent.removeExtra(EXTRA_NOTIF_CLAVE)
+        eventoPendienteReagendar = eventoId
+    }
+
+    companion object {
+        const val EXTRA_REAGENDAR_EVENTO_ID = "reagendar_evento_id"
+        const val EXTRA_NOTIF_CLAVE = "notif_clave"
+    }
 }
 
 @Composable
 private fun OrderApp(
     repositorio: Repositorio,
     programador: Programador,
+    eventoReagendarInicial: String?,
+    alConsumirEventoReagendar: () -> Unit,
     alCambiarCarpeta: (String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -176,6 +207,16 @@ private fun OrderApp(
     var pestana by rememberSaveable { mutableIntStateOf(0) }
     var formularioActivo by remember { mutableStateOf<FormularioActivo?>(null) }
     var selectorFiltro by remember { mutableStateOf(SelectorFiltro.Ninguno) }
+
+    LaunchedEffect(permisoOk, eventoReagendarInicial) {
+        if (permisoOk && !eventoReagendarInicial.isNullOrBlank()) {
+            formularioActivo = FormularioActivo.Evento(
+                id = eventoReagendarInicial,
+                esReagendar = true,
+            )
+            alConsumirEventoReagendar()
+        }
+    }
 
     val versionInstalada = remember(context) { ActualizadorAndroid.versionInstalada(context) }
     var estadoActualizacion by remember { mutableStateOf<EstadoActualizacion>(EstadoActualizacion.Oculto) }
@@ -810,6 +851,11 @@ private fun OrderApp(
                 Pestana.Inicio -> InicioPantalla(
                     vista = estado.inicio,
                     onEditarClase = { id -> formularioActivo = FormularioActivo.Clase(id) },
+                    onEditarEvento = { id -> formularioActivo = FormularioActivo.Evento(id) },
+                    onHechaEvento = { tareaId -> scope.launch { repositorio.marcarTarea(tareaId, true) } },
+                    onReagendarEvento = { id ->
+                        formularioActivo = FormularioActivo.Evento(id = id, esReagendar = true)
+                    },
                     onEditarTarea = { id -> formularioActivo = FormularioActivo.Tarea(id) },
                     onEditarRecordatorio = { id ->
                         formularioActivo = FormularioActivo.Recordatorio(id, volverAjustes = false)
@@ -823,6 +869,10 @@ private fun OrderApp(
                     onIrHoy = { scope.launch { repositorio.irDiaHoy() } },
                     onNuevaClase = { formularioActivo = FormularioActivo.Clase(null) },
                     onEditarClase = { id -> formularioActivo = FormularioActivo.Clase(id) },
+                    onNuevoEvento = { fechaIso ->
+                        formularioActivo = FormularioActivo.Evento(id = null, fechaIso = fechaIso)
+                    },
+                    onEditarEvento = { id -> formularioActivo = FormularioActivo.Evento(id) },
                     onEditarTarea = { id -> formularioActivo = FormularioActivo.Tarea(id) },
                     onEditarRecordatorio = { id ->
                         formularioActivo = FormularioActivo.Recordatorio(id, volverAjustes = false)
@@ -836,13 +886,20 @@ private fun OrderApp(
                     onIrHoy = { scope.launch { repositorio.irSemanaHoy() } },
                     onNuevaClase = { formularioActivo = FormularioActivo.Clase(null) },
                     onEditarClase = { id -> formularioActivo = FormularioActivo.Clase(id) },
+                    onNuevoEvento = { formularioActivo = FormularioActivo.Evento(id = null) },
+                    onEditarEvento = { id -> formularioActivo = FormularioActivo.Evento(id) },
                 )
 
                 Pestana.Pendientes -> PendientesPantalla(
                     vista = estado.pendientes,
+                    porReagendar = estado.inicio?.porReagendar.orEmpty(),
                     filtro = estado.filtro,
                     onEditarTarea = { id -> formularioActivo = FormularioActivo.Tarea(id) },
                     onMarcarHecha = { id, hecha -> scope.launch { repositorio.marcarTarea(id, hecha) } },
+                    onReagendarEvento = { id ->
+                        formularioActivo = FormularioActivo.Evento(id = id, esReagendar = true)
+                    },
+                    onEditarEvento = { id -> formularioActivo = FormularioActivo.Evento(id) },
                     onMostrarHechas = { mostrar ->
                         scope.launch {
                             repositorio.actualizarFiltro { it.copy(mostrarHechas = mostrar) }

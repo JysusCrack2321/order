@@ -85,7 +85,7 @@ class DespachadorAlarmasAndroid(
         flags or PendingIntent.FLAG_IMMUTABLE,
     )
 
-    private fun crearIntent(clave: String, aviso: AvisoProgramableFfi?): Intent {
+    internal fun crearIntent(clave: String, aviso: AvisoProgramableFfi?): Intent {
         return Intent(context, ReceptorAlarma::class.java).apply {
             action = ReceptorAlarma.ACCION_DISPARAR_AVISO
             data = Uri.parse("order://aviso/${Uri.encode(clave)}")
@@ -94,6 +94,9 @@ class DespachadorAlarmasAndroid(
                 putExtra(ReceptorAlarma.EXTRA_TITULO, aviso.titulo)
                 putExtra(ReceptorAlarma.EXTRA_CUERPO, aviso.cuerpo)
                 putExtra(ReceptorAlarma.EXTRA_ES_RECORDATORIO, aviso.esRecordatorio)
+                putExtra(ReceptorAlarma.EXTRA_ES_PREGUNTA_EVENTO, aviso.esPreguntaEvento)
+                aviso.eventoId?.let { putExtra(ReceptorAlarma.EXTRA_EVENTO_ID, it) }
+                aviso.tareaId?.let { putExtra(ReceptorAlarma.EXTRA_TAREA_ID, it) }
             }
         }
     }

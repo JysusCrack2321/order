@@ -17,6 +17,8 @@ import com.jysusman.order.ffi.DiaVistaFfi
 import com.jysusman.order.ffi.DispositivoSyncFfi
 import com.jysusman.order.ffi.EstadoMoodleFfi
 import com.jysusman.order.ffi.EstadoSyncFfi
+import com.jysusman.order.ffi.EventoFfi
+import com.jysusman.order.ffi.EventoFormFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
@@ -195,21 +197,60 @@ class ProgramadorTest {
         assertEquals(1, logs.size)
         assertTrue(logs.first().contains("fecha inicial no válida"))
     }
+
+    @Test
+    fun programaAvisoDePreguntaDeEventoConSusIds() {
+        val aviso = AvisoProgramableFfi(
+            clave = "ev:fin:e-1",
+            momentoIso = "2026-11-22T20:00:00",
+            titulo = "¿Terminaste «Taller»?",
+            cuerpo = "Avanzar en taller · 2:00 p. m. – 8:00 p. m.",
+            esRecordatorio = false,
+            esPreguntaEvento = true,
+            eventoId = "e-1",
+            tareaId = "t-1",
+        )
+        val puente = FakePuenteAvisos(avisos = listOf(aviso))
+        val despachador = FakeDespachadorAlarmas(exactas = true)
+        val almacen = FakeAlmacenClaves()
+
+        val programador = Programador(
+            puente = puente,
+            despachador = despachador,
+            almacenClaves = almacen,
+            rutaDatos = { "/tmp/order.toml" },
+            rutaRegistro = { "/tmp/enviados.txt" },
+            avisosActivos = { true },
+            relojAhora = { LocalDateTime.of(2026, 11, 22, 19, 0, 0) },
+            zona = { ZoneId.of("UTC") },
+        )
+
+        val total = programador.reprogramar()
+        assertEquals(1, total)
+        assertEquals(1, despachador.avisosProgramados.size)
+        val programado = despachador.avisosProgramados.single()
+        assertTrue(programado.esPreguntaEvento)
+        assertEquals("e-1", programado.eventoId)
+        assertEquals("t-1", programado.tareaId)
+    }
 }
 
 private class FakeDespachadorAlarmas(var exactas: Boolean) : DespachadorAlarmas {
     val canceladas = mutableListOf<String>()
     val exactasProgramadas = mutableListOf<Pair<String, Long>>()
     val inexactasProgramadas = mutableListOf<Pair<String, Long>>()
+    val avisosProgramados = mutableListOf<AvisoProgramableFfi>()
 
     override fun puedeExactas(): Boolean = exactas
 
     override fun programarExacta(clave: String, triggerAtMillis: Long, aviso: AvisoProgramableFfi) {
         exactasProgramadas.add(clave to triggerAtMillis)
+        avisosProgramados.add(aviso)
     }
 
     override fun programarInexacta(clave: String, triggerAtMillis: Long, aviso: AvisoProgramableFfi) {
         inexactasProgramadas.add(clave to triggerAtMillis)
+        avisosProgramados.add(aviso)
     }
 
     override fun cancelar(clave: String) {
@@ -220,6 +261,7 @@ private class FakeDespachadorAlarmas(var exactas: Boolean) : DespachadorAlarmas 
         canceladas.clear()
         exactasProgramadas.clear()
         inexactasProgramadas.clear()
+        avisosProgramados.clear()
     }
 }
 
@@ -269,7 +311,15 @@ private class FakePuenteAvisos(
     override fun obtenerTareaForm(ruta: String, id: String?): TareaFormFfi = throw UnsupportedOperationException()
     override fun obtenerClaseForm(ruta: String, id: String?): ClaseFormFfi = throw UnsupportedOperationException()
     override fun obtenerRecordatorioForm(ruta: String, id: String?): RecordatorioFormFfi = throw UnsupportedOperationException()
+    override fun obtenerEventoForm(ruta: String, id: String?, fechaIso: String?, tareaId: String?): EventoFormFfi = throw UnsupportedOperationException()
     override fun obtenerAjustesForm(ruta: String): AjustesFormFfi = throw UnsupportedOperationException()
+    override fun listarEventos(ruta: String, desdeIso: String, hastaIso: String): List<EventoFfi> = emptyList()
+    override fun eventosDeTarea(ruta: String, tareaId: String): List<EventoFfi> = emptyList()
+    override fun eventosPorReagendar(ruta: String): List<EventoFfi> = emptyList()
+    override fun validarEventoCampos(titulo: String, fechaIso: String, horaInicio: String, horaFin: String, tareaId: String, nota: String) {}
+    override fun guardarEvento(ruta: String, id: String?, titulo: String, fechaIso: String, horaInicio: String, horaFin: String, tareaId: String, nota: String): ResumenArchivoFfi = throw UnsupportedOperationException()
+    override fun reagendarEvento(ruta: String, id: String, fechaIso: String, horaInicio: String, horaFin: String): ResumenArchivoFfi = throw UnsupportedOperationException()
+    override fun borrarEvento(ruta: String, id: String): ResumenArchivoFfi = throw UnsupportedOperationException()
     override fun guardarTarea(ruta: String, id: String?, titulo: String, fechaIso: String, hora: String, materia: String, hecha: Boolean): ResumenArchivoFfi = throw UnsupportedOperationException()
     override fun marcarTarea(ruta: String, id: String, hecha: Boolean): ResumenArchivoFfi = throw UnsupportedOperationException()
     override fun borrarTarea(ruta: String, id: String): ResumenArchivoFfi = throw UnsupportedOperationException()

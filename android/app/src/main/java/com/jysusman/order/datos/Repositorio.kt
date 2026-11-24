@@ -20,6 +20,8 @@ import com.jysusman.order.ffi.DispositivoSyncFfi
 import com.jysusman.order.ffi.ErrorFfi
 import com.jysusman.order.ffi.EstadoConexionFfi
 import com.jysusman.order.ffi.EstadoMoodleFfi
+import com.jysusman.order.ffi.EventoFfi
+import com.jysusman.order.ffi.EventoFormFfi
 import com.jysusman.order.ffi.FiltroPendientesFfi
 import com.jysusman.order.ffi.Hora12Ffi
 import com.jysusman.order.ffi.InicioVistaFfi
@@ -459,6 +461,42 @@ class Repositorio(
 
     suspend fun borrarRecordatorio(id: String): Boolean =
         ejecutarEscritura("borrar") { ruta -> puente.borrarRecordatorio(ruta, id) }
+
+    suspend fun obtenerEventoForm(
+        id: String?,
+        fechaIso: String? = null,
+        tareaId: String? = null,
+    ): Result<EventoFormFfi> = withContext(dispatcherIo) {
+        runCatching { puente.obtenerEventoForm(_estado.value.rutaArchivo, id, fechaIso, tareaId) }
+    }
+
+    suspend fun eventosDeTarea(tareaId: String): Result<List<EventoFfi>> = withContext(dispatcherIo) {
+        runCatching { puente.eventosDeTarea(_estado.value.rutaArchivo, tareaId) }
+    }
+
+    suspend fun guardarEvento(
+        id: String?,
+        titulo: String,
+        fechaIso: String,
+        horaInicio: String,
+        horaFin: String,
+        tareaId: String,
+        nota: String,
+    ): ErrorFfi.Validacion? = ejecutarFormulario { ruta ->
+        puente.guardarEvento(ruta, id, titulo, fechaIso, horaInicio, horaFin, tareaId, nota)
+    }
+
+    suspend fun reagendarEvento(
+        id: String,
+        fechaIso: String,
+        horaInicio: String,
+        horaFin: String,
+    ): ErrorFfi.Validacion? = ejecutarFormulario { ruta ->
+        puente.reagendarEvento(ruta, id, fechaIso, horaInicio, horaFin)
+    }
+
+    suspend fun borrarEvento(id: String): Boolean =
+        ejecutarEscritura("borrar") { ruta -> puente.borrarEvento(ruta, id) }
 
     suspend fun guardarAjustes(
         sinSemestre: Boolean,

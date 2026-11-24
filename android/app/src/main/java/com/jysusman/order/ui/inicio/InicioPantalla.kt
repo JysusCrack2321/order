@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import com.jysusman.order.ffi.ClaseInicioFfi
 import com.jysusman.order.ffi.InicioVistaFfi
 import com.jysusman.order.ui.comun.FilaClase
+import com.jysusman.order.ui.comun.FilaEvento
+import com.jysusman.order.ui.comun.FilaPorReagendar
 import com.jysusman.order.ui.comun.FilaRecordatorio
 import com.jysusman.order.ui.comun.FilaTarea
 import com.jysusman.order.ui.comun.PildoraMateria
@@ -38,6 +40,9 @@ import com.jysusman.order.ui.theme.OrderTema
 fun InicioPantalla(
     vista: InicioVistaFfi?,
     onEditarClase: (String) -> Unit,
+    onEditarEvento: (String) -> Unit,
+    onHechaEvento: (String) -> Unit,
+    onReagendarEvento: (String) -> Unit,
     onEditarTarea: (String) -> Unit,
     onEditarRecordatorio: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -88,22 +93,52 @@ fun InicioPantalla(
             }
         }
 
-        item {
-            val detalleClases = when (vista.clases.size) {
-                0 -> ""
-                1 -> "1 clase"
-                else -> "${vista.clases.size} clases"
+        if (vista.porReagendar.isNotEmpty()) {
+            item {
+                TarjetaSeccion(
+                    titulo = "¿TERMINASTE?",
+                    detalle = "${vista.porReagendar.size}",
+                    tono = OrderTema.Acento,
+                ) {
+                    vista.porReagendar.forEach { evento ->
+                        FilaPorReagendar(
+                            evento = evento,
+                            onHecha = onHechaEvento,
+                            onReagendar = onReagendarEvento,
+                            onEditar = onEditarEvento,
+                        )
+                    }
+                }
             }
+        }
+
+        item {
+            val partes = buildList {
+                when (vista.clases.size) {
+                    0 -> {}
+                    1 -> add("1 clase")
+                    else -> add("${vista.clases.size} clases")
+                }
+                when (vista.eventos.size) {
+                    0 -> {}
+                    1 -> add("1 evento")
+                    else -> add("${vista.eventos.size} eventos")
+                }
+            }
+            val detalleHoy = partes.joinToString(" · ")
             TarjetaSeccion(
                 titulo = "HOY",
-                detalle = detalleClases,
+                detalle = detalleHoy,
                 tono = OrderTema.AcentoHoy,
             ) {
-                if (vista.clases.isEmpty()) {
-                    TextoVacio("sin clases hoy")
+                if (vista.clases.isEmpty() && vista.eventos.isEmpty()) {
+                    TextoVacio("sin clases ni eventos hoy")
                 } else {
                     vista.clases.forEach { clase ->
                         FilaClase(clase = clase, onClick = { onEditarClase(clase.id) })
+                    }
+                    vista.eventos.forEach { evento ->
+                        FilaEvento(evento = evento, onClick = { onEditarEvento(evento.id) })
                     }
                 }
                 vista.siguiente?.let { siguiente ->

@@ -27,11 +27,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.jysusman.order.ffi.BloqueSemanaFfi
 import com.jysusman.order.ffi.DiaSemanaFfi
+import com.jysusman.order.ffi.EventoFfi
 import com.jysusman.order.ffi.SemanaVistaFfi
 import com.jysusman.order.ui.comun.BotonBorde
 import com.jysusman.order.ui.comun.BotonPaso
@@ -52,6 +54,8 @@ fun SemanaPantalla(
     onIrHoy: () -> Unit,
     onNuevaClase: () -> Unit,
     onEditarClase: (String) -> Unit,
+    onNuevoEvento: () -> Unit,
+    onEditarEvento: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (vista == null) {
@@ -100,7 +104,8 @@ fun SemanaPantalla(
                     InsigniaOrder("SEMANA ACTUAL")
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                BotonBorde(texto = "+  Clase", onClick = onNuevaClase)
+                BotonBorde(texto = "+ Evento", onClick = onNuevoEvento)
+                BotonBorde(texto = "+ Clase", onClick = onNuevaClase)
                 BotonBorde(texto = "Hoy", onClick = onIrHoy, acento = true)
             }
         }
@@ -152,6 +157,7 @@ fun SemanaPantalla(
                             ahoraMin = vista.ahoraMin,
                             hayTareas = vista.hayTareas,
                             onEditarClase = onEditarClase,
+                            onEditarEvento = onEditarEvento,
                         )
                     }
                 }
@@ -171,6 +177,7 @@ private fun ColumnaDiaSemana(
     ahoraMin: Int,
     hayTareas: Boolean,
     onEditarClase: (String) -> Unit,
+    onEditarEvento: (String) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -234,6 +241,14 @@ private fun ColumnaDiaSemana(
                         bloque = bloque,
                         baseHora = baseHora,
                         onClick = { onEditarClase(bloque.id) },
+                    )
+                }
+
+                dia.eventos.forEach { evento ->
+                    BloqueEventoRejilla(
+                        evento = evento,
+                        baseHora = baseHora,
+                        onClick = { onEditarEvento(evento.id) },
                     )
                 }
 
@@ -346,6 +361,53 @@ private fun BloqueClaseRejilla(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun BloqueEventoRejilla(
+    evento: EventoFfi,
+    baseHora: Int,
+    onClick: () -> Unit,
+) {
+    val inicioHoras = (evento.inicioMin - baseHora * 60) / 60f
+    val duracionHoras = ((evento.finMin - evento.inicioMin) / 60f).coerceAtLeast(0.4f)
+    val yInicio = AltoHora * inicioHoras + OrderTema.Linea
+    val alto = (AltoHora * duracionHoras - OrderTema.Trazo).coerceAtLeast(24.dp)
+    val color = if (evento.tareaId.isNotBlank()) OrderTema.colorMateria(evento.tono) else OrderTema.Acento
+    val fondo = if (evento.tareaHecha) OrderTema.FondoCampo else OrderTema.Tarjeta
+    val borde = if (evento.tareaHecha) OrderTema.BordeSuave else color.copy(alpha = 0.6f)
+
+    Column(
+        modifier = Modifier
+            .offset(y = yInicio)
+            .padding(horizontal = OrderTema.EspacioXs)
+            .fillMaxWidth()
+            .height(alto)
+            .clip(RoundedCornerShape(OrderTema.RadioPequeno))
+            .background(fondo)
+            .border(OrderTema.Linea, borde, RoundedCornerShape(OrderTema.RadioPequeno))
+            .clickable(onClick = onClick)
+            .padding(horizontal = OrderTema.EspacioSm, vertical = OrderTema.EspacioXs),
+    ) {
+        Text(
+            text = "◷ ${evento.titulo}",
+            fontSize = OrderTema.TamanoBloque,
+            fontWeight = FontWeight.Medium,
+            color = if (evento.tareaHecha) OrderTema.TextoTenue else color,
+            textDecoration = if (evento.tareaHecha) TextDecoration.LineThrough else TextDecoration.None,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (alto >= 36.dp) {
+            Text(
+                text = evento.rangoHora,
+                fontSize = OrderTema.TamanoHora,
+                color = OrderTema.TextoSuave,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
