@@ -579,6 +579,8 @@ fn conectar(ui: &AppWindow) {
             }
             soltar_grabacion(&ui);
         }
+        // La X cierra ORDER del todo (no solo la oculta en la bandeja).
+        let _ = slint::quit_event_loop();
         slint::CloseRequestResponse::HideWindow
     });
 
